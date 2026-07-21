@@ -21,57 +21,39 @@
     "types": ["node"],
 
     // Write "./format.ts" in the source, get "./format.js" in the emit.
-    // This is what lets `node --test test/**/*.test.ts` work with no build
-    // (Node's type stripper does NOT remap .js -> .ts, verified) while the
-    // published dist/ stays plain, correct JS. It rewrites inside allowJs
-    // .js inputs too, which is what makes the migration landable in slices.
+    // Lets `node --test test/**/*.test.ts` run without a build (Node's type
+    // stripper does not remap .js → .ts) while dist/ stays plain JS.
     "rewriteRelativeImportExtensions": true,
 
-    // --- Strictness (constraint 8) --------------------------------------
+    // --- Strictness -----------------------------------------------------
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
 
     // --- Erasability ----------------------------------------------------
-    // Bans enums, namespaces, parameter properties, and `declare` fields:
-    // every construct Node's type stripper cannot erase. Two payoffs:
-    // (1) the no-build test loop provably keeps working, (2) it forces this
-    // migration to stay types-only, which is exactly the brief.
+    // Bans enums, namespaces, parameter properties, and `declare` fields —
+    // constructs Node's type stripper cannot erase — so the no-build test
+    // loop stays valid.
     "erasableSyntaxOnly": true,
 
-    // Forces `import type` for type-only imports instead of letting tsc
-    // infer-and-elide. Directly protects constraint 3: a type-only import of
-    // a UI/React symbol cannot silently become a runtime import on the
-    // launch path.
+    // Forces `import type` for type-only imports. Keeps a type-only import of
+    // a UI/React symbol from becoming a runtime import on the launch path.
     "verbatimModuleSyntax": true,
 
     // esbuild transpiles the UI file-by-file with no cross-file type info.
-    // isolatedModules makes tsc reject anything that would need it.
     "isolatedModules": true,
 
-    // --- Migration complete ---------------------------------------------
-    // The earlier slices needed allowJs so .js and .ts could coexist while the
-    // tree was converted a directory at a time. That is over: src/ and test/
-    // are 100% TypeScript, so allowJs is now OFF and a stray .js under either
-    // is a file the compiler simply does not see — which is what makes "no
-    // untyped module sneaks back in" enforceable rather than a convention.
-    // `checkJs` is gone with it; it has no meaning once no .js is in the
-    // program.
-    //
-    // Second, load-bearing effect: with allowJs off, tsc CANNOT resolve
-    // ../dist/ui.js. That is deliberate. src/cli.ts, test/ui.test.ts,
-    // test/picker.test.ts and test/profiles-ui.test.ts all import the built UI
-    // bundle behind a `@ts-expect-error`, and each states its real contract as
-    // `typeof import('.../ui-root.ts')` against the SOURCE instead. Were the
-    // bundle resolvable, `npm run typecheck` would silently start depending on
-    // build order and would typecheck the compiler's own output.
-    //
-    // The only .js files left in the repo are bin/cuckoocode.js (deliberately
-    // plain, deliberately outside the program — see its header) and build.js
-    // (the build script itself). Neither is in `include`.
+    // src/ and test/ are TypeScript-only. allowJs off means a stray .js is
+    // invisible to tsc, and also that ../dist/ui.js cannot resolve — callers
+    // import the bundle behind @ts-expect-error and type it from ui-root.ts
+    // source so typecheck never depends on build order. bin/ and build.js
+    // stay outside `include`.
     "allowJs": false,
 
-    // Matches esbuild's jsx:'automatic' in build.js, so the .tsx sources
-    // compile identically whichever tool reads them.
+    // Matches esbuild's jsx:'automatic' in build.js.
     "jsx": "react-jsx",
 
     "noEmit": true,
@@ -79,10 +61,8 @@
     "forceConsistentCasingInFileNames": true
   },
 
-  // bin/ is deliberately OUT of the program: it imports ../dist/cli.js, which
-  // would drag the compiled output back in and make tsc typecheck its own
-  // emit. bin/cuckoocode.js is a 7-line dependency-free shim, pinned instead
-  // by a test in test/architecture.test.js.
+  // bin/ is out of the program: it imports ../dist/cli.js, which would make
+  // tsc typecheck its own emit. The shim is pinned by architecture tests.
   "include": ["src", "test"],
   "exclude": ["node_modules", "dist"]
 }
