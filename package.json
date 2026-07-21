@@ -1,0 +1,50 @@
+{
+  "name": "cuckoocode",
+  "version": "0.1.0",
+  "description": "Drop-in Claude Code launcher. Swap providers, models and permission flags without touching your shell config.",
+  "type": "module",
+  "bin": {
+    "cuckoocode": "./bin/cuckoocode.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js",
+    "test": "node build.js && node test/ui.test.js",
+    "prepublishOnly": "node build.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cli",
+    "launcher",
+    "openrouter",
+    "glm"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jellologic/cuckoocode.git"
+  },
+  "homepage": "https://github.com/jellologic/cuckoocode#readme",
+  "bugs": {
+    "url": "https://github.com/jellologic/cuckoocode/issues"
+  },
+  "dependencies": {
+    "ink": "^7.1.1",
+    "ink-select-input": "^6.2.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "ink-testing-library": "^4.0.0"
+  }
+}
