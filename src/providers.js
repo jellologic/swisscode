@@ -39,6 +39,9 @@ export const PROVIDERS = [
       ANTHROPIC_API_KEY: '',
       CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK: '1',
     },
+    // Has a queryable model catalog, so the wizard offers a browsable picker
+    // instead of asking you to type model ids from memory.
+    catalog: 'openrouter',
     // OpenRouter has no notion of the opus/sonnet/haiku tiers, so subagents
     // need to be pinned explicitly or they fall back to a model that 404s.
     subagentFollowsOpus: true,

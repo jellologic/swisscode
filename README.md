@@ -56,6 +56,51 @@ Each provider ships sensible default models and handles its own quirks — the
 OpenRouter profile clears `ANTHROPIC_API_KEY` and pins
 `CLAUDE_CODE_SUBAGENT_MODEL`, which subagents need in order not to 404.
 
+## Model picker
+
+Providers with a queryable catalog (currently OpenRouter) get a browsable
+picker instead of asking you to type model ids from memory:
+
+```
+model for opus  ·  search: claude▌
+19/342 shown · tools only
+
+› anthropic/claude-fable-5     Anthropic: Claude Fable 5
+  anthropic/claude-opus-4.8    anthropic/claude-fable-5
+  anthropic/claude-sonnet-5
+  anthropic/claude-haiku-4.5   input        $10.00 / M tokens
+                               output       $50.00 / M tokens
+                               context      1M  (max out 128K)
+                               ✓ tools ✓ reasoning
+
+                               artificial analysis
+                               intelligence ████████████░░░░░░░░ 59.9
+                               coding       ███████████████░░░░░ 76.5
+```
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` | move · `PgUp`/`PgDn` to jump |
+| type | fuzzy search across id and name |
+| `^T` | toggle the tools-only filter |
+| `^F` | show only free models |
+| `^R` | refetch the catalog |
+| `⏎` / `esc` | select / go back |
+
+**Tools filter.** Claude Code cannot work without tool calling, and 71 of
+OpenRouter's 342 models don't support it — so they're hidden by default rather
+than left to fail at runtime. `^T` reveals them, with a warning on the model.
+
+Models are sorted best-coding-first using Artificial Analysis benchmark scores
+where available. The catalog is cached for 24h at
+`~/.config/cuckoocode/models-openrouter.json`; if the fetch fails, a stale
+cache is used and the header says so.
+
+> **Note:** tokens/sec is not shown. OpenRouter's public API exposes
+> `throughput_last_30m` and `latency_last_30m` fields, but they are `null` for
+> every model and provider — the figures on their website come from a source
+> the API doesn't serve. The benchmark scores stand in for it.
+
 ## Configuration
 
 Settings live in `~/.config/cuckoocode/config.json` (honours

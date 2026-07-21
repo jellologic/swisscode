@@ -4,6 +4,9 @@ import SelectInput from 'ink-select-input'
 import TextInput from 'ink-text-input'
 import { saveConfig } from '../config.js'
 import { PROVIDERS, byId } from '../providers.js'
+import { ModelPicker } from './ModelPicker.jsx'
+
+export { ModelPicker }
 
 const TIERS = [
   { key: 'opus', label: 'opus' },
@@ -66,6 +69,7 @@ export function App({ initial, onResult }) {
     initial?.models ?? { opus: '', sonnet: '', haiku: '' },
   )
   const [tier, setTier] = useState(0)
+  const [pickingTier, setPickingTier] = useState(null)
 
   const provider = byId(providerId)
 
@@ -159,6 +163,50 @@ export function App({ initial, onResult }) {
         </Box>
         <Box marginTop={1}>
           <Text dimColor>stored at ~/.config/cuckoocode/config.json (chmod 600)</Text>
+        </Box>
+      </Frame>
+    )
+  }
+
+  if (step === 'picker') {
+    return (
+      <Frame>
+        <ModelPicker
+          tier={pickingTier}
+          current={models[pickingTier]}
+          onSelect={(id) => {
+            setModels((m) => ({ ...m, [pickingTier]: id }))
+            setStep('models')
+          }}
+          onCancel={() => setStep('models')}
+        />
+      </Frame>
+    )
+  }
+
+  // Providers with a queryable catalog get a browsable picker per tier;
+  // everything else falls through to typing the model id by hand.
+  if (step === 'models' && provider.catalog) {
+    const items = [
+      ...TIERS.map((t) => ({
+        label: `${t.label.padEnd(7)} ${models[t.key] || '—'}`,
+        value: t.key,
+      })),
+      { label: 'continue →', value: '__done' },
+    ]
+    return (
+      <Frame>
+        <Summary provider={provider} baseUrl={baseUrl} apiKey={apiKey} />
+        <Text>Pick a model per tier <Text dimColor>· enter to browse</Text></Text>
+        <Box marginTop={1}>
+          <SelectInput
+            items={items}
+            onSelect={(item) => {
+              if (item.value === '__done') return setStep('perms')
+              setPickingTier(item.value)
+              setStep('picker')
+            }}
+          />
         </Box>
       </Frame>
     )
