@@ -1,36 +1,12 @@
-import { CONFIG_PATH, loadConfig } from './config.js'
-import { launch } from './launch.js'
+import { parseArgv } from './core/args.js'
+import { defaultDeps, LaunchError, main } from './composition/launch-root.js'
 
-// Deliberately tiny. Every other token is Claude Code's to interpret, so the
-// wrapper stays a drop-in replacement instead of a competing arg parser.
-const CONFIG_COMMANDS = new Set(['config', 'setup'])
-
-function parse(argv) {
-  const passthrough = []
-  let skipOverride = null
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
-    // After a bare `--`, everything belongs to Claude Code verbatim.
-    if (arg === '--') {
-      passthrough.push(...argv.slice(i))
-      break
-    }
-    if (arg === '--safe') {
-      skipOverride = false
-      continue
-    }
-    if (arg === '--yolo') {
-      skipOverride = true
-      continue
-    }
-    passthrough.push(arg)
-  }
-
-  return { passthrough, skipOverride }
-}
-
-async function openUi(mode, initial) {
+/**
+ * The Ink UI is imported lazily and only from here. bin/cuckoocode.js and
+ * everything the launch path reaches stays plain dependency-free JS, so a
+ * normal launch never pays for loading React.
+ */
+async function openUi(mode, options) {
   let ui
   try {
     ui = await import('../dist/ui.js')
@@ -40,26 +16,77 @@ async function openUi(mode, initial) {
     }
     throw err
   }
-  return ui.runUi({ mode, initial })
+  return ui.runUi({ mode, ...options })
+}
+
+function fail(err) {
+  if (err instanceof LaunchError) {
+    console.error(`cuckoocode: ${err.message}`)
+    process.exit(err.exitCode)
+  }
+  throw err
 }
 
 export async function runCli(argv) {
-  if (argv.length > 0 && CONFIG_COMMANDS.has(argv[0])) {
-    const saved = await openUi('config', loadConfig())
-    if (saved) console.log(`\n  saved to ${CONFIG_PATH}\n`)
+  const parsed = parseArgv(argv)
+
+  // An unknown --cc-* option, a --cc-model with a bad tier, a repeated
+  // --cc-profile. Exit 2 rather than forwarding a reserved-prefix token to
+  // claude, where it would read as prompt text while the launch silently used
+  // the wrong settings.
+  if (parsed.error) {
+    console.error(`cuckoocode: ${parsed.error}`)
+    process.exit(2)
+  }
+
+  const { command, commandArgs, passthrough, skipOverride, positional, profileFlag, overrides } = parsed
+
+  if (command) {
+    // Subcommand dispatch is lazily imported so the launch path's static
+    // closure never carries it.
+    const { runConfigCommand } = await import('./composition/config-root.js')
+    const code = await runConfigCommand({
+      command,
+      args: commandArgs,
+      deps: defaultDeps(),
+      openUi,
+    })
+    if (code !== 0) process.exit(code)
     return
   }
 
-  const { passthrough, skipOverride } = parse(argv)
+  const launchArgs = { passthrough, skipOverride, positional, profileFlag, overrides }
 
-  let cfg = loadConfig()
-  if (!cfg) {
-    cfg = await openUi('setup', null)
-    if (!cfg) {
-      console.error('cuckoocode: setup cancelled, nothing launched.')
-      process.exit(1)
-    }
+  let planned
+  try {
+    planned = main({ ...launchArgs, deps: defaultDeps() })
+  } catch (err) {
+    fail(err)
   }
 
-  launch(cfg, passthrough, skipOverride)
+  // Nothing below runs on a successful launch: execve replaced this process,
+  // and the spawn fallback ends in an exit relay.
+  if (!planned?.needsSetup) return
+
+  if (planned.selection.ambiguous) {
+    const names = Object.keys(planned.loaded.state.profiles).join(', ')
+    console.error(
+      'cuckoocode: several profiles exist and none is set as the default. ' +
+        `Run \`cuckoocode config default <name>\` to choose one. Profiles: ${names}`,
+    )
+    process.exit(2)
+  }
+
+  const saved = await openUi('setup', { state: planned.loaded.state })
+  if (!saved) {
+    console.error('cuckoocode: setup cancelled, nothing launched.')
+    process.exit(1)
+  }
+
+  // Re-read from disk so the launch uses exactly what was persisted.
+  try {
+    main({ ...launchArgs, deps: defaultDeps() })
+  } catch (err) {
+    fail(err)
+  }
 }

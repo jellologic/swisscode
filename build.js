@@ -4,7 +4,7 @@ import * as esbuild from 'esbuild'
 // bundle yoga's wasm, and the launch path (bin/ + src/*.js) stays plain Node
 // with zero imports — that path must not pay for loading React.
 await esbuild.build({
-  entryPoints: ['src/ui/index.jsx'],
+  entryPoints: ['src/composition/ui-root.js'],
   outfile: 'dist/ui.js',
   bundle: true,
   platform: 'node',

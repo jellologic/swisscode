@@ -1,19 +1,20 @@
 // Drives the setup wizard end to end with synthetic keystrokes.
 // Written with createElement rather than JSX so it runs under plain `node`
 // with no build step of its own.
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 
-process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), 'cuckoocode-test-'))
+const home = mkdtempSync(join(tmpdir(), 'cuckoocode-test-'))
+process.env.XDG_CONFIG_HOME = home
 
 const React = (await import('react')).default
 const { render } = await import('ink-testing-library')
 const { App } = await import('../dist/ui.js')
 
 const h = React.createElement
-const DOWN = '[B'
+const DOWN = '\u001B[B'
 const ENTER = '\r'
 const tick = () => new Promise((r) => setTimeout(r, 60))
 
@@ -25,6 +26,9 @@ const { lastFrame, stdin } = render(
 await tick()
 assert.match(lastFrame(), /Which provider/, 'expected the provider step')
 assert.match(lastFrame(), /z\.ai/, 'expected z.ai in the provider list')
+assert.match(lastFrame(), /ModelScope/, 'expected the ModelScope preset')
+assert.match(lastFrame(), /SiliconFlow/, 'expected the SiliconFlow preset')
+assert.doesNotMatch(lastFrame(), /iFlow|Volcengine/, 'rejected providers must not ship')
 
 stdin.write(DOWN) // anthropic -> z.ai
 await tick()
@@ -40,6 +44,7 @@ assert.doesNotMatch(lastFrame(), /secret-token/, 'API key must be masked on scre
 stdin.write(ENTER)
 await tick()
 assert.match(lastFrame(), /glm-5\.2/, 'expected models prefilled from the provider')
+assert.match(lastFrame(), /fable/, 'expected all four tiers, including fable')
 
 stdin.write(ENTER) // opus
 await tick()
@@ -47,18 +52,32 @@ stdin.write(ENTER) // sonnet
 await tick()
 stdin.write(ENTER) // haiku
 await tick()
+stdin.write(ENTER) // fable
+await tick()
 assert.match(lastFrame(), /dangerously-skip-permissions/, 'expected the permissions step')
 
 stdin.write(ENTER) // "yes"
 await tick()
 
-assert.ok(result, 'wizard should have produced a config')
+assert.ok(result, 'wizard should have produced a profile')
 assert.equal(result.provider, 'zai')
 assert.equal(result.apiKey, 'secret-token')
 assert.equal(result.skipPermissions, true)
-assert.deepEqual(result.models, { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2' })
+// Four tiers, not three: [1m] is read per variable, so a tier the wizard never
+// writes is a tier that silently runs at the assumed window.
+assert.deepEqual(result.models, {
+  opus: 'glm-5.2',
+  sonnet: 'glm-5.2',
+  haiku: 'glm-5.2',
+  fable: 'glm-5.2',
+})
 
-const path = join(process.env.XDG_CONFIG_HOME, 'cuckoocode', 'config.json')
-assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), result, 'config must persist to disk')
+const path = join(home, 'cuckoocode', 'config.json')
+const saved = JSON.parse(readFileSync(path, 'utf8'))
+assert.equal(saved.version, 2, 'wizard must write the v2 profile schema')
+assert.equal(saved.defaultProfile, 'zai')
+assert.deepEqual(saved.profiles.zai, result, 'the profile must persist verbatim')
+assert.equal(statSync(path).mode & 0o777, 0o600, 'the file holds an API key')
+assert.equal(statSync(join(home, 'cuckoocode')).mode & 0o777, 0o700)
 
 console.log('ui wizard: all assertions passed')
