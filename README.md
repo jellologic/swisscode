@@ -404,18 +404,73 @@ launching anything.
 `process.execve` to **replace its own process image**. Claude Code inherits the
 same pid, tty and process group, and no wrapper process is left behind — nothing
 to relay exit codes through, no idle Node process for the length of your
-session. On Windows and Node < 23.11 it falls back to `spawn` with inherited
-stdio.
+session.
+
+Where `process.execve` does not exist — Windows, IBM i, and Node older than
+22.15 — it falls back to `spawn` with inherited stdio, relaying the child's exit
+code and re-raising a killing signal rather than reporting a clean exit. It also
+falls back if `execve` exists but *fails* (EACCES, ETXTBSY, a TOCTOU ENOENT):
+dying there would be worse than spawning.
 
 The Ink UI is loaded lazily, so the normal launch path never imports React.
 
 ## Development
 
+cuckoocode is written in TypeScript and **published as compiled JavaScript**.
+Nothing in the tarball relies on Node's native type stripping, which is not
+reliably enabled across the whole `>=22` engines range.
+
 ```sh
 npm install
-npm run build    # bundles the Ink UI into dist/
-npm test         # drives the setup wizard with synthetic keystrokes
+npm run typecheck   # tsc --noEmit over src/ and test/
+npm run build       # tsc: src/ -> dist/   +   esbuild: the Ink UI -> dist/ui.js
+npm test            # typecheck, build, then the full suite
+npm run dev         # build once, then tsc --watch on the launch path
 ```
+
+### The inner loop
+
+Node runs `.ts` directly, so most tests need no build at all:
+
+```sh
+node --test "test/core/**/*.test.ts"    # ~0.2s, no build step
+```
+
+The exception is the three UI suites (`ui`, `picker`, `profiles-ui`), which
+drive the wizard through the built bundle and therefore need `npm run build`
+first. `npm test` always builds, so it is the safe default.
+
+### Layout
+
+| path | what it is | shipped? |
+|---|---|---|
+| `bin/cuckoocode.js` | the published entry point. Plain JS on purpose, never compiled — it runs before anything is known about the environment, so it carries no dependencies and no syntax needing a build. Imports `../dist/cli.js`. | yes |
+| `src/core/**` | pure domain logic. No I/O, no state, imports nothing outside `core/` and `node:` builtins. | as `dist/core/**` |
+| `src/ports/**` | interfaces only. Every one of these files erases to `export {}`. | as `dist/ports/**` |
+| `src/adapters/**` | the implementations — providers, catalogs, fs, process, net, clock, doctor probe, and the Ink UI. | all but `adapters/ui` |
+| `src/composition/**` | the composition roots that wire adapters into ports. | all but `ui-root` |
+| `test/**` | `.ts`, run straight from source. Never compiled, never packed. | no |
+
+Two tsconfigs, because they do different jobs: `tsconfig.json` typechecks the
+whole program (`src` + `test`) and emits nothing — it is what the editor loads
+and what `npm run typecheck` runs. `tsconfig.build.json` emits `src/` to `dist/`
+and **excludes the Ink UI**, which esbuild bundles separately into
+`dist/ui.js`. Emitting the UI twice would put React-importing modules inside a
+package whose entire selling point is that the launch path never touches them.
+
+### Two rules worth knowing before you edit
+
+**A relative import names the file that actually exists on disk** — write
+`'./format.ts'`, not `'./format.js'`. Node's type stripper does not remap `.js`
+to `.ts`, so the usual TypeScript-ESM convention would make the sources
+unrunnable; `rewriteRelativeImportExtensions` converts the specifier on the way
+out, so `dist/` still says `.js`.
+
+**Nothing under `src/` may name the UI, even in type space.** A plain
+`import type` is enough to pull the whole component tree into the build program
+and ship a second, unbundled copy of React. `src/cli.ts` therefore declares the
+bundle's shape structurally, and `test/ports.conformance.ts` — which is never
+emitted — checks that declaration against the real module.
 
 ## Licence
 

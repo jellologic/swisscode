@@ -1,0 +1,28 @@
+{
+  // Emit config: src/ -> dist/ as plain JavaScript.
+  //
+  // Constraint 6: the PUBLISHED artifact is compiled JS. Nothing shipped
+  // depends on Node's native type stripping, which is not reliably enabled
+  // across the whole ">=22" engines range.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+
+    // No .d.ts: this is a CLI, not a library. Nothing imports it as a package.
+    "declaration": false,
+
+    // No source maps either. They would reference .ts files that the tarball
+    // deliberately does not ship, leaving dangling links in the artifact.
+    // Dev debugging reads the real sources, because dev runs the real sources.
+    "sourceMap": false
+  },
+
+  // The Ink UI is NOT emitted by tsc. esbuild bundles it straight from source
+  // into dist/ui.js (see build.js); emitting it here as well would ship two
+  // copies of the same component tree and put React-importing modules inside
+  // the package next to a launch path that promises never to touch them.
+  "include": ["src"],
+  "exclude": ["src/adapters/ui", "src/composition/ui-root.ts"]
+}

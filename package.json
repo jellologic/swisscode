@@ -11,13 +11,15 @@
   },
   "files": [
     "bin",
-    "src",
     "dist",
     "README.md"
   ],
   "scripts": {
     "build": "node build.js",
-    "test": "node build.js && node --test \"test/**/*.test.js\"",
+    "dev": "node build.js && tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc --noEmit && node build.js && node --test \"test/**/*.test.ts\"",
+    "prepare": "node build.js",
     "prepublishOnly": "node build.js"
   },
   "keywords": [
@@ -44,7 +46,10 @@
     "react": "^19.2.0"
   },
   "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/react": "^19.2.17",
     "esbuild": "^0.25.0",
-    "ink-testing-library": "^4.0.0"
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^7.0.2"
   }
 }
