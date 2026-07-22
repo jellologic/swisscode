@@ -14,6 +14,12 @@ import { resolveProfileRefs, type CursorPort } from '../core/resolve.ts'
 import { createFsConfigStore } from '../adapters/store/fs-config-store.ts'
 import { createFsCursorStore } from '../adapters/store/fs-cursor-store.ts'
 import { createFsUsageStore, type UsageStorePort } from '../adapters/store/fs-usage-store.ts'
+import {
+  createFsVersionStore,
+  installedVersion,
+  type VersionStorePort,
+} from '../adapters/store/fs-version-store.ts'
+import { isNewer } from '../core/version.ts'
 import { createNodeProcess, detectRecursion } from '../adapters/process/node-process.ts'
 import { registry as providerRegistry } from '../adapters/providers/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
@@ -64,6 +70,16 @@ export type LaunchDeps = {
    * network, which this path is banned from reaching.
    */
   usage?: UsageStorePort
+  /**
+   * The last version the registry reported, READ ONLY here.
+   *
+   * The launch path may not ask the network — that is the invariant the whole
+   * project is built on — so it cannot check for updates. It reads what
+   * `config`/`doctor`/the web UI already learned and says one line if the
+   * installed build is behind. Optional, so a caller that wires nothing simply
+   * gets no notice rather than a fabricated one.
+   */
+  version?: VersionStorePort
 }
 
 export function defaultDeps(): LaunchDeps {
@@ -74,6 +90,7 @@ export function defaultDeps(): LaunchDeps {
     proc: createNodeProcess(),
     cursor: createFsCursorStore(),
     usage: createFsUsageStore(),
+    version: createFsVersionStore(),
   }
 }
 
@@ -385,7 +402,7 @@ export function main({
   deps = null,
   report = defaultReport,
 }: MainOptions): PlannedLaunch {
-  const { store, registry, agents, proc } = deps ?? defaultDeps()
+  const { store, registry, agents, proc, version } = deps ?? defaultDeps()
   const planned = planLaunch({
     store,
     registry,
@@ -419,6 +436,20 @@ export function main({
 
     const banner = bannerFor(planned)
     if (banner) report(banner)
+
+    // ONE LINE, FROM A FILE, NEVER FROM THE NETWORK.
+    //
+    // The launch path is forbidden to make network calls, so it cannot check
+    // for updates — it reads what `config`/`doctor`/the web UI last learned.
+    // The consequence is honest and worth knowing: someone who ONLY ever
+    // launches never refreshes the cache and so never sees this. That is the
+    // correct trade. A launcher that phoned home on every run, or spawned
+    // something that did, would be a different and worse tool.
+    const known = version?.read()?.latest
+    const running = known ? installedVersion() : null
+    if (isNewer(known, running)) {
+      report(`swisscode: ${running} is installed; ${known} is out. Upgrade: swisscode config upgrade`)
+    }
   }
 
   // Never stdout: stdout may be piped into something that parses it.

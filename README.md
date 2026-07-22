@@ -62,15 +62,43 @@ npm install -g swisscode
 **Bun works too**, both as a runner and as the runtime:
 
 ```sh
-bunx swisscode
+bunx swisscode@latest    # the @latest matters — see below
 bun install -g swisscode
 ```
+
+> **`bunx swisscode` can run a stale cached version.** Measured, not assumed:
+> with 0.4.0 published, `npx swisscode` resolved 0.4.0 while plain
+> `bunx swisscode` kept serving a cached 0.3.0 — which cannot read a config the
+> newer version has migrated, so it reports `provider undefined`. Your config is
+> safe (an older build refuses to write over a newer file), but the tool looks
+> broken. `bunx swisscode@latest` forces a fresh resolve, and a global install
+> avoids the question entirely.
 
 Nothing special was needed for this: swisscode is plain ESM with no native
 addons, and `process.execve` — the call that makes handoff free — exists on Bun
 as well as Node. Verified by resolving a full launch plan under both and
 diffing: same profile, same agent, same provider, and a byte-identical set of
 `ANTHROPIC_*` / `CLAUDE_CODE_*` variables. Deno is untested.
+
+### Staying current
+
+```sh
+swisscode --cc-version     # which swisscode is this?
+swisscode config upgrade   # check npm, and install a newer one
+```
+
+`--cc-version`, not `--version`: `--version` belongs to the agent and has always
+printed *its* version, so scripts depend on it. swisscode answers on the
+reserved `--cc-` prefix instead of taking a flag it does not own.
+
+When a newer release exists, a launch prints one line telling you. That notice
+comes from a **cached** answer, never from a live request — the launch path is
+structurally forbidden from touching the network, which is a property this tool
+sells rather than an implementation detail. `swisscode config …`, the doctor and
+the web UI refresh that cache (at most once a day) as a side errand. The honest
+consequence: if you *only* ever launch and never run a config command, you will
+not see the notice. A launcher that phoned home on every run would be a
+different and worse tool.
 
 Every argument that isn't listed below is forwarded to `claude` untouched:
 

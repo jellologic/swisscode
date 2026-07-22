@@ -91,6 +91,20 @@ function fail(err: unknown): never {
 }
 
 export async function runCli(argv: string[]): Promise<void> {
+  // `--cc-version` BEFORE parsing, and deliberately NOT `--version`.
+  //
+  // `--version` belongs to the agent. swisscode is a drop-in launcher, and a
+  // drop-in that intercepted the target's most common flag would be a trap:
+  // `swisscode --version` has always printed Claude Code's version, scripts
+  // rely on it, and quietly changing that to print ours would break them for a
+  // convenience. The `--cc-` prefix is the reserved namespace that exists for
+  // exactly this, so swisscode's own version answers there.
+  if (argv[0] === '--cc-version') {
+    const { installedVersion } = await import('./adapters/store/fs-version-store.ts')
+    console.log(installedVersion() ?? 'unknown')
+    return
+  }
+
   const parsed = parseArgv(argv)
 
   // An unknown --cc-* option, a --cc-model with a bad tier, a repeated
