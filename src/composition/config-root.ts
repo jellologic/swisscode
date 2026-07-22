@@ -33,7 +33,7 @@ import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
 import { describeIdentity, readSessionIdentity } from '../adapters/claude-session/identity.ts'
 import { accountLogin } from '../adapters/claude-session/onboard.ts'
-import { fetchSubscriptionUsage } from '../adapters/usage/anthropic-subscription.ts'
+import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import type { LoadResult, Profile, State } from '../ports/config-store.ts'
 import type { ProcessPort } from '../ports/process.ts'
@@ -831,40 +831,35 @@ async function refreshUsage({
   err: Emit
 }): Promise<number> {
   const { state } = deps.store.load()
-  const accounts = Object.entries(state.providerAccounts ?? {})
+  const accounts = Object.entries(state.providerAccounts ?? {}).map(([name, account]) => ({
+    name,
+    ...(account.configDir ? { configDir: account.configDir } : {}),
+  }))
   if (accounts.length === 0) {
     out('No provider accounts yet. Run `swisscode config accounts login <name>`.')
     return 0
   }
 
-  const remaining: Record<string, number> = {}
-  // Sequential, not parallel. Each subscription read can raise a Keychain
-  // prompt, and three simultaneous dialogs is a worse experience than waiting.
-  for (const [name, account] of accounts) {
-    if (!account.configDir) {
+  // The loop itself lives in adapters/usage/measure.ts, shared with the doctor.
+  // This function's job is the rendering below.
+  const measurements = await measureAccounts(accounts)
+  for (const m of measurements) {
+    if (!m.configDir) {
       // A key-mode account bills per token; it has no window to be out of.
-      out(`  ${name}  —  key account, no subscription window`)
+      out(`  ${m.name}  —  key account, no subscription window`)
       continue
     }
-    const identity = readSessionIdentity(account.configDir)
-    const usage = await fetchSubscriptionUsage({
-      baseUrl: 'https://api.anthropic.com',
-      credential: '',
-      sessionDir: account.configDir,
-    })
-    const who = describeIdentity(identity)
-    if (!usage || usage.remaining === null) {
-      out(`  ${name}  (${who})`)
+    out(`  ${m.name}  (${describeIdentity(m.identity)})`)
+    if (!m.usage || m.usage.remaining === null) {
       out('    usage      — could not be measured (not logged in, expired, or endpoint refused)')
       continue
     }
-    remaining[name] = usage.remaining
-    out(`  ${name}  (${who})`)
-    out(`    remaining  ${usage.remaining}%  (the tighter of the two windows)`)
-    out(`    5-hour     ${pctUsed(usage.fiveHour)}`)
-    out(`    7-day      ${pctUsed(usage.sevenDay)}`)
+    out(`    remaining  ${m.usage.remaining}%  (the tighter of the two windows)`)
+    out(`    5-hour     ${pctUsed(m.usage.fiveHour)}`)
+    out(`    7-day      ${pctUsed(m.usage.sevenDay)}`)
   }
 
+  const remaining = remainingMap(measurements)
   if (Object.keys(remaining).length === 0) {
     err('swisscode: nothing could be measured, so the cached snapshot was left alone.')
     return 1
