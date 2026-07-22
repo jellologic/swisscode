@@ -72,85 +72,105 @@ export function remainingFrom(fiveHour: SubscriptionWindow, sevenDay: Subscripti
   return Math.max(0, 100 - worst)
 }
 
+/**
+ * The subscription-shaped read, with the two windows still attached.
+ *
+ * Exported separately from the port implementation below because
+ * `ProviderUsagePort.fetch` is deliberately narrow — it returns the generic
+ * `ProviderUsage` that ranking needs — and a caller that wants to SHOW someone
+ * their 5-hour and 7-day windows would otherwise have to cast the result back
+ * to a type it already knows it has.
+ */
+export async function fetchSubscriptionUsage({
+  baseUrl,
+  credential,
+  sessionDir = null,
+  timeoutMs = 8000,
+}: {
+  baseUrl: string
+  credential: string
+  sessionDir?: string | null
+  timeoutMs?: number
+}): Promise<SubscriptionUsage | null> {
+// A session account's token is read HERE, at the moment it is needed, and
+  // never held anywhere else. A key-mode Anthropic account has no
+  // subscription window at all — it bills per token — so it is not this
+  // adapter's business.
+  let token = ''
+  if (sessionDir) {
+    const found = readSessionCredential(sessionDir)
+    if (!found.ok) return null
+    // An EXPIRED token is reported as unknown rather than refreshed. Asking
+    // with it would return 401, which is indistinguishable from a revoked
+    // account; the honest answer is "we cannot say right now".
+    if (found.expired) return null
+    token = found.credential.accessToken
+  } else {
+    token = credential
+  }
+  if (!token) return null
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}${USAGE_PATH}`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        'anthropic-beta': OAUTH_BETA,
+        accept: 'application/json',
+      },
+      signal: controller.signal,
+    })
+    if (!response.ok) return null
+    const body: unknown = await response.json()
+    if (!body || typeof body !== 'object') return null
+
+    const o = body as Record<string, unknown>
+    const fiveHour = window(o.five_hour)
+    const sevenDay = window(o.seven_day)
+    const remaining = remainingFrom(fiveHour, sevenDay)
+    // The port's contract: null when the endpoint ANSWERED but published
+    // nothing usable. Returning a fully-null object instead would look like a
+    // successful measurement to every caller that checks for null — and would
+    // get written into the snapshot as a real reading of "unknown", which is
+    // not something a cache should carry.
+    if (remaining === null) return null
+
+    const usage: SubscriptionUsage = {
+      remaining,
+      // A subscription window has no credit balance. `limit` is the
+      // percentage scale the figure lives on, and `used` its complement —
+      // stated rather than left null so the generic display has something
+      // true to show. Never null here: the early return above guarantees a
+      // figure by this point.
+      limit: 100,
+      used: 100 - remaining,
+      unit: 'percent of window remaining',
+      checkedAt: Date.now(),
+      fiveHour,
+      sevenDay,
+      sevenDayOpus: window(o.seven_day_opus),
+      sevenDaySonnet: window(o.seven_day_sonnet),
+      // `is_enabled`, MEASURED — not `enabled`, which is what the field
+      // looked like it should be called and what the first draft read. The
+      // difference is silent: the wrong name yields `null` forever, so the
+      // feature would simply never have reported extra usage for anyone.
+      extraUsage:
+        typeof (o.extra_usage as Record<string, unknown> | undefined)?.is_enabled === 'boolean'
+          ? ((o.extra_usage as Record<string, unknown>).is_enabled as boolean)
+          : null,
+    }
+    return usage
+  } catch {
+    // Down, rate-limited, timed out, or changed shape. A finding to report,
+    // never an exception to unwind a configuration screen with.
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export const anthropicSubscriptionUsage: ProviderUsagePort = {
   id: 'anthropic-subscription',
-
-  async fetch({ baseUrl, credential, sessionDir = null, timeoutMs = 8000 }) {
-    // A session account's token is read HERE, at the moment it is needed, and
-    // never held anywhere else. A key-mode Anthropic account has no
-    // subscription window at all — it bills per token — so it is not this
-    // adapter's business.
-    let token = ''
-    if (sessionDir) {
-      const found = readSessionCredential(sessionDir)
-      if (!found.ok) return null
-      // An EXPIRED token is reported as unknown rather than refreshed. Asking
-      // with it would return 401, which is indistinguishable from a revoked
-      // account; the honest answer is "we cannot say right now".
-      if (found.expired) return null
-      token = found.credential.accessToken
-    } else {
-      token = credential
-    }
-    if (!token) return null
-
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
-    try {
-      const response = await fetch(`${baseUrl.replace(/\/+$/, '')}${USAGE_PATH}`, {
-        headers: {
-          authorization: `Bearer ${token}`,
-          'anthropic-beta': OAUTH_BETA,
-          accept: 'application/json',
-        },
-        signal: controller.signal,
-      })
-      if (!response.ok) return null
-      const body: unknown = await response.json()
-      if (!body || typeof body !== 'object') return null
-
-      const o = body as Record<string, unknown>
-      const fiveHour = window(o.five_hour)
-      const sevenDay = window(o.seven_day)
-      const remaining = remainingFrom(fiveHour, sevenDay)
-      // The port's contract: null when the endpoint ANSWERED but published
-      // nothing usable. Returning a fully-null object instead would look like a
-      // successful measurement to every caller that checks for null — and would
-      // get written into the snapshot as a real reading of "unknown", which is
-      // not something a cache should carry.
-      if (remaining === null) return null
-
-      const usage: SubscriptionUsage = {
-        remaining,
-        // A subscription window has no credit balance. `limit` is the
-        // percentage scale the figure lives on, and `used` its complement —
-        // stated rather than left null so the generic display has something
-        // true to show.
-        // Unreachable as null now — the early return above guarantees a figure.
-        limit: 100,
-        used: 100 - remaining,
-        unit: 'percent of window remaining',
-        checkedAt: Date.now(),
-        fiveHour,
-        sevenDay,
-        sevenDayOpus: window(o.seven_day_opus),
-        sevenDaySonnet: window(o.seven_day_sonnet),
-        // `is_enabled`, MEASURED — not `enabled`, which is what the field
-        // looked like it should be called and what the first draft read. The
-        // difference is silent: the wrong name yields `null` forever, so the
-        // feature would simply never have reported extra usage for anyone.
-        extraUsage:
-          typeof (o.extra_usage as Record<string, unknown> | undefined)?.is_enabled === 'boolean'
-            ? ((o.extra_usage as Record<string, unknown>).is_enabled as boolean)
-            : null,
-      }
-      return usage
-    } catch {
-      // Down, rate-limited, timed out, or changed shape. A finding to report,
-      // never an exception to unwind a configuration screen with.
-      return null
-    } finally {
-      clearTimeout(timer)
-    }
-  },
+  fetch: fetchSubscriptionUsage,
 }

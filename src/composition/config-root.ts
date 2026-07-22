@@ -33,6 +33,7 @@ import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
 import { describeIdentity, readSessionIdentity } from '../adapters/claude-session/identity.ts'
 import { accountLogin } from '../adapters/claude-session/onboard.ts'
+import { fetchSubscriptionUsage } from '../adapters/usage/anthropic-subscription.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import type { LoadResult, Profile, State } from '../ports/config-store.ts'
 import type { ProcessPort } from '../ports/process.ts'
@@ -85,6 +86,7 @@ const USAGE = `swisscode config — manage profiles and directory bindings
   swisscode config accounts           provider accounts, and which profiles use each
   swisscode config accounts login <name>   adopt a Claude subscription: makes a session
                  [--dir <path>]             directory and runs the agent so you can /login
+  swisscode config accounts usage     how much of each subscription is left, and cache it
   swisscode config agents             agent profiles, and which profiles use each
 
   swisscode config agent              list agents and which profile uses each
@@ -811,6 +813,81 @@ async function webCommand({
  * about `/login` — and this file is a composition root, not a home for
  * agent-specific behaviour.
  */
+/**
+ * `swisscode config accounts usage` — measure every account, once.
+ *
+ * The command that replaces switching into each account to run `/usage`. It is
+ * also the ONLY thing that writes the snapshot the `usage` selection strategy
+ * reads: measuring is configuration-time by construction, because the launch
+ * path may not reach the network.
+ */
+async function refreshUsage({
+  deps,
+  out,
+  err,
+}: {
+  deps: LaunchDeps
+  out: Emit
+  err: Emit
+}): Promise<number> {
+  const { state } = deps.store.load()
+  const accounts = Object.entries(state.providerAccounts ?? {})
+  if (accounts.length === 0) {
+    out('No provider accounts yet. Run `swisscode config accounts login <name>`.')
+    return 0
+  }
+
+  const remaining: Record<string, number> = {}
+  // Sequential, not parallel. Each subscription read can raise a Keychain
+  // prompt, and three simultaneous dialogs is a worse experience than waiting.
+  for (const [name, account] of accounts) {
+    if (!account.configDir) {
+      // A key-mode account bills per token; it has no window to be out of.
+      out(`  ${name}  —  key account, no subscription window`)
+      continue
+    }
+    const identity = readSessionIdentity(account.configDir)
+    const usage = await fetchSubscriptionUsage({
+      baseUrl: 'https://api.anthropic.com',
+      credential: '',
+      sessionDir: account.configDir,
+    })
+    const who = describeIdentity(identity)
+    if (!usage || usage.remaining === null) {
+      out(`  ${name}  (${who})`)
+      out('    usage      — could not be measured (not logged in, expired, or endpoint refused)')
+      continue
+    }
+    remaining[name] = usage.remaining
+    out(`  ${name}  (${who})`)
+    out(`    remaining  ${usage.remaining}%  (the tighter of the two windows)`)
+    out(`    5-hour     ${pctUsed(usage.fiveHour)}`)
+    out(`    7-day      ${pctUsed(usage.sevenDay)}`)
+  }
+
+  if (Object.keys(remaining).length === 0) {
+    err('swisscode: nothing could be measured, so the cached snapshot was left alone.')
+    return 1
+  }
+  // Best effort, like every write in the state directory: the figures above are
+  // already on screen, and failing the command because a cache could not be
+  // written would trade a working answer for a tidy filesystem.
+  deps.usage?.write({ remaining, checkedAt: Date.now() })
+  out('')
+  out('Cached. Profiles using the `usage` strategy will select on these figures.')
+  return 0
+}
+
+/** "37% used, resets 15:10 today" — a window, phrased for a person. */
+function pctUsed(w: { utilization: number | null; resetsAt: string | null }): string {
+  if (w.utilization === null) return '— not published'
+  const resets = w.resetsAt ? new Date(w.resetsAt) : null
+  return (
+    `${w.utilization}% used` +
+    (resets && !Number.isNaN(resets.getTime()) ? `, resets ${resets.toLocaleString()}` : '')
+  )
+}
+
 function accountsCommand({
   deps,
   args,
@@ -821,9 +898,10 @@ function accountsCommand({
   args: string[]
   out: Emit
   err: Emit
-}): number {
+}): number | Promise<number> {
   const [sub, ...rest] = args
   if (sub === undefined) return listAccounts({ deps, out })
+  if (sub === 'usage') return refreshUsage({ deps, out, err })
   if (sub !== 'login') {
     err(`swisscode: unknown accounts subcommand "${sub}". Try \`swisscode config accounts\`.`)
     return 2

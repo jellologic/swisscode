@@ -13,6 +13,7 @@ import { resolveProfile } from '../core/profile.ts'
 import { resolveProfileRefs, type CursorPort } from '../core/resolve.ts'
 import { createFsConfigStore } from '../adapters/store/fs-config-store.ts'
 import { createFsCursorStore } from '../adapters/store/fs-cursor-store.ts'
+import { createFsUsageStore, type UsageStorePort } from '../adapters/store/fs-usage-store.ts'
 import { createNodeProcess, detectRecursion } from '../adapters/process/node-process.ts'
 import { registry as providerRegistry } from '../adapters/providers/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
@@ -55,6 +56,14 @@ export type LaunchDeps = {
    * path writes no config, and a rotation counter is not configuration.
    */
   cursor?: CursorPort
+  /**
+   * The last measured usage snapshot. READ-ONLY here, and optional for the same
+   * reason the cursor is: only the `usage` strategy consults it, and a caller
+   * without one degrades to the first account WITH A WARNING rather than
+   * failing. Nothing on the launch path may refresh it — that means the
+   * network, which this path is banned from reaching.
+   */
+  usage?: UsageStorePort
 }
 
 export function defaultDeps(): LaunchDeps {
@@ -64,6 +73,7 @@ export function defaultDeps(): LaunchDeps {
     agents: agentRegistry,
     proc: createNodeProcess(),
     cursor: createFsCursorStore(),
+    usage: createFsUsageStore(),
   }
 }
 
@@ -163,6 +173,7 @@ export function planLaunch({
   agents,
   proc,
   cursor,
+  usage,
   passthrough = [],
   skipOverride = null,
   positional = null,
@@ -212,6 +223,11 @@ export function planLaunch({
   // downstream of here changed when the schema split.
   const resolution = resolveProfileRefs(loaded.state, sel.name ?? '', {
     cursor: cursor ?? null,
+    // READ, never refreshed. Measuring here would mean an HTTP request to a
+    // billing endpoint on every launch, which is the thing the whole
+    // snapshot-and-cache arrangement exists to avoid. A stale or missing
+    // snapshot degrades to the first account, loudly — see `selectAccount`.
+    usage: usage?.read() ?? null,
     now: Date.now(),
   })
   if (!resolution.ok) throw new LaunchError(resolution.reason)
