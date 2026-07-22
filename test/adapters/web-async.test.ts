@@ -135,3 +135,72 @@ test('a provider with no catalog is a 404, which is a normal state', async () =>
   )
   assert.equal(res?.status, 404)
 })
+
+// ── usage measurement ──
+
+const usageReport = () => ({
+  checkedAt: 1234,
+  accounts: [
+    {
+      name: 'personal',
+      mode: 'session' as const,
+      login: 'a@b.c  ·  Max 20x',
+      remaining: 27,
+      fiveHour: { utilization: 0, resetsAt: null },
+      sevenDay: { utilization: 73, resetsAt: null },
+    },
+  ],
+})
+
+test('measuring usage is POST-only, so nothing can prefetch a Keychain prompt', async () => {
+  // A GET is something a browser may prefetch, retry or replay on its own
+  // initiative. On macOS each measurement can raise an unlock dialog, and
+  // nothing that pops a system dialog should be reachable that way.
+  let called = 0
+  const deps = {
+    measureUsage: async () => {
+      called++
+      return usageReport()
+    },
+  }
+  assert.equal(await handleAsyncApi({ method: 'GET', path: '/api/usage', body: null }, deps), null)
+  assert.equal(called, 0)
+
+  const res = await handleAsyncApi({ method: 'POST', path: '/api/usage', body: {} }, deps)
+  assert.equal(res?.status, 200)
+  assert.equal(called, 1)
+})
+
+test('measured usage crosses with the windows attached and no credential', async () => {
+  const res = await handleAsyncApi(
+    { method: 'POST', path: '/api/usage', body: {} },
+    { measureUsage: async () => usageReport() },
+  )
+  const body = res?.body as ReturnType<typeof usageReport>
+  assert.equal(body.accounts[0]!.remaining, 27)
+  assert.equal(body.accounts[0]!.sevenDay!.utilization, 73)
+  // The identity is the point of the payload; a token never is.
+  const raw = JSON.stringify(body)
+  assert.match(raw, /a@b\.c/)
+  assert.doesNotMatch(raw, /sk-ant|accessToken|Bearer/)
+})
+
+test('an unwired measurer answers 501 rather than pretending everything is fine', async () => {
+  // The same rule as the doctor: a context that cannot measure says so, instead
+  // of returning an empty list that reads as "you have no accounts".
+  const res = await handleAsyncApi({ method: 'POST', path: '/api/usage', body: {} }, {})
+  assert.equal(res?.status, 501)
+})
+
+test('a thrown measurement becomes a 500 body, never an unhandled rejection', async () => {
+  const res = await handleAsyncApi(
+    { method: 'POST', path: '/api/usage', body: {} },
+    {
+      measureUsage: async () => {
+        throw new Error('keychain denied')
+      },
+    },
+  )
+  assert.equal(res?.status, 500)
+  assert.match(String((res?.body as { error: string }).error), /keychain denied/)
+})

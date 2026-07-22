@@ -23,6 +23,32 @@ export type AsyncApiDeps = {
   doctor?: (opts: { offline: boolean }) => Promise<DoctorReport>
   /** Built lazily by web-root; absent when no catalog adapters are wired. */
   catalogs?: CatalogRegistryPort
+  /**
+   * Measures every account's remaining subscription capacity and caches it.
+   *
+   * Injected like `doctor`, and a POST for the same reason: on macOS each
+   * measurement can raise a Keychain unlock dialog. A GET that a browser might
+   * prefetch, retry or replay must never be able to do that.
+   */
+  measureUsage?: () => Promise<UsageReport>
+}
+
+/** One account, measured. Carries no credential — only what it bought you. */
+export type MeasuredAccount = {
+  name: string
+  /** 'key' accounts bill per token and have no window; they are listed, not measured */
+  mode: 'session' | 'key'
+  /** "a@b.c  ·  Max 20x", or null when nobody has logged in there */
+  login: string | null
+  remaining: number | null
+  fiveHour: { utilization: number | null; resetsAt: string | null } | null
+  sevenDay: { utilization: number | null; resetsAt: string | null } | null
+}
+
+export type UsageReport = {
+  accounts: MeasuredAccount[]
+  /** epoch ms, or null when nothing could be measured and no snapshot was written */
+  checkedAt: number | null
 }
 
 const json = (status: number, body: unknown): ApiResponse => ({ status, body })
@@ -54,6 +80,19 @@ export async function handleAsyncApi(
       return json(200, { report, offline })
     } catch (err) {
       return json(500, { error: (err as { message?: string }).message ?? 'doctor failed' })
+    }
+  }
+
+  if (resource === 'usage' && req.method === 'POST') {
+    if (!deps.measureUsage) {
+      return json(501, { error: 'usage measurement is not available in this context' })
+    }
+    try {
+      return json(200, await deps.measureUsage())
+    } catch (err) {
+      // Same discipline as every other measurement in this codebase: a finding
+      // to report, not an exception that takes a configuration screen down.
+      return json(500, { error: (err as { message?: string }).message ?? 'could not measure usage' })
     }
   }
 

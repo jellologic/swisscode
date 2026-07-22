@@ -405,6 +405,24 @@ test('installed agents are reported as unknown rather than faked when unavailabl
   assert.equal(agentsFound.length, 2)
 })
 
+test('session logins are reported as unknown rather than faked when unwired', () => {
+  // Same rule as installedAgents, and it matters more here: an empty map would
+  // be indistinguishable from "every account is logged out", which would send a
+  // user to re-run `/login` on accounts that are fine.
+  const s = store(baseState())
+  const without = handleApi({ method: 'GET', path: '/api/bootstrap', body: null }, deps(s))
+  assert.equal((without.body as Record<string, unknown>).logins, null)
+
+  const withIdentities = handleApi({ method: 'GET', path: '/api/bootstrap', body: null }, {
+    ...deps(s),
+    identities: () => ({ personal: 'a@b.c  ·  Max 20x', spare: null }),
+  })
+  assert.deepEqual((withIdentities.body as Record<string, unknown>).logins, {
+    personal: 'a@b.c  ·  Max 20x',
+    spare: null,
+  })
+})
+
 test('a custom provider round-trips through the API and becomes launchable', () => {
   const s = store(baseState())
   const created = handleApi(

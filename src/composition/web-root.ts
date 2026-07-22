@@ -19,6 +19,7 @@ import { createFsCacheStore } from '../adapters/store/fs-cache-store.ts'
 import { fetchNet } from '../adapters/net/fetch-net.ts'
 import { systemClock } from '../adapters/clock/system-clock.ts'
 import { configDir } from '../adapters/store/fs-config-store.ts'
+import { describeIdentity, readSessionIdentity } from '../adapters/claude-session/identity.ts'
 import type { LaunchDeps } from './launch-root.ts'
 
 export type RunWebOptions = {
@@ -92,6 +93,46 @@ export async function runWeb({
         const { runDoctor } = await import('./doctor-root.ts')
         const run = await runDoctor({ deps, offline })
         return run.report
+      },
+      // Who each session account is logged in as. A file read apiece, so it is
+      // safe on every cold start — see the note on ApiDeps.identities.
+      identities: () => {
+        const { state } = deps.store.load()
+        const logins: Record<string, string | null> = {}
+        for (const [name, account] of Object.entries(state.providerAccounts ?? {})) {
+          if (!account.configDir) continue
+          logins[name] = describeIdentity(readSessionIdentity(account.configDir))
+        }
+        return logins
+      },
+      // Lazy for the same reason as the doctor, and one step further: this one
+      // can raise a Keychain prompt, so it loads only when someone asks for it.
+      measureUsage: async () => {
+        const { measureAccounts, remainingMap } = await import('../adapters/usage/measure.ts')
+        const { state } = deps.store.load()
+        const measurements = await measureAccounts(
+          Object.entries(state.providerAccounts ?? {}).map(([name, account]) => ({
+            name,
+            ...(account.configDir ? { configDir: account.configDir } : {}),
+          })),
+        )
+        const remaining = remainingMap(measurements)
+        // Write only when something answered. Clearing a usable snapshot
+        // because the endpoint hiccupped would drop every `usage` profile back
+        // to "first account" for no reason.
+        const checkedAt = Object.keys(remaining).length > 0 ? Date.now() : null
+        if (checkedAt !== null) deps.usage?.write({ remaining, checkedAt })
+        return {
+          checkedAt,
+          accounts: measurements.map((m) => ({
+            name: m.name,
+            mode: m.configDir ? ('session' as const) : ('key' as const),
+            login: m.configDir ? describeIdentity(m.identity) : null,
+            remaining: m.usage?.remaining ?? null,
+            fiveHour: m.usage?.fiveHour ?? null,
+            sevenDay: m.usage?.sevenDay ?? null,
+          })),
+        }
       },
       port,
       assetDir: assetDir(),

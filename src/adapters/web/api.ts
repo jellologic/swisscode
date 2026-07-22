@@ -51,6 +51,20 @@ export type ApiDeps = {
    * be a claim nobody checked.
    */
   installed?: () => InstalledAgent[]
+  /**
+   * Who each session-mode account is logged in as, keyed by account name.
+   *
+   * A thunk for the same reason as `installed`: it reads a `.claude.json` per
+   * session account, and only `bootstrap` wants it. Cheap enough to run on every
+   * cold start — a file read, no credential, no Keychain prompt, no network —
+   * which is precisely why identity is separate from usage. Measuring a window
+   * costs a prompt and is a button; saying who an account IS costs nothing and
+   * should already be on screen.
+   *
+   * Optional, and absent rather than empty when unwired: `{}` would be
+   * indistinguishable from "every account is logged out".
+   */
+  identities?: () => Record<string, string | null>
 }
 
 /** One agent CLI, as found (or not) on this machine. */
@@ -330,6 +344,10 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       // Which of these are actually on this machine. Absent when the caller
       // wired no process port; never faked.
       installedAgents: deps.installed ? deps.installed() : null,
+      // Who each session account is logged in as. Same "never faked" rule as
+      // `installedAgents`: null when unwired, never an empty map that would read
+      // as "all logged out".
+      logins: deps.identities ? deps.identities() : null,
       // Custom providers are returned SEPARATELY from `providers` even though
       // the registry already merges them: the UI has to know which ones it may
       // edit, and a merged list cannot say.

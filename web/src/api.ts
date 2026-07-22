@@ -65,6 +65,15 @@ export type ProviderAccount = {
   baseUrl?: string
   hasKey: boolean
   apiKeyFromEnv?: string
+  /**
+   * Session mode: a directory holding a login the agent already performed.
+   *
+   * Crosses to the browser in full, unlike `apiKey`, because it is a PATH and
+   * not a secret — the credential it points at stays in the Keychain, which is
+   * the entire point of this mode. Mutually exclusive with the key fields; the
+   * server refuses the combination rather than picking one.
+   */
+  configDir?: string
 }
 
 /** WHAT RUNS. Holds no credential, so it crosses whole. */
@@ -122,8 +131,33 @@ export type Bootstrap = {
   compatFlags: CompatFlag[]
   credentialEnvs: string[]
   installedAgents: InstalledAgent[] | null
+  /**
+   * Who each session account is logged in as, keyed by account name.
+   *
+   * Null when the server wired no identity reader — NOT an empty map, which
+   * would be indistinguishable from "every account is logged out". Key-mode
+   * accounts are simply absent from it.
+   */
+  logins: Record<string, string | null> | null
   customProviders: Record<string, CustomProvider>
   reservedProviderIds: string[]
+}
+
+/** One window of a subscription, as the endpoint publishes it. */
+export type UsageWindow = { utilization: number | null; resetsAt: string | null }
+
+export type MeasuredAccount = {
+  name: string
+  mode: 'session' | 'key'
+  login: string | null
+  remaining: number | null
+  fiveHour: UsageWindow | null
+  sevenDay: UsageWindow | null
+}
+
+export type UsageReport = {
+  accounts: MeasuredAccount[]
+  checkedAt: number | null
 }
 
 /** A refusal the UI must render rather than swallow. */
@@ -262,6 +296,16 @@ export const api = {
     }),
 
   catalog: (id: string) => call<CatalogResult>(`/api/catalog/${encodeURIComponent(id)}`),
+
+  /**
+   * Measure every account's remaining subscription window, and cache it.
+   *
+   * A POST, not a GET, because on macOS each measurement can raise a Keychain
+   * unlock dialog — and a GET is something a browser may prefetch, retry or
+   * replay on its own initiative. Nothing that can pop a system dialog should
+   * be reachable that way.
+   */
+  usage: () => call<UsageReport>('/api/usage', { method: 'POST', body: JSON.stringify({}) }),
 
   saveSettings: (settings: unknown, revision: string | null) =>
     call<{ revision: string }>('/api/settings', {
