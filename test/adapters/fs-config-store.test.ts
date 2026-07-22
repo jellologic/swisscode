@@ -115,6 +115,25 @@ test('a truncated config is quarantined rather than overwritten in place', () =>
   assert.equal(readFileSync(join(dir, quarantined[0]!), 'utf8'), '{"provider": "zai", "apiK')
 })
 
+test('a quarantine that cannot rename aborts save() instead of destroying the corrupt config', () => {
+  const { dir, store } = freshHome('{"provider": "zai", "apiK')
+  assert.equal(store.load().corrupt, true)
+  // A read-only directory makes renameSync fail (rename needs write perm on the
+  // dir). save() must throw rather than overwrite the unparseable, key-bearing file.
+  chmodSync(dir, 0o500)
+  try {
+    assert.throws(
+      () => store.save({ version: 2, profiles: {}, defaultProfile: null, bindings: {}, settings: {} }),
+      /could not move it aside|refusing to overwrite/,
+    )
+    chmodSync(dir, 0o700)
+    assert.equal(readFileSync(join(dir, 'config.json'), 'utf8'), '{"provider": "zai", "apiK')
+    assert.equal(readdirSync(dir).filter((f) => f.startsWith('config.corrupt-')).length, 0)
+  } finally {
+    chmodSync(dir, 0o700)
+  }
+})
+
 test('a NEWER schema is read but never written back', () => {
   const future = `${JSON.stringify({
     version: 99,

@@ -30,7 +30,17 @@ test('opencode lowers the intent into an inline config via OPENCODE_CONFIG_CONTE
   assert.equal(p.options.apiKey, 'KEY')
   assert.equal(config.model, 'swisscode/glm-5.2')
   assert.ok('glm-5.2' in p.models, 'the referenced model is declared')
-  assert.deepEqual(t.plan.unset, [])
+})
+
+test('a third-party baseURL clears inherited ANTHROPIC_* creds (no fallback leak)', () => {
+  const withUrl = run(intent())
+  assert.deepEqual(
+    [...withUrl.t.plan.unset].sort(),
+    ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'],
+  )
+  // No custom endpoint (first-party default) → nothing to strip.
+  const noUrl = run(intent({ baseUrl: null }))
+  assert.deepEqual(noUrl.t.plan.unset, [])
 })
 
 test('--auto is added only when permissions are skipped, and never duplicated', () => {
@@ -57,6 +67,13 @@ test('a pinned tier opencode cannot express warns rather than vanishing', () => 
   const collapse = t.warnings.find((w) => w.code === 'tier-collapsed')
   assert.ok(collapse, 'the distinct sonnet tier produced a warning')
   assert.match(collapse!.message, /sonnet=b/)
+})
+
+test('no warning when a dropped tier is served by the small_model slot', () => {
+  // opus->model=big, haiku->small_model=small; sonnet=small is served by small_model
+  // and fable=big by model, so NOTHING is actually dropped.
+  const { t } = run(intent({ models: { opus: 'big', sonnet: 'small', haiku: 'small', fable: 'big' } }))
+  assert.equal(t.warnings.find((w) => w.code === 'tier-collapsed'), undefined)
 })
 
 test('reaching a 1M provider without the [1m] signal warns', () => {

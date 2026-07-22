@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import {
   ANTHROPIC_SDK_NPM,
   PROVIDER_KEY,
+  ambientUnset,
   anthropicOptions,
   collapsedTierWarning,
   extendedContextWarning,
@@ -81,6 +82,6 @@ export const opencode = {
     const ext = extendedContextWarning(intent, primary, 'OpenCode')
     if (ext) warnings.push(ext)
 
-    return { plan: { set, unset: [] }, args, warnings }
+    return { plan: { set, unset: ambientUnset(intent) }, args, warnings }
   },
 } satisfies AgentCliPort

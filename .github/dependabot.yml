@@ -1,0 +1,8 @@
+# Keeps the SHA-pinned GitHub Actions in publish.yml current via reviewable PRs,
+# so pinning does not mean going stale.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

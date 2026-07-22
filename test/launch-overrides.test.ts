@@ -159,6 +159,22 @@ test('--cc-base-url replaces the provider endpoint for this run only', () => {
   assert.equal(r.saves.length, 0)
 })
 
+test('a credential sent to a cleartext http:// remote host warns (loopback and https exempt)', () => {
+  const warn = plan(['--cc-base-url', 'http://gw.example']).warnings.find((w) => w.code === 'cleartext-endpoint')
+  assert.ok(warn, 'remote http:// carrying a credential warns')
+  assert.equal(warn!.severity, 'high')
+  assert.equal(
+    plan(['--cc-base-url', 'http://127.0.0.1:8080']).warnings.find((w) => w.code === 'cleartext-endpoint'),
+    undefined,
+    'loopback is exempt',
+  )
+  assert.equal(
+    plan(['--cc-base-url', 'https://gw.example']).warnings.find((w) => w.code === 'cleartext-endpoint'),
+    undefined,
+    'https is fine',
+  )
+})
+
 test('a directory binding still applies when no profile is named', () => {
   const r = plan(['--resume'], { cwd: '/work/or-project/src' })
   assert.equal(r.selection.name, 'or')

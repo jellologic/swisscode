@@ -19,6 +19,7 @@
 
 import { TIER_ENV_VARS } from './tiers.ts'
 import { SUFFIX, bareModelId, supportsExtendedContext } from './context.ts'
+import { sanitizeUrlForDisplay } from '../../../core/url-safety.ts'
 import type { Profile } from '../../../ports/config-store.ts'
 import type { ProviderDescriptor } from '../../../ports/provider.ts'
 import type { EnvMap } from '../../../ports/process.ts'
@@ -94,7 +95,7 @@ export function inspectAmbient(
         w(
           'high',
           'ambient-base-url',
-          `ANTHROPIC_BASE_URL was set to ${ambientUrl} in your environment; this ` +
+          `ANTHROPIC_BASE_URL was set to ${sanitizeUrlForDisplay(ambientUrl)} in your environment; this ` +
             'profile talks to Anthropic directly, so it was cleared for this launch.',
         ),
       )
@@ -103,8 +104,8 @@ export function inspectAmbient(
         w(
           'high',
           'ambient-base-url',
-          `ANTHROPIC_BASE_URL was set to ${ambientUrl} in your environment; this ` +
-            `profile overrode it with ${effective}.`,
+          `ANTHROPIC_BASE_URL was set to ${sanitizeUrlForDisplay(ambientUrl)} in your environment; this ` +
+            `profile overrode it with ${sanitizeUrlForDisplay(effective)}.`,
         ),
       )
     }

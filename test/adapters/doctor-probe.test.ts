@@ -83,6 +83,15 @@ test('errorMessage digs a message out of the shapes gateways actually use', () =
   assert.equal(errorMessage('x'.repeat(999))!.length, 300, 'bounded')
 })
 
+test('a secret straddling the 300-char truncation is redacted, not leaked as a fragment', () => {
+  const secret = 'sk-secret-abcdefghij'
+  const body = { error: { message: 'x'.repeat(290) + secret + 'y'.repeat(80) } }
+  // Baseline: with no secret list, the fragment leaks into the truncated window.
+  assert.ok(errorMessage(body)!.includes('sk-secret'), 'fragment leaks without redaction')
+  // The whole secret is removed BEFORE the 300-char cut, so no fragment survives.
+  assert.ok(!errorMessage(body, [secret])!.includes('sk-secret'), 'redacted before truncation')
+})
+
 test('usedTool requires an actual tool_use block', () => {
   assert.equal(usedTool({ content: [{ type: 'tool_use' }] }), true)
   assert.equal(usedTool({ content: [{ type: 'text', text: 'I would call it' }] }), false)

@@ -74,17 +74,6 @@ export function withExtendedContext(
   return ec.models?.includes(bare) ? bare + SUFFIX : bare
 }
 
-/** True when every non-empty resolved model got the suffix. */
-export function allTiersExtended(
-  resolvedModels: Record<string, string | undefined>,
-  ec?: ExtendedContext | null,
-): boolean {
-  if (!ec?.supported) return false
-  const values = Object.values(resolvedModels).filter(Boolean)
-  if (values.length === 0) return false
-  return values.every((v) => String(v).endsWith(SUFFIX))
-}
-
 /** Does this provider claim the wider window for this bare id? */
 export function supportsExtendedContext(
   modelId: string | null | undefined,

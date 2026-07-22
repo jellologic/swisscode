@@ -151,6 +151,14 @@ export function parseArgv(argv: string[] = []): ParsedArgv {
       i++
     }
 
+    // An explicitly-empty value (`--cc-agent=` or `--cc-agent ''`) is an
+    // explicit unknown id, not "unset" — reject it at the boundary so the
+    // "explicit unknown id is fatal" contract holds rather than silently
+    // falling back. (--cc-env parses its own KEY= form after this.)
+    if (value === '') {
+      return { ...base, error: `${name} needs a value.` }
+    }
+
     if (name === '--cc-profile') {
       // Not last-wins. Two different answers to "which account pays for this"
       // is not something to settle by argument order.

@@ -21,6 +21,27 @@ export const ANTHROPIC_SDK_NPM = '@ai-sdk/anthropic'
 /** The provider key we register under, so a model reads `swisscode/<id>`. */
 export const PROVIDER_KEY = 'swisscode'
 
+/**
+ * Anthropic ambient variables a non-Anthropic launch must STRIP from the child
+ * env. This mirrors the Claude Code adapter's billing guard (env.ts step 4):
+ * a custom baseURL means requests are NOT going to api.anthropic.com, so any
+ * ANTHROPIC_* credential inherited from the shell must be cleared — otherwise
+ * @ai-sdk/anthropic falls back to a real ANTHROPIC_API_KEY in the environment
+ * and POSTs it to the third-party endpoint (the tool's highest-cost failure
+ * mode). The generated config sets the intended credential itself, so clearing
+ * these never removes the one we want.
+ */
+export const ANTHROPIC_AMBIENT_VARS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+] as const
+
+/** Vars to unset for this launch: the Anthropic ambient set when a baseURL is pinned. */
+export function ambientUnset(intent: LaunchIntent): string[] {
+  return intent.baseUrl ? [...ANTHROPIC_AMBIENT_VARS] : []
+}
+
 export type AnthropicOptions = { baseURL?: string; apiKey?: string }
 
 /** The `options` block for the generated provider. Omits what the intent clears. */
@@ -47,26 +68,35 @@ export function modelRef(id: string): string {
 
 /**
  * Warn when the agent has fewer model slots than the profile pinned — never
- * silently drop (issue #19). `keptTiers[0]` is the primary; a dropped tier only
- * warns if it pins a DIFFERENT model, since collapsing four identical ids to one
- * loses nothing.
+ * silently drop (issue #19). `keptTiers` may name MORE THAN ONE slot (OpenCode
+ * keeps opus->model and haiku->small_model), so a dropped tier is only "ignored"
+ * when its model is served by NONE of the kept slots — collapsing tiers onto a
+ * model that another kept slot already carries loses nothing.
  */
 export function collapsedTierWarning(
   intent: LaunchIntent,
   keptTiers: Tier[],
   agentLabel: string,
 ): EnvWarning | null {
-  const primaryTier = keptTiers[0]
-  const primary = primaryTier ? intent.models[primaryTier] : undefined
+  const served = new Set(
+    keptTiers.map((t) => intent.models[t]).filter((m): m is string => Boolean(m)),
+  )
   const dropped = TIERS.filter((t) => !keptTiers.includes(t))
-  const distinct = dropped.filter((t) => intent.models[t] && intent.models[t] !== primary)
+  const distinct = dropped.filter((t) => {
+    const m = intent.models[t]
+    return Boolean(m) && !served.has(m as string)
+  })
   if (distinct.length === 0) return null
+  const kept = keptTiers
+    .filter((t) => intent.models[t])
+    .map((t) => `${t}=${intent.models[t]}`)
+    .join(', ')
   return {
     severity: 'medium',
     code: 'tier-collapsed',
     message:
       `${agentLabel} does not use the four-tier model. ` +
-      (primary ? `Using '${primary}' for ${keptTiers.join('/')}; ` : '') +
+      (kept ? `Serving ${kept}; ` : '') +
       `these pinned tiers are ignored: ${distinct
         .map((t) => `${t}=${intent.models[t]}`)
         .join(', ')}.`,
