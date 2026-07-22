@@ -65,9 +65,37 @@ export type ProviderUsagePort = {
   /** null when the endpoint answered but published nothing usable */
   fetch: (req: {
     baseUrl: string
+    /**
+     * The key, for a key-mode account. EMPTY for a session account — the token
+     * is not swisscode's to hold, so an adapter that needs one reads it from
+     * `sessionDir` itself, at the moment it asks and no earlier.
+     */
     credential: string
+    /**
+     * A session directory, for a subscription account. Present because the two
+     * account modes get their credential from genuinely different places, and
+     * collapsing that into one string would mean reading a token out of the
+     * Keychain on every code path that merely wants to name an account.
+     */
+    sessionDir?: string | null
     timeoutMs?: number
   }) => Promise<ProviderUsage | null>
+}
+
+/**
+ * What a subscription account has left, beyond the generic shape above.
+ *
+ * Subscriptions are not denominated in credits: the thing that bites is a
+ * PERCENTAGE OF A ROLLING WINDOW, and there are two windows that bite
+ * independently. A single `remaining` number cannot express "fine for the next
+ * five hours, nearly out for the week", which is exactly the state a user wants
+ * to route around.
+ */
+export type SubscriptionWindow = {
+  /** 0–100; how much of this window is spent */
+  utilization: number | null
+  /** ISO 8601, when the window rolls over */
+  resetsAt: string | null
 }
 
 export {}
