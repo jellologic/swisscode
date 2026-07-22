@@ -1,6 +1,6 @@
 {
   "name": "swisscode",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Drop-in launcher for Claude Code, Kilo & OpenCode against Ollama (local, no key), OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen & more — named profiles, per-directory bindings and real 1M-context fixes, with no proxy or daemon.",
   "type": "module",
   "bin": {
