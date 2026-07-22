@@ -133,6 +133,43 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T
 }
 
+export type DoctorCheck = {
+  id: string
+  title: string
+  status: 'ok' | 'warn' | 'error' | 'skip'
+  detail: string
+  fix?: string
+}
+
+export type DoctorReport = {
+  profile: string | null
+  provider: string | null
+  endpoint: string | null
+  checks: DoctorCheck[]
+  notes: string[]
+  summary: { counts: Record<string, number>; exitCode: number }
+}
+
+export type CatalogModel = {
+  id: string
+  name: string
+  description?: string
+  context: number | null
+  pricing: { prompt: number; completion: number } | null
+  /** TRI-STATE. null is UNKNOWN, false is CONFIRMED ABSENT. Do not collapse. */
+  tools: boolean | null
+}
+
+export type CatalogResult = {
+  id: string
+  label: string
+  capabilities: { pricing: boolean; benchmarks: boolean; toolSupportKnown: boolean }
+  models: CatalogModel[]
+  fromCache: boolean
+  stale: boolean
+  error: string | null
+}
+
 export const api = {
   bootstrap: () => call<Bootstrap>('/api/bootstrap'),
 
@@ -165,6 +202,18 @@ export const api = {
       `/api/providers/${encodeURIComponent(id)}`,
       { method: 'DELETE', body: JSON.stringify({ revision }) },
     ),
+
+  /**
+   * `offline` defaults to true server-side. Sending false is opting IN to real,
+   * billable inference probes — so the UI must make that an explicit click.
+   */
+  doctor: (offline: boolean) =>
+    call<{ report: DoctorReport; offline: boolean }>('/api/doctor', {
+      method: 'POST',
+      body: JSON.stringify({ offline }),
+    }),
+
+  catalog: (id: string) => call<CatalogResult>(`/api/catalog/${encodeURIComponent(id)}`),
 
   saveSettings: (settings: unknown, revision: string | null) =>
     call<{ revision: string }>('/api/settings', {

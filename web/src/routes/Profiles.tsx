@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { css } from '../../styled-system/css'
 import { ApiError, api, type Bootstrap, type Profile } from '../api'
 import { Banner, Button, Dot, Empty, Field, Panel, inputStyle, monoInput } from '../ui'
+import { ModelPicker } from './ModelPicker'
 
 /**
  * The profile editor exposes everything the CLI can express: provider, agent,
@@ -19,6 +20,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [error, setError] = useState<string | null>(null)
   const [errors, setErrors] = useState<string[]>([])
+  const [picking, setPicking] = useState<string | null>(null)
 
   const open = (name: string | null) => {
     setError(null)
@@ -208,14 +210,49 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
           </p>
           {data.tiers.map((tier) => (
             <Field key={tier} label={tier}>
-              <input
-                className={monoInput}
-                value={models[tier] ?? ''}
-                onChange={(e) => put('models', { ...models, [tier]: e.target.value })}
-                placeholder={provider?.defaultModels?.[tier] ?? '—'}
-              />
+              <span className={css({ display: 'flex', gap: '2' })}>
+                <input
+                  className={monoInput}
+                  value={models[tier] ?? ''}
+                  onChange={(e) => put('models', { ...models, [tier]: e.target.value })}
+                  placeholder={provider?.defaultModels?.[tier] ?? '—'}
+                />
+                {/* Only providers that publish a catalog get a picker. The rest
+                    take a typed id, which is the honest option — a picker over
+                    a list we do not have would be worse than none. */}
+                {provider?.catalogId ? (
+                  <Button onClick={() => setPicking(tier)}>Browse</Button>
+                ) : null}
+              </span>
             </Field>
           ))}
+
+          {picking && provider?.catalogId ? (
+            <ModelPicker
+              catalogId={provider.catalogId}
+              tier={picking}
+              onClose={() => setPicking(null)}
+              onPick={(model) => {
+                const next = { ...models, [picking]: model.id }
+                setDraft((d) => ({
+                  ...d,
+                  models: next,
+                  // Capture the MEASURED window alongside the id. This is the
+                  // only moment it is known, and it is what lets swisscode set
+                  // an auto-compact window later without ever guessing one.
+                  ...(model.context
+                    ? {
+                        contextWindows: {
+                          ...((d.contextWindows as Record<string, number>) ?? {}),
+                          [model.id]: model.context,
+                        },
+                      }
+                    : {}),
+                }))
+                setPicking(null)
+              }}
+            />
+          ) : null}
         </Panel>
 
         <Panel title="Behaviour">

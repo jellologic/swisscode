@@ -5,12 +5,14 @@ import { Banner, Dot } from './ui'
 import { Profiles } from './routes/Profiles'
 import { Providers } from './routes/Providers'
 import { Settings } from './routes/Settings'
+import { Doctor } from './routes/Doctor'
 
-type Tab = 'profiles' | 'providers' | 'settings'
+type Tab = 'profiles' | 'providers' | 'doctor' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'profiles', label: 'Profiles' },
   { id: 'providers', label: 'Providers' },
+  { id: 'doctor', label: 'Doctor' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -136,6 +138,7 @@ export function App() {
 
         {tab === 'profiles' ? <Profiles data={data} reload={reload} /> : null}
         {tab === 'providers' ? <Providers data={data} reload={reload} /> : null}
+        {tab === 'doctor' ? <Doctor /> : null}
         {tab === 'settings' ? <Settings data={data} reload={reload} /> : null}
       </main>
     </div>

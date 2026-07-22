@@ -16,8 +16,5 @@ export default defineConfig({
   build: {
     outDir: '../dist/web',
     emptyOutDir: true,
-    // A config UI does not need code splitting; one file is easier to serve,
-    // easier to size-budget, and faster on loopback than any split could be.
-    codeSplitting: false,
   },
 })

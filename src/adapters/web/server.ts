@@ -11,6 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { handleApi, type ApiDeps } from './api.ts'
+import { handleAsyncApi, type AsyncApiDeps } from './api-async.ts'
 import {
   SECURITY_HEADERS,
   TOKEN_HEADER,
@@ -39,7 +40,7 @@ const MIME: Readonly<Record<string, string>> = Object.freeze({
 /** Extensions read as bytes rather than utf8. */
 const BINARY_EXT = new Set(['.woff2', '.png', '.ico'])
 
-export type WebServerOptions = ApiDeps & {
+export type WebServerOptions = ApiDeps & AsyncApiDeps & {
   /** 0 lets the OS choose, which is the default: a fixed port is squattable. */
   port?: number
   /** absolute path to the built SPA. When absent, a fallback page is served. */
@@ -204,7 +205,10 @@ export function startWebServer(options: WebServerOptions): Promise<RunningServer
           return send(res, 400, { error: (err as Error).message })
         }
       }
-      const result = handleApi({ method: req.method ?? 'GET', path: url.pathname, body }, deps)
+      const request = { method: req.method ?? 'GET', path: url.pathname, body }
+      // The I/O routes get first refusal; everything else is the pure handler.
+      const asyncResult = await handleAsyncApi(request, deps)
+      const result = asyncResult ?? handleApi(request, deps)
       return send(res, result.status, result.body)
     }
 

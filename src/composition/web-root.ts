@@ -12,7 +12,13 @@
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { startWebServer, type RunningServer } from '../adapters/web/server.ts'
+import { createCatalogRegistry } from '../adapters/catalog/registry.ts'
+import { createFsCacheStore } from '../adapters/store/fs-cache-store.ts'
+import { fetchNet } from '../adapters/net/fetch-net.ts'
+import { systemClock } from '../adapters/clock/system-clock.ts'
+import { configDir } from '../adapters/store/fs-config-store.ts'
 import type { LaunchDeps } from './launch-root.ts'
 
 export type RunWebOptions = {
@@ -73,6 +79,20 @@ export async function runWeb({
             }
           }
         }),
+      // Same catalogs the Ink picker uses, so the browser and the terminal
+      // browse an identical list from an identical 24h cache.
+      catalogs: createCatalogRegistry({
+        net: fetchNet,
+        cache: createFsCacheStore({ dir: configDir(), clock: systemClock }),
+        clock: systemClock,
+      }),
+      // The doctor is imported LAZILY: it reaches the network and pulls in the
+      // probe, and a user who only edits a profile should not load it at all.
+      doctor: async ({ offline }) => {
+        const { runDoctor } = await import('./doctor-root.ts')
+        const run = await runDoctor({ deps, offline })
+        return run.report
+      },
       port,
       assetDir: assetDir(),
     })
@@ -95,10 +115,38 @@ export async function runWeb({
   if (!assetDir()) {
     out('  note: no UI bundle found — serving the fallback page. Run `npm run build`.')
   }
-  if (!noOpen) {
-    // Opening a browser is a side effect on the user's desktop, so it is
-    // announced above rather than done silently, and `--no-open` exists.
-    out('')
-  }
+  if (!noOpen) openBrowser(server.url, out)
   return server
+}
+
+/**
+ * Open the default browser, best effort.
+ *
+ * BEST EFFORT IS THE CONTRACT, not a shortcut. This is a side effect on someone
+ * else's desktop, over which swisscode has no authority: there may be no
+ * browser, no display, no session (ssh, a container, CI). Every one of those is
+ * a normal state, and none of them is a reason to fail a command whose actual
+ * job — serving on a URL that was already printed — has succeeded.
+ *
+ * So it is detached and unref'd (the child must not hold the process open or
+ * inherit the terminal), errors are swallowed to a single line, and the URL is
+ * printed FIRST so the flow works identically whether or not this does anything.
+ */
+function openBrowser(url: string, out: (line: string) => void): void {
+  const command =
+    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open'
+  try {
+    const child = spawn(command, [url], {
+      stdio: 'ignore',
+      detached: true,
+      // `start` is a cmd builtin rather than an executable.
+      ...(process.platform === 'win32' ? { shell: true } : {}),
+    })
+    // Failure arrives asynchronously (ENOENT on a box with no xdg-open), so it
+    // needs a handler or it becomes an unhandled 'error' event and kills us.
+    child.on('error', () => out('  (could not open a browser — copy the URL above)'))
+    child.unref()
+  } catch {
+    out('  (could not open a browser — copy the URL above)')
+  }
 }
