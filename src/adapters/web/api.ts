@@ -13,7 +13,13 @@ import { validateProfileName } from '../../core/migrate.ts'
 import { toCustomProvider, validateCustomProvider } from '../../core/provider-def.ts'
 import { TIERS } from '../../core/tiers.ts'
 import { COMPAT_ENV, CREDENTIAL_ENVS } from '../agents/claude-code/env.ts'
-import type { ConfigStorePort, Profile, State } from '../../ports/config-store.ts'
+import type {
+  AgentProfile,
+  ConfigStorePort,
+  Profile,
+  ProviderAccount,
+  State,
+} from '../../ports/config-store.ts'
 import type { AgentRegistryPort } from '../../ports/agent.ts'
 import type { ProviderRegistryPort } from '../../ports/provider.ts'
 import { RESERVED_PROVIDER_IDS, withCustomProviders } from '../providers/composite.ts'
@@ -62,32 +68,40 @@ const json = (status: number, body: unknown): ApiResponse => ({ status, body })
 const fail = (status: number, error: string): ApiResponse => json(status, { error })
 
 /**
- * A profile as the BROWSER is allowed to see it.
+ * A provider ACCOUNT as the browser is allowed to see it.
  *
- * The key never crosses this boundary — not masked, not truncated, not
- * length-hinted. That is the same rule the doctor already follows, and it
- * matters more here: a value rendered into a DOM can be read by anything that
- * achieves script execution on the page, ends up in browser memory dumps, and
- * is one careless devtools screenshot from a bug report.
+ * Redaction moved here with the credential. Since v3 the key lives on the
+ * account rather than on the profile, so this is now the single boundary it
+ * could cross — which is an improvement: there is one type to get right instead
+ * of one field on a type that also carried everything else.
+ *
+ * The key never crosses — not masked, not truncated, not length-hinted. That is
+ * the same rule the doctor follows, and it matters more here: a value rendered
+ * into a DOM can be read by anything that achieves script execution on the page
+ * and is one careless screenshot from a bug report.
  *
  * `hasKey` is all the UI needs to render "set / not set" and offer to replace
- * it. Editing is therefore write-only: you can overwrite a key, never read one
- * back. `apiKeyFromEnv` IS sent, because a variable NAME is not a secret and
- * the user needs to see which one is being read.
+ * it, so editing is write-only. `apiKeyFromEnv` IS sent, because a variable
+ * NAME is not a secret and the user needs to see which one is read.
  */
-export type RedactedProfile = Omit<Profile, 'apiKey'> & { hasKey: boolean }
+export type RedactedAccount = Omit<ProviderAccount, 'apiKey'> & { hasKey: boolean }
 
-export function redactProfile(profile: Profile): RedactedProfile {
-  const { apiKey, ...rest } = profile
+export function redactAccount(account: ProviderAccount): RedactedAccount {
+  const { apiKey, ...rest } = account
   return { ...rest, hasKey: typeof apiKey === 'string' && apiKey.length > 0 }
 }
 
 export function redactState(state: State): unknown {
   return {
     ...state,
-    profiles: Object.fromEntries(
-      Object.entries(state.profiles ?? {}).map(([name, p]) => [name, redactProfile(p)]),
+    providerAccounts: Object.fromEntries(
+      Object.entries(state.providerAccounts ?? {}).map(([n, a]) => [n, redactAccount(a)]),
     ),
+    // Agent profiles and profiles hold no credential at all now, so they pass
+    // through whole. That is the split paying off: only one of the three shapes
+    // is security-sensitive, and it is obvious which.
+    agentProfiles: state.agentProfiles ?? {},
+    profiles: state.profiles ?? {},
   }
 }
 
@@ -148,34 +162,50 @@ function commit(store: ConfigStorePort, state: State, extra: unknown = {}): ApiR
 }
 
 /**
- * A profile submitted by the browser, validated field by field.
+ * A provider account submitted by the browser.
  *
  * Whitelisted rather than spread: an unknown key from a hostile or buggy client
  * must not reach config.json, where a future swisscode would read it as
- * meaningful. `apiKey` is accepted (write-only) but only when non-empty — an
- * empty string from a form the user did not touch must not erase a stored key,
- * which is the single most destructive mistake this endpoint could make.
+ * meaningful.
+ *
+ * `apiKey` is accepted (write-only) but only when NON-EMPTY — an empty string
+ * from a form the user did not touch must not erase a stored key, which is the
+ * single most destructive mistake this endpoint could make. Clearing is an
+ * explicit `null`, so "I did not touch this" and "remove my credential" stay
+ * different requests.
  */
-export function parseProfile(input: unknown, existing: Profile | undefined): Profile | string {
-  if (!isObjectLike(input)) return 'profile must be an object'
-  const provider = str(input.provider)
+export function parseAccount(
+  input: unknown,
+  existing: ProviderAccount | undefined,
+): ProviderAccount | string {
+  if (!isObjectLike(input)) return 'account must be an object'
+  const provider = str(input.provider) ?? existing?.provider
   if (!provider) return 'provider is required'
 
-  const profile: Profile = { ...(existing ?? {}), provider } as Profile
-
-  if (typeof input.baseUrl === 'string') profile.baseUrl = input.baseUrl
-  if (typeof input.agent === 'string') profile.agent = input.agent
-  if (typeof input.skipPermissions === 'boolean') profile.skipPermissions = input.skipPermissions
-
-  // Write-only, and never cleared by omission. Clearing is an explicit
-  // `apiKey: null`, so "I did not touch this field" and "remove my key" stop
-  // being the same request.
-  if (typeof input.apiKey === 'string' && input.apiKey.length > 0) profile.apiKey = input.apiKey
-  if (input.apiKey === null) delete profile.apiKey
-
+  const account: ProviderAccount = { ...(existing ?? {}), provider }
+  if (typeof input.label === 'string') account.label = input.label
+  if (typeof input.baseUrl === 'string') account.baseUrl = input.baseUrl
+  if (typeof input.apiKey === 'string' && input.apiKey.length > 0) account.apiKey = input.apiKey
+  if (input.apiKey === null) delete account.apiKey
   if (typeof input.apiKeyFromEnv === 'string') {
-    if (input.apiKeyFromEnv) profile.apiKeyFromEnv = input.apiKeyFromEnv
-    else delete profile.apiKeyFromEnv
+    if (input.apiKeyFromEnv) account.apiKeyFromEnv = input.apiKeyFromEnv
+    else delete account.apiKeyFromEnv
+  }
+  return account
+}
+
+/** An agent profile submitted by the browser. Holds no credential. */
+export function parseAgentProfile(
+  input: unknown,
+  existing: AgentProfile | undefined,
+): AgentProfile | string {
+  if (!isObjectLike(input)) return 'agent profile must be an object'
+  const agentProfile: AgentProfile = { ...(existing ?? {}) }
+
+  if (typeof input.label === 'string') agentProfile.label = input.label
+  if (typeof input.agent === 'string') agentProfile.agent = input.agent
+  if (typeof input.skipPermissions === 'boolean') {
+    agentProfile.skipPermissions = input.skipPermissions
   }
 
   if (isObjectLike(input.models)) {
@@ -184,19 +214,15 @@ export function parseProfile(input: unknown, existing: Profile | undefined): Pro
       const v = input.models[tier]
       if (typeof v === 'string') models[tier] = v
     }
-    profile.models = models
+    agentProfile.models = models
   }
 
   if (isObjectLike(input.compat)) {
-    // Built as a plain record then asserted once. The flag NAMES are validated
-    // downstream by registry.test.ts's "compat flags are all real" rule and are
-    // inert if unknown, so an unrecognised key here is a no-op rather than a
-    // write of a bogus variable — the same tolerance the CLI path has.
     const compat: Record<string, boolean> = {}
     for (const [k, v] of Object.entries(input.compat)) {
       if (typeof v === 'boolean') compat[k] = v
     }
-    profile.compat = compat as NonNullable<Profile['compat']>
+    agentProfile.compat = compat as NonNullable<AgentProfile['compat']>
   }
 
   if (isObjectLike(input.env)) {
@@ -204,20 +230,46 @@ export function parseProfile(input: unknown, existing: Profile | undefined): Pro
     for (const [k, v] of Object.entries(input.env)) {
       if (typeof v === 'string') env[k] = v
     }
-    profile.env = env
+    agentProfile.env = env
   }
 
   // Measured windows only. A non-integer or non-positive entry is dropped
-  // rather than stored: this map feeds CLAUDE_CODE_AUTO_COMPACT_WINDOW, and a
-  // window set too large means the conversation overflows instead of compacting.
+  // rather than stored: this feeds CLAUDE_CODE_AUTO_COMPACT_WINDOW, and a
+  // window set too large overflows the conversation instead of compacting it.
   if (isObjectLike(input.contextWindows)) {
     const windows: Record<string, number> = {}
     for (const [model, v] of Object.entries(input.contextWindows)) {
       if (typeof v === 'number' && Number.isInteger(v) && v > 0) windows[model] = v
     }
-    profile.contextWindows = windows
+    agentProfile.contextWindows = windows
   }
 
+  return agentProfile
+}
+
+/**
+ * The pairing. References only — no credential, no agent settings.
+ *
+ * References are NOT validated against the store here; that is the caller's
+ * job, because it holds the state and can name what is missing. Validating
+ * shape and validating existence are different failures and deserve different
+ * messages.
+ */
+export function parseProfile(input: unknown, existing: Profile | undefined): Profile | string {
+  if (!isObjectLike(input)) return 'profile must be an object'
+  const agentProfile = str(input.agentProfile) ?? existing?.agentProfile
+  if (!agentProfile) return 'agentProfile is required'
+
+  const accounts = Array.isArray(input.accounts)
+    ? input.accounts.filter((a): a is string => typeof a === 'string' && a.length > 0)
+    : (existing?.accounts ?? [])
+  if (accounts.length === 0) return 'a profile needs at least one provider account'
+
+  const profile: Profile = { ...(existing ?? {}), agentProfile, accounts }
+  if (typeof input.label === 'string') profile.label = input.label
+  if (input.strategy === 'single' || input.strategy === 'round-robin' || input.strategy === 'usage') {
+    profile.strategy = input.strategy
+  }
   return profile
 }
 
@@ -291,6 +343,16 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       const parsed = parseProfile(body, loaded.state.profiles?.[name])
       if (typeof parsed === 'string') return fail(400, parsed)
 
+      // References are checked HERE, where the state is in hand. parseProfile
+      // validated the shape; this validates that the things it names exist.
+      if (!loaded.state.agentProfiles?.[parsed.agentProfile]) {
+        return fail(400, `no agent profile named "${parsed.agentProfile}"`)
+      }
+      const missing = parsed.accounts.filter((a) => !loaded.state.providerAccounts?.[a])
+      if (missing.length > 0) {
+        return fail(400, `no provider account named "${missing[0]}"`)
+      }
+
       const state: State = {
         ...loaded.state,
         profiles: { ...loaded.state.profiles, [name]: parsed },
@@ -320,6 +382,82 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       // launcher already knows how to report, so clear rather than delete.
       if (state.defaultProfile === name) state.defaultProfile = null
       return commit(store, state)
+    }
+  }
+
+  // The two halves a profile references. Same revision discipline, same
+  // whitelisting; separate routes because they are separate things now, and a
+  // single endpoint taking a flat blob would re-create exactly the conflation
+  // v3 exists to undo.
+  if (resource === 'accounts') {
+    const name = rest[0] ? decodeURIComponent(rest[0]) : null
+    if (!name) return fail(400, 'account name is required')
+
+    if (req.method === 'PUT') {
+      const conflict = revisionConflict(store, req.body)
+      if (conflict) return conflict
+      const loaded = store.load()
+      const parsed = parseAccount(
+        isObjectLike(req.body) ? req.body.account : null,
+        loaded.state.providerAccounts?.[name],
+      )
+      if (typeof parsed === 'string') return fail(400, parsed)
+      return commit(store, {
+        ...loaded.state,
+        providerAccounts: { ...loaded.state.providerAccounts, [name]: parsed },
+      })
+    }
+
+    if (req.method === 'DELETE') {
+      const conflict = revisionConflict(store, req.body)
+      if (conflict) return conflict
+      const loaded = store.load()
+      if (!loaded.state.providerAccounts?.[name]) return fail(404, `no account named "${name}"`)
+
+      // Profiles referencing it are REPORTED, never silently repaired: only the
+      // user knows which account should pay instead.
+      const affected = Object.entries(loaded.state.profiles ?? {})
+        .filter(([, pr]) => (pr.accounts ?? []).includes(name))
+        .map(([n]) => n)
+
+      const accounts = { ...loaded.state.providerAccounts }
+      delete accounts[name]
+      return commit(store, { ...loaded.state, providerAccounts: accounts }, {
+        affectedProfiles: affected,
+      })
+    }
+  }
+
+  if (resource === 'agent-profiles') {
+    const name = rest[0] ? decodeURIComponent(rest[0]) : null
+    if (!name) return fail(400, 'agent profile name is required')
+
+    if (req.method === 'PUT') {
+      const conflict = revisionConflict(store, req.body)
+      if (conflict) return conflict
+      const loaded = store.load()
+      const parsed = parseAgentProfile(
+        isObjectLike(req.body) ? req.body.agentProfile : null,
+        loaded.state.agentProfiles?.[name],
+      )
+      if (typeof parsed === 'string') return fail(400, parsed)
+      return commit(store, {
+        ...loaded.state,
+        agentProfiles: { ...loaded.state.agentProfiles, [name]: parsed },
+      })
+    }
+
+    if (req.method === 'DELETE') {
+      const conflict = revisionConflict(store, req.body)
+      if (conflict) return conflict
+      const loaded = store.load()
+      if (!loaded.state.agentProfiles?.[name]) return fail(404, `no agent profile named "${name}"`)
+      const affected = Object.entries(loaded.state.profiles ?? {})
+        .filter(([, pr]) => pr.agentProfile === name)
+        .map(([n]) => n)
+      const agentProfiles = { ...loaded.state.agentProfiles }
+      delete agentProfiles[name]
+      return commit(store, { ...loaded.state, agentProfiles }, { affectedProfiles: affected })
     }
   }
 
@@ -363,16 +501,23 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       const loaded = store.load()
       if (!loaded.state.providers?.[id]) return fail(404, `no custom provider named "${id}"`)
 
-      // Profiles pointing at it are reported, not silently repaired. Deleting
-      // the provider out from under a profile leaves it unlaunchable, and the
-      // user is the only one who knows which provider it should point at now.
+      // ACCOUNTS point at providers now, not profiles — so deleting a provider
+      // orphans accounts, and those in turn orphan whichever profiles use them.
+      // Both are reported, never silently repaired: only the user knows where a
+      // profile should point next.
+      const orphanedAccounts = Object.entries(loaded.state.providerAccounts ?? {})
+        .filter(([, a]) => a.provider === id)
+        .map(([name]) => name)
       const orphaned = Object.entries(loaded.state.profiles ?? {})
-        .filter(([, p]) => p.provider === id)
+        .filter(([, p]) => (p.accounts ?? []).some((a) => orphanedAccounts.includes(a)))
         .map(([name]) => name)
 
       const providersMap = { ...loaded.state.providers }
       delete providersMap[id]
-      return commit(store, { ...loaded.state, providers: providersMap }, { orphanedProfiles: orphaned })
+      return commit(store, { ...loaded.state, providers: providersMap }, {
+        orphanedAccounts,
+        orphanedProfiles: orphaned,
+      })
     }
   }
 

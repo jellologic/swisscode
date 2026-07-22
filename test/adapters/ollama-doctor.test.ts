@@ -19,6 +19,7 @@ import { registry } from '../../src/adapters/providers/registry.ts'
 import { registry as agents } from '../../src/adapters/agents/registry.ts'
 import type { OllamaContext, OllamaIntrospectPort } from '../../src/ports/doctor.ts'
 import type { State } from '../../src/ports/config-store.ts'
+import { makeProfile } from '../support/fixtures.ts'
 
 // GET /api/ps, model resident
 const PS = {
@@ -131,7 +132,15 @@ test('a failed lookup is a skip, never a pass', () => {
 
 const ollamaState = {
   version: 2,
-  profiles: { local: { provider: 'ollama', models: { opus: 'qwen3:0.6b' } } },
+  providerAccounts: {
+    local: makeProfile({ provider: 'ollama' }),
+  },
+  agentProfiles: {
+    local: { models: { opus: 'qwen3:0.6b' } },
+  },
+  profiles: {
+    local: { agentProfile: 'local', accounts: ['local'] },
+  },
   defaultProfile: 'local',
   bindings: {},
   settings: {},
@@ -198,7 +207,15 @@ test('--offline skips it, because it is still a network call', async () => {
 test('a non-Ollama profile gets no context check at all', async () => {
   const zaiState = {
     version: 2,
-    profiles: { z: { provider: 'zai', apiKey: 'k', models: { opus: 'glm-5.2' } } },
+    providerAccounts: {
+      z: makeProfile({ provider: 'zai', apiKey: 'k' }),
+    },
+    agentProfiles: {
+      z: { models: { opus: 'glm-5.2' } },
+    },
+    profiles: {
+      z: { agentProfile: 'z', accounts: ['z'] },
+    },
     defaultProfile: 'z',
     bindings: {},
     settings: {},

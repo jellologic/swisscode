@@ -11,7 +11,7 @@
 // Type-only, like every port: `export {}` at runtime.
 
 import type { ExtendedContext, ProviderDescriptor, Tier, TierRecord } from './provider.ts'
-import type { Profile } from './config-store.ts'
+import type { ResolvedProfile } from './config-store.ts'
 import type { AgentBinarySpec, EnvMap } from './process.ts'
 
 /**
@@ -84,7 +84,7 @@ export type AgentCapabilities = {
  */
 export type TranslateInput = {
   intent: LaunchIntent
-  profile: Profile
+  profile: ResolvedProfile
   provider: ProviderDescriptor | null
   passthrough: string[]
   ambient: EnvMap

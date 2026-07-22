@@ -40,7 +40,7 @@ const POLLUTED = {
 test('a stale ANTHROPIC_API_KEY is removed for every third-party provider', () => {
   // This is the highest-cost failure mode in the tool: the stale key makes
   // Claude Code fall back to Anthropic and bill the wrong account.
-  const plan = buildEnvPlan(makeProfile({ provider: 'gw', apiKey: 'gw-key' }), gateway, POLLUTED)
+  const plan = buildEnvPlan(makeProfile(({ provider: 'gw', apiKey: 'gw-key' })), gateway, POLLUTED)
   assert.ok(plan.unset.includes('ANTHROPIC_API_KEY'))
   assert.equal(plan.set.ANTHROPIC_API_KEY, undefined)
   assert.equal(plan.set.ANTHROPIC_AUTH_TOKEN, 'gw-key')
@@ -62,13 +62,13 @@ test('a provider that legitimately uses ANTHROPIC_API_KEY keeps it', () => {
 })
 
 test('Anthropic direct clears a gateway URL left in the shell', () => {
-  const plan = buildEnvPlan(makeProfile({ provider: 'anthropic' }), firstParty, POLLUTED)
+  const plan = buildEnvPlan(makeProfile(({ provider: 'anthropic' })), firstParty, POLLUTED)
   assert.ok(plan.unset.includes('ANTHROPIC_BASE_URL'))
   assert.equal(plan.set.ANTHROPIC_BASE_URL, undefined)
 })
 
 test('Anthropic direct clears stale tier variables rather than inheriting them', () => {
-  const plan = buildEnvPlan(makeProfile({ provider: 'anthropic' }), firstParty, POLLUTED)
+  const plan = buildEnvPlan(makeProfile(({ provider: 'anthropic' })), firstParty, POLLUTED)
   for (const tier of TIERS) assert.ok(plan.unset.includes(TIER_ENV[tier]), tier)
 })
 

@@ -16,6 +16,7 @@ import type { ProbeFetch, ProbeResponse } from '../../src/adapters/doctor/probe.
 import type { ProbeRequest, ProbeResult } from '../../src/ports/doctor.ts'
 import type { State } from '../../src/ports/config-store.ts'
 import type { EnvMap } from '../../src/ports/process.ts'
+import { makeProfile } from '../support/fixtures.ts'
 
 /**
  * A ProbeRequest that omits the credential fields.
@@ -171,13 +172,15 @@ const SECRET = 'ms-super-secret-token'
 
 function deps(over: { state?: State; env?: EnvMap } = {}) {
   const state = over.state ?? {
-    version: 2,
+    version: 3,
+    providerAccounts: {
+      z: { provider: 'zai', apiKey: SECRET },
+    },
+    agentProfiles: {
+      z: { models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' } },
+    },
     profiles: {
-      z: {
-        provider: 'zai',
-        apiKey: SECRET,
-        models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' },
-      },
+      z: { agentProfile: 'z', accounts: ['z'] },
     },
     defaultProfile: 'z',
     bindings: {},
@@ -213,8 +216,16 @@ test('a provider placeholder is not treated as a secret and is not redacted', as
   // a secret, and redaction must cover real secrets exactly rather than
   // everything sitting in a credential-shaped slot.
   const state = {
-    version: 2,
-    profiles: { local: { provider: 'ollama', models: { opus: 'qwen3-coder:30b' } } },
+    version: 3,
+    providerAccounts: {
+      local: makeProfile({ provider: 'ollama' }),
+    },
+    agentProfiles: {
+      local: { models: { opus: 'qwen3-coder:30b' } },
+    },
+    profiles: {
+      local: { agentProfile: 'local', accounts: ['local'] },
+    },
     defaultProfile: 'local',
     bindings: {},
     settings: {},
@@ -280,13 +291,15 @@ test('--offline makes no network calls at all', async () => {
 
 test('the total budget stops the run rather than running long', async () => {
   const state = {
-    version: 2,
+    version: 3,
+    providerAccounts: {
+      z: { provider: 'zai', apiKey: SECRET },
+    },
+    agentProfiles: {
+      z: { models: { opus: 'a', sonnet: 'b', haiku: 'c', fable: 'd' } },
+    },
     profiles: {
-      z: {
-        provider: 'zai',
-        apiKey: SECRET,
-        models: { opus: 'a', sonnet: 'b', haiku: 'c', fable: 'd' },
-      },
+      z: { agentProfile: 'z', accounts: ['z'] },
     },
     defaultProfile: 'z',
     bindings: {},
@@ -344,8 +357,16 @@ test('doctor says what it did NOT test about the [1m] suffix', async () => {
 
 test('--fix prunes dangling bindings and nothing else', async () => {
   const state = {
-    version: 2,
-    profiles: { z: { provider: 'zai', apiKey: SECRET, models: { opus: 'glm-5.2' } } },
+    version: 3,
+    providerAccounts: {
+      z: { provider: 'zai', apiKey: SECRET },
+    },
+    agentProfiles: {
+      z: { models: { opus: 'glm-5.2' } },
+    },
+    profiles: {
+      z: { agentProfile: 'z', accounts: ['z'] },
+    },
     defaultProfile: 'z',
     bindings: { '/definitely/not/a/real/path': 'gone' },
     settings: {},
@@ -354,6 +375,7 @@ test('--fix prunes dangling bindings and nothing else', async () => {
   await runDoctor({ deps: d.deps, offline: true, fix: true })
   assert.equal(d.saves.length, 1)
   assert.deepEqual(d.saves[0]!.bindings, {})
-  // The model string the user pinned is untouched.
-  assert.deepEqual(d.saves[0]!.profiles.z!.models, { opus: 'glm-5.2' })
+  // The model string the user pinned is untouched — on the agent profile,
+  // which is where models live since v3.
+  assert.deepEqual(d.saves[0]!.agentProfiles.z!.models, { opus: 'glm-5.2' })
 })

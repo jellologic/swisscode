@@ -20,7 +20,7 @@
 import { TIER_ENV_VARS } from './tiers.ts'
 import { SUFFIX, bareModelId, supportsExtendedContext } from './context.ts'
 import { sanitizeUrlForDisplay } from '../../../core/url-safety.ts'
-import type { Profile } from '../../../ports/config-store.ts'
+import type { ResolvedProfile } from '../../../ports/config-store.ts'
 import type { ProviderDescriptor } from '../../../ports/provider.ts'
 import type { EnvMap } from '../../../ports/process.ts'
 import type { EnvWarning, WarningSeverity } from '../../../ports/agent.ts'
@@ -40,7 +40,7 @@ export type PlanFacts = {
 
 export type HygieneContext = {
   provider?: ProviderDescriptor | null | undefined
-  profile?: Profile | null | undefined
+  profile?: ResolvedProfile | null | undefined
 }
 
 const w = (severity: WarningSeverity, code: string, message: string): EnvWarning => ({
@@ -235,7 +235,7 @@ export type StaleStoredModel = {
  * advice about stored data rather than a correctness fix.
  */
 export function staleStoredModels(
-  profile: Profile | null | undefined,
+  profile: ResolvedProfile | null | undefined,
   provider: ProviderDescriptor | null | undefined,
 ): StaleStoredModel[] {
   const ec = provider?.extendedContext

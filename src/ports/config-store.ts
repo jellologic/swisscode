@@ -20,23 +20,55 @@ import type { Tier } from './provider.ts'
  * carry an explicit env/unsetEnv split instead); this is the profile side,
  * where a user needs a way to say "clear whatever my shell put there".
  */
-export type Profile = {
-  /** id from the provider registry */
+/**
+ * WHO PAYS. A provider, a credential, and where to send it.
+ *
+ * First-class because a credential is not a property of one launch
+ * configuration — the same OpenRouter key can back a dozen profiles, and an
+ * Anthropic subscription is a thing you HAVE rather than a thing a profile
+ * owns. Before v3 these fields lived on the profile, which is why
+ * `core/overrides.ts` had to go scavenging through other profiles for a key
+ * when `--cc-provider` retargeted: a lookup written as a search, because there
+ * was nothing to look up.
+ *
+ * The credential-safety rule becomes STRUCTURAL here rather than a discipline:
+ * an account names exactly one provider, so a key cannot reach a host it was
+ * not entered for without someone rewriting the account.
+ */
+export type ProviderAccount = {
+  /** id from the provider registry (shipped preset or custom) */
   provider: string
-  /**
-   * id from the agent registry — which coding CLI to launch. Absent means the
-   * default, 'claude-code', so every profile written before this field existed
-   * keeps launching Claude Code with no migration. A profile naming an agent
-   * this build does not know still launches Claude Code (launch-root refuses
-   * only an explicit --cc-agent for an unknown id).
-   */
-  agent?: string
   label?: string
+  /** overrides the descriptor's endpoint */
   baseUrl?: string
   /** inline; the file is 0600 */
   apiKey?: string
   /** read from the ambient env instead, so no secret sits in the file */
   apiKeyFromEnv?: string
+}
+
+/**
+ * WHAT RUNS. A coding CLI plus how it should behave.
+ *
+ * Independent of who pays, so one setup ("Claude Code, yolo, glm on every
+ * tier") can be pointed at several accounts, and one account can back several
+ * setups.
+ *
+ * `models` stays the FOUR Claude Code tiers rather than becoming agent-shaped.
+ * That is deliberate and unchanged from v2: agents with fewer slots collapse it
+ * and warn (see `collapsedTierWarning` in adapters/agents/shared.ts), which is
+ * a documented, tested behaviour. Reshaping it is a separate decision that
+ * should not ride along with a schema migration.
+ */
+export type AgentProfile = {
+  /**
+   * id from the agent registry — which coding CLI to launch. Absent means the
+   * default, 'claude-code'. An agent profile naming an agent this build does
+   * not know still launches the default (launch-root refuses only an explicit
+   * --cc-agent for an unknown id).
+   */
+  agent?: string
+  label?: string
   /** BARE ids. '' means UNSET the tier. Partial: pinning no models is valid. */
   models?: Partial<Record<Tier, string>>
   skipPermissions?: boolean
@@ -56,6 +88,74 @@ export type Profile = {
    * never guessed at.
    */
   contextWindows?: Record<string, number>
+}
+
+/**
+ * One account and one agent profile, flattened — what a launch actually needs.
+ *
+ * THIS IS THE SEAM THAT KEEPS THE v3 SPLIT CHEAP. It is deliberately the same
+ * shape v2's `Profile` had, so everything downstream of resolution — the agent
+ * adapters, `buildEnvPlan`, `buildIntent`, the golden maps — consumes exactly
+ * what it always did and needed no change when the stored schema split in
+ * three. The refactor lands entirely upstream of here.
+ *
+ * Produced only by `core/resolve.ts`. Never stored, never written: it is a view
+ * over two persisted objects, and giving it a name is what stops consumers
+ * reaching back into the store to re-derive it.
+ */
+export type ResolvedProfile = {
+  /** which account was selected, so callers can report it */
+  accountName: string
+  agentProfileName: string
+  // ── from the provider account ──
+  provider: string
+  baseUrl?: string
+  apiKey?: string
+  apiKeyFromEnv?: string
+  // ── from the agent profile ──
+  agent?: string
+  models?: Partial<Record<Tier, string>>
+  skipPermissions?: boolean
+  env?: Record<string, string>
+  compat?: ClaudeCodeCompatFlags
+  contextWindows?: Record<string, number>
+}
+
+/**
+ * How a profile picks among its accounts.
+ *
+ * Every one of these resolves ONCE, before `execve`. swisscode ceases to exist
+ * at handoff, so there is no such thing here as per-request rotation, live
+ * failover, or reacting to a 429 — those require sitting in the data path,
+ * which is the proxy this tool is not.
+ *
+ *   single       the first account. No state, no surprises.
+ *   round-robin  advances per LAUNCH, via a cursor kept outside config.json.
+ *   usage        picks by remaining capacity from a CACHED snapshot, refreshed
+ *                at configuration time (doctor / web UI). Never a live call:
+ *                the launch path may not reach the network. Falls back to
+ *                `single` and says so when there is no snapshot.
+ */
+export type SelectionStrategy = 'single' | 'round-robin' | 'usage'
+
+/**
+ * THE PAIRING. What `swisscode <name>` actually names.
+ *
+ * Holds no credential and no agent settings of its own — only references, plus
+ * the rule for choosing among them.
+ */
+export type Profile = {
+  label?: string
+  /** key into `State.agentProfiles` */
+  agentProfile: string
+  /**
+   * keys into `State.providerAccounts`, in preference order. Never empty in a
+   * valid config; an empty list is a resolution error that names the fix rather
+   * than a silent fallback to some other account.
+   */
+  accounts: string[]
+  /** absent means `single` */
+  strategy?: SelectionStrategy
 }
 
 /** Per-run overrides carried on a directory binding. */
@@ -120,6 +220,11 @@ export type CustomProvider = {
 
 export type State = {
   version: number
+  /** who pays */
+  providerAccounts: Record<string, ProviderAccount>
+  /** what runs */
+  agentProfiles: Record<string, AgentProfile>
+  /** the pairing — what `swisscode <name>` and every binding refer to */
   profiles: Record<string, Profile>
   defaultProfile: string | null
   bindings: Record<string, BindingValue>
@@ -152,21 +257,56 @@ export type ConfigV1 = {
   [key: string]: unknown
 }
 
-/** The version ladder, as a type. Only these two shapes have ever shipped. */
-export type ConfigV2 = State
+/**
+ * The v2 profile: provider, credential, agent and agent settings on ONE object.
+ *
+ * Kept as a type because `fromV2` still has to read it. This is the shape v3
+ * splits into `ProviderAccount` + `AgentProfile` + `Profile`, and writing it
+ * down is what lets that migration be checked rather than guessed at.
+ *
+ * The index signature is rule M1 again, inherited from v1: unrecognized keys
+ * ride along rather than being dropped, so a key written by a newer swisscode
+ * survives a round-trip through an older one.
+ */
+export type ProfileV2 = {
+  provider: string
+  agent?: string
+  label?: string
+  baseUrl?: string
+  apiKey?: string
+  apiKeyFromEnv?: string
+  models?: Partial<Record<Tier, string>>
+  skipPermissions?: boolean
+  env?: Record<string, string>
+  compat?: ClaudeCodeCompatFlags
+  contextWindows?: Record<string, number>
+  [key: string]: unknown
+}
+
+/** The version ladder, as types. Three shapes have shipped. */
+export type ConfigV2 = {
+  version: number
+  profiles: Record<string, ProfileV2>
+  defaultProfile: string | null
+  bindings: Record<string, BindingValue>
+  settings: Settings
+  providers?: Record<string, CustomProvider>
+}
+
+export type ConfigV3 = State
 
 /**
  * What the migration ladder reports.
  *
  * `migratedFrom` is the ONLY thing that authorizes a write on load. Filling in
  * a missing `settings` key is not a migration and must not cause a launch that
- * merely read the file to touch the disk. It is `1 | null` rather than
- * `number | null` because v1 is the only version that has ever been migrated
- * FROM — a newer-than-supported file is `readOnly` instead.
+ * merely read the file to touch the disk. It enumerates the versions that can
+ * be migrated FROM — a newer-than-supported file is `readOnly` instead — so the
+ * store can name the backup after the version it is preserving.
  */
 export type MigrateResult = {
   state: State
-  migratedFrom: 1 | null
+  migratedFrom: 1 | 2 | null
   /** the file existed but could not be understood */
   corrupt: boolean
   /** the file is a NEWER schema; every write path is disabled */

@@ -79,7 +79,7 @@ test('the override path never writes to the config store', () => {
     { models: { opus: 'x' } },
     { env: { A: '' } },
     { baseUrl: 'https://y' },
-    { provider: 'openrouter' },
+    makeProfile({ provider: 'openrouter' }),
   ]
   for (const overrides of matrix) applyOverrides(base, overrides)
   assert.equal(saves, 0)
@@ -87,13 +87,18 @@ test('the override path never writes to the config store', () => {
 })
 
 test('retargeting keeps the key when the provider is unchanged', () => {
-  const r = retargetProvider(base, 'zai', makeState({ profiles: {} }), null, {})
+  const r = retargetProvider(base, 'zai', makeState({ providerAccounts: {} }), null, {})
   assert.ok(r.ok)
   assert.equal(r.profile.apiKey, 'zai-secret')
 })
 
-test('retargeting borrows the credential from a profile for that provider', () => {
-  const state = makeState({ profiles: { or: { provider: 'openrouter', apiKey: 'or-secret', baseUrl: 'https://or' } } })
+test('retargeting adopts the ACCOUNT for that provider', () => {
+  // Since v3 this is a LOOKUP, not a search. The v2 version rummaged through
+  // every other profile hoping to find one holding a key for the target; an
+  // account names exactly one provider, so the question is a filter.
+  const state = makeState({
+    providerAccounts: { or: { provider: 'openrouter', apiKey: 'or-secret', baseUrl: 'https://or' } },
+  })
   const r = retargetProvider(base, 'openrouter', state, null, {})
   assert.ok(r.ok)
   assert.equal(r.profile.apiKey, 'or-secret')
@@ -103,7 +108,7 @@ test('retargeting borrows the credential from a profile for that provider', () =
 
 test('retargeting accepts a credential already in the ambient env', () => {
   const descriptor = makeDescriptor({ credentialEnv: 'ANTHROPIC_AUTH_TOKEN' })
-  const r = retargetProvider(base, 'openrouter', makeState({ profiles: {} }), descriptor, {
+  const r = retargetProvider(base, 'openrouter', makeState({ providerAccounts: {} }), descriptor, {
     ANTHROPIC_AUTH_TOKEN: 'from-shell',
   })
   assert.ok(r.ok)
@@ -115,38 +120,46 @@ test('retargeting refuses rather than sending a key to another host', () => {
   // Falling through to "just send the key we have" would POST a z.ai token to
   // OpenRouter.
   const descriptor = makeDescriptor({ credentialEnv: 'ANTHROPIC_AUTH_TOKEN' })
-  const r = retargetProvider(base, 'openrouter', makeState({ profiles: {} }), descriptor, {})
+  const r = retargetProvider(base, 'openrouter', makeState({ providerAccounts: {} }), descriptor, {})
   assert.equal(r.ok, false)
-  assert.match(r.reason, /no credential/)
+  assert.match(r.reason, /no account/)
 })
 
 test('retargeting drops models chosen for the old provider', () => {
   // Same reasoning as the credential: `glm-5.2` was picked for z.ai, and
   // posting it to OpenRouter is a guaranteed 404 dressed as a working config.
-  const state = makeState({ profiles: { or: { provider: 'openrouter', apiKey: 'or-secret' } } })
+  const state = makeState({
+    providerAccounts: { or: { provider: 'openrouter', apiKey: 'or-secret' } },
+  })
   const r = retargetProvider(base, 'openrouter', state, null, {})
   assert.ok(r.ok)
   assert.equal(r.profile.models, undefined, 'the provider defaults apply instead')
 })
 
-test('retargeting takes the models from the profile it borrowed from', () => {
-  // That profile is already configured FOR this provider, so its answer beats
-  // the descriptor default.
+test('retargeting cannot inherit models, because accounts do not hold any', () => {
+  // BEHAVIOUR CHANGE, and a deliberate one. Under v2 this borrowed the models
+  // from whichever profile lent the credential, on the reasoning that it was
+  // "already configured FOR this provider".
+  //
+  // v3 removes both the ability and the need: models live on the agent profile,
+  // which does not change when the provider does, and an account carries no
+  // models to borrow. So the models chosen for the OLD provider are simply
+  // dropped and the target's own defaults apply — which is the safer of the two
+  // answers anyway, since the borrowed ids were never verified against this
+  // endpoint either.
   const state = makeState({
-    profiles: {
-      or: { provider: 'openrouter', apiKey: 'or-secret', models: { opus: 'anthropic/claude-opus-4.8' } },
-    },
+    providerAccounts: { or: { provider: 'openrouter', apiKey: 'or-secret' } },
   })
   const r = retargetProvider(base, 'openrouter', state, null, {}) as Retargeted
-  assert.deepEqual(r.profile.models, { opus: 'anthropic/claude-opus-4.8' })
-  // Deep-copied, not aliased: a per-run override must not reach stored state.
-  r.profile.models!.opus = 'mutated'
-  assert.equal(state.profiles.or!.models!.opus, 'anthropic/claude-opus-4.8')
+  assert.equal(r.profile.models, undefined)
+  assert.equal(r.borrowedFrom, 'or', 'the credential still came from that account')
 })
 
 test('retargeting drops context windows keyed by the old catalog', () => {
   const withWindows = { ...base, contextWindows: { 'glm-5.2': 1000000 } }
-  const state = makeState({ profiles: { or: { provider: 'openrouter', apiKey: 'k' } } })
+  const state = makeState({
+    providerAccounts: { or: { provider: 'openrouter', apiKey: 'k' } },
+  })
   const retargeted = retargetProvider(withWindows, 'openrouter', state, null, {}) as Retargeted
   assert.equal(retargeted.profile.contextWindows, undefined)
 })

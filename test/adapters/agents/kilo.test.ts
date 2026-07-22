@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { kilo, KILO_CONFIG_ENV, KILO_ALLOW_ALL } from '../../../src/adapters/agents/kilo/index.ts'
 import type { LaunchIntent, TranslateInput } from '../../../src/ports/agent.ts'
+import { makeProfile } from '../../support/fixtures.ts'
 
 function intent(over: Partial<LaunchIntent> = {}): LaunchIntent {
   return {
@@ -15,7 +16,7 @@ function intent(over: Partial<LaunchIntent> = {}): LaunchIntent {
 }
 
 function run(i: LaunchIntent, passthrough: string[] = []) {
-  const input: TranslateInput = { intent: i, profile: { provider: 'zai' }, provider: null, passthrough, ambient: {} }
+  const input: TranslateInput = { intent: i, profile: makeProfile({ provider: 'zai' }), provider: null, passthrough, ambient: {} }
   const t = kilo.translate(input)
   const raw = t.plan.set[KILO_CONFIG_ENV]
   return { t, config: raw ? JSON.parse(raw) : null }

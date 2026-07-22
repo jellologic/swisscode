@@ -9,6 +9,7 @@ import { SUFFIX } from '../src/adapters/agents/claude-code/context.ts'
 import { buildEnvPlan, COMPAT_ENV } from '../src/adapters/agents/claude-code/env.ts'
 import { TIER_ENV_VARS } from '../src/adapters/agents/claude-code/tiers.ts'
 import { TIERS } from '../src/core/tiers.ts'
+import { makeProfile } from './support/fixtures.ts'
 
 const CREDENTIAL_ENVS = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY']
 
@@ -84,7 +85,7 @@ for (const p of PROVIDERS) {
 
   test(`descriptor ${p.id}: a third-party endpoint always clears ANTHROPIC_API_KEY`, () => {
     if (p.baseUrl === null || p.credentialEnv === 'ANTHROPIC_API_KEY') return
-    const plan = buildEnvPlan({ provider: p.id, apiKey: 'k' }, p, {
+    const plan = buildEnvPlan(makeProfile({ provider: p.id, apiKey: 'k' }), p, {
       ANTHROPIC_API_KEY: 'sk-ant-STALE',
     })
     assert.ok(plan.unset.includes('ANTHROPIC_API_KEY'), `${p.id} would bill the wrong account`)
@@ -105,7 +106,7 @@ for (const p of PROVIDERS) {
     // tiers and not the fourth has a tier silently running at the standard
     // window. Nothing about a descriptor's shape prevents that by itself —
     // this does, for every provider added from here on.
-    const plan = buildEnvPlan({ provider: p.id, apiKey: 'k' }, p, {})
+    const plan = buildEnvPlan(makeProfile({ provider: p.id, apiKey: 'k' }), p, {})
     // filter(Boolean) does not narrow in TypeScript, so the element type stays
     // `string | undefined` after it. Asserted rather than rewritten to
     // `(v) => v !== undefined`, which WOULD narrow for free but would edit the
@@ -125,7 +126,7 @@ for (const p of PROVIDERS) {
     // environment is the same bug wearing a fixed-looking descriptor.
     if (!p.extendedContext?.supported) return
     if (Object.keys(p.defaultModels).length === 0) return
-    const plan = buildEnvPlan({ provider: p.id, apiKey: 'k' }, p, {})
+    const plan = buildEnvPlan(makeProfile({ provider: p.id, apiKey: 'k' }), p, {})
     for (const v of TIER_ENV_VARS) {
       const value = plan.set[v]
       if (!value) continue

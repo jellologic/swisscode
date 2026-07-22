@@ -10,13 +10,14 @@ import { isInsecureRemoteBaseUrl } from '../core/url-safety.ts'
 import { materializeEnv } from '../core/env-plan.ts'
 import { applyOverrides, retargetProvider } from '../core/overrides.ts'
 import { resolveProfile } from '../core/profile.ts'
+import { resolveProfileRefs, type CursorPort } from '../core/resolve.ts'
 import { createFsConfigStore } from '../adapters/store/fs-config-store.ts'
 import { createNodeProcess, detectRecursion } from '../adapters/process/node-process.ts'
 import { registry as providerRegistry } from '../adapters/providers/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
 import { DEFAULT_AGENT_ID, registry as agentRegistry } from '../adapters/agents/registry.ts'
 import type { ProfileSelection } from '../core/profile.ts'
-import type { ConfigStorePort, LoadResult, Profile } from '../ports/config-store.ts'
+import type { ConfigStorePort, LoadResult, ResolvedProfile } from '../ports/config-store.ts'
 import type { ProviderDescriptor, ProviderRegistryPort } from '../ports/provider.ts'
 import type { EnvMap, ProcessPort } from '../ports/process.ts'
 import type { ProfileOverrides } from '../ports/config-store.ts'
@@ -45,6 +46,14 @@ export type LaunchDeps = {
   registry: ProviderRegistryPort
   agents: AgentRegistryPort
   proc: ProcessPort
+  /**
+   * Where a round-robin cursor is remembered. OPTIONAL, and genuinely so: a
+   * profile using the default `single` strategy never consults it, and a
+   * caller with no cursor store degrades to "always the first account" with a
+   * warning rather than failing. Deliberately NOT the config store — the launch
+   * path writes no config, and a rotation counter is not configuration.
+   */
+  cursor?: CursorPort
 }
 
 export function defaultDeps(): LaunchDeps {
@@ -115,7 +124,8 @@ export type LaunchPlan = {
   needsSetup: false
   loaded: LoadResult
   selection: ProfileSelection
-  profile: Profile
+  /** the flattened account + agent profile this launch resolved to */
+  profile: ResolvedProfile
   /**
    * null is a REAL state, not a defect: a profile naming a provider this build
    * does not know still launches, provided it carries a baseUrl of its own.
@@ -150,6 +160,7 @@ export function planLaunch({
   registry: baseRegistry,
   agents,
   proc,
+  cursor,
   passthrough = [],
   skipOverride = null,
   positional = null,
@@ -193,10 +204,21 @@ export function planLaunch({
   // A matched positional profile name is CONSUMED — claude never sees it.
   const args = sel.consumedPositional ? passthrough.slice(1) : passthrough
 
+  // v3: a profile is three objects. Dereference the agent profile and select
+  // one account BEFORE anything else, because every step below operates on the
+  // flattened view — which is deliberately the shape v2 stored, so nothing
+  // downstream of here changed when the schema split.
+  const resolution = resolveProfileRefs(loaded.state, sel.name ?? '', {
+    cursor: cursor ?? null,
+    now: Date.now(),
+  })
+  if (!resolution.ok) throw new LaunchError(resolution.reason)
+  const resolutionWarnings = resolution.warnings
+
   // Pipeline, in order: binding overrides, then provider retarget, then the
   // remaining CLI overrides. Retargeting first means --cc-base-url can still
-  // correct a base URL borrowed from another profile.
-  let profile = applyOverrides(sel.profile, sel.overrides)
+  // correct a base URL adopted from another account.
+  let profile = applyOverrides(resolution.resolved, sel.overrides)
   let borrowedFrom = null
 
   if (overrides.provider) {
@@ -233,6 +255,12 @@ export function planLaunch({
   // unknown id is fatal; a stored unknown agent falls back to the default, so a
   // config written by a newer swisscode still launches something.
   const warnings: EnvWarning[] = []
+  // Resolution can degrade loudly — a rotation with no cursor store, a `usage`
+  // strategy with no snapshot, a dangling account reference. Which account pays
+  // is exactly the thing that must never change quietly.
+  for (const message of resolutionWarnings) {
+    warnings.push({ severity: 'medium', code: 'account-selection', message })
+  }
   const requestedAgentId = profile.agent ?? DEFAULT_AGENT_ID
   let agent = agents.byId(requestedAgentId)
   if (!agent) {

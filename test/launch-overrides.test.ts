@@ -12,18 +12,24 @@ import { registry as agents } from '../src/adapters/agents/registry.ts'
 import type { LaunchPlan } from '../src/composition/launch-root.ts'
 import type { EnvMap } from '../src/ports/process.ts'
 import type { State } from '../src/ports/config-store.ts'
+import { makeProfile } from './support/fixtures.ts'
 
 const STATE = (): State => ({
   version: 2,
+  providerAccounts: {
+    z: makeProfile({ provider: 'zai', apiKey: 'zai-secret' }),
+    or: makeProfile({ provider: 'openrouter', apiKey: 'or-secret' }),
+    keyless: makeProfile({ provider: 'openrouter' }),
+  },
+  agentProfiles: {
+    z: { models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' }, skipPermissions: true },
+    or: {},
+    keyless: {},
+  },
   profiles: {
-    z: {
-      provider: 'zai',
-      apiKey: 'zai-secret',
-      models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' },
-      skipPermissions: true,
-    },
-    or: { provider: 'openrouter', apiKey: 'or-secret' },
-    keyless: { provider: 'openrouter' },
+    z: { agentProfile: 'z', accounts: ['z'] },
+    or: { agentProfile: 'or', accounts: ['or'] },
+    keyless: { agentProfile: 'keyless', accounts: ['keyless'] },
   },
   defaultProfile: 'z',
   bindings: { '/work/or-project': 'or' },
@@ -212,18 +218,21 @@ test('--cc-model still wins over the retargeted defaults', () => {
 
 test('--cc-provider refuses rather than POSTing one host a key meant for another', () => {
   const state = STATE()
-  delete state.profiles.or
-  delete state.profiles.keyless
+  // Accounts, not profiles: a credential lives on the account now, so removing
+  // the profile would leave the key perfectly findable — which is exactly the
+  // improvement the split bought.
+  delete state.providerAccounts.or
+  delete state.providerAccounts.keyless
   assert.throws(
     () => plan(['--cc-provider', 'openrouter'], { state }),
-    (err) => err instanceof LaunchError && /no credential/.test(err.message),
+    (err) => err instanceof LaunchError && /no account/.test(err.message),
   )
 })
 
 test('--cc-provider accepts a credential already in the ambient environment', () => {
   const state = STATE()
-  delete state.profiles.or
-  delete state.profiles.keyless
+  delete state.providerAccounts.or
+  delete state.providerAccounts.keyless
   const r = plan(['--cc-provider', 'openrouter'], {
     state,
     env: { ANTHROPIC_AUTH_TOKEN: 'from-shell' },

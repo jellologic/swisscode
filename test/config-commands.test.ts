@@ -13,6 +13,7 @@ import { registry } from '../src/adapters/providers/registry.ts'
 import { registry as agents } from '../src/adapters/agents/registry.ts'
 import type { OpenUi } from '../src/composition/config-root.ts'
 import type { State } from '../src/ports/config-store.ts'
+import { makeProfile } from './support/fixtures.ts'
 
 // Annotated `State` rather than left to inference: the tests below read
 // profiles these commands CREATE — `.fix`, `.old`, `.third` — which a literal
@@ -20,14 +21,17 @@ import type { State } from '../src/ports/config-store.ts'
 
 const STATE = (): State => ({
   version: 2,
+  providerAccounts: {
+    z: makeProfile({ provider: 'zai', apiKey: 'zai-secret-value' }),
+    or: makeProfile({ provider: 'openrouter', apiKeyFromEnv: 'OPENROUTER_KEY' }),
+  },
+  agentProfiles: {
+    z: { models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' }, skipPermissions: true },
+    or: {},
+  },
   profiles: {
-    z: {
-      provider: 'zai',
-      apiKey: 'zai-secret-value',
-      models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' },
-      skipPermissions: true,
-    },
-    or: { provider: 'openrouter', apiKeyFromEnv: 'OPENROUTER_KEY' },
+    z: { agentProfile: 'z', accounts: ['z'] },
+    or: { agentProfile: 'or', accounts: ['or'] },
   },
   defaultProfile: 'z',
   bindings: {},
@@ -134,7 +138,9 @@ test('a common English word needs --force before it can shadow a prompt', async 
 test('an existing profile with an awkward name still opens', async () => {
   // Validation applies at CREATION only; a hand-edited config keeps working.
   const state = STATE()
-  state.profiles.fix = { provider: 'zai' }
+  state.providerAccounts.fix = { provider: 'zai' }
+  state.agentProfiles.fix = {}
+  state.profiles.fix = { agentProfile: 'fix', accounts: ['fix'] }
   const h = harness({ state })
   assert.equal(await h.run(['fix']), 0)
   assert.equal(h.uiCalls[0]!.profileName, 'fix')
@@ -165,7 +171,11 @@ test('config list marks the default and shows inherited models honestly', async 
 
 test('config list flags a profile whose provider this build does not know', async () => {
   const state = STATE()
-  state.profiles.old = { provider: 'volcengine' }
+  // The provider id lives on the ACCOUNT now, so an unknown one is an unknown
+  // account provider — the profile itself resolves fine and still lists.
+  state.providerAccounts.old = { provider: 'volcengine' }
+  state.agentProfiles.old = {}
+  state.profiles.old = { agentProfile: 'old', accounts: ['old'] }
   const h = harness({ state })
   await h.run(['list'])
   assert.match(h.text(), /unknown provider/)
@@ -202,7 +212,9 @@ test('deleting the default profile promotes the survivor only when there is one'
   assert.equal(h.saves.at(-1)!.defaultProfile, 'or', 'one left is unambiguous')
 
   const three = STATE()
-  three.profiles.third = { provider: 'zai' }
+  three.providerAccounts.third = { provider: 'zai' }
+  three.agentProfiles.third = {}
+  three.profiles.third = { agentProfile: 'third', accounts: ['third'] }
   const h2 = harness({ state: three })
   await h2.run(['rm', 'z'])
   // Guessing among several would silently pick an account to bill.
@@ -393,8 +405,15 @@ test('every surface that names a provider sees the custom ones', async () => {
   // rather than the fix, so moving where it happens cannot silently undo it.
   const h = harness({
     state: {
-      version: 2,
-      profiles: { rig: { provider: 'vllm' } },
+      version: 2,      providerAccounts: {
+        rig: makeProfile({ provider: 'vllm' }),
+      },
+      agentProfiles: {
+        rig: {},
+      },
+      profiles: {
+        rig: { agentProfile: 'rig', accounts: ['rig'] },
+      },
       defaultProfile: 'rig',
       bindings: {},
       settings: {},
@@ -423,8 +442,15 @@ test('a profile on a genuinely unknown provider still says so', async () => {
   // key being sent to api.anthropic.com.
   const h = harness({
     state: {
-      version: 2,
-      profiles: { ghost: { provider: 'nope' } },
+      version: 2,      providerAccounts: {
+        ghost: makeProfile({ provider: 'nope' }),
+      },
+      agentProfiles: {
+        ghost: {},
+      },
+      profiles: {
+        ghost: { agentProfile: 'ghost', accounts: ['ghost'] },
+      },
       defaultProfile: 'ghost',
       bindings: {},
       settings: {},

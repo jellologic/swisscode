@@ -11,7 +11,7 @@ import { definedEntriesOf, makeEnvWriter, resolveCredential } from '../../../cor
 import { TIER_ENV } from './tiers.ts'
 import { autoCompactWindow, withExtendedContext } from './context.ts'
 import { inspectAmbient } from './hygiene.ts'
-import type { Profile } from '../../../ports/config-store.ts'
+import type { ResolvedProfile } from '../../../ports/config-store.ts'
 import type { ClaudeCodeCompatEnv, ClaudeCodeCompatFlag } from '../../../ports/claude-code.ts'
 import type { ProviderDescriptor, ResolvedModels, Tier } from '../../../ports/provider.ts'
 import type { EnvMap } from '../../../ports/process.ts'
@@ -88,7 +88,7 @@ export type EnvPlan = {
 }
 
 export function buildEnvPlan(
-  profile: Profile | null | undefined,
+  profile: ResolvedProfile | null | undefined,
   provider: ProviderDescriptor | null | undefined,
   ambientEnv: EnvMap = {},
 ): EnvPlan {

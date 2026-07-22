@@ -27,6 +27,7 @@ import {
   unbindPath,
 } from '../core/binding.ts'
 import { validateProfileName } from '../core/migrate.ts'
+import { resolveProfileRefs } from '../core/resolve.ts'
 import { TIERS } from '../core/tiers.ts'
 import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
@@ -252,7 +253,10 @@ function agentCommand({
       out('No profiles yet. Run `swisscode config` to make one.')
       return 0
     }
-    for (const n of names) out(`  ${n} → ${state.profiles[n]?.agent ?? DEFAULT_AGENT_ID}`)
+    for (const n of names) {
+      const ap = state.agentProfiles?.[state.profiles[n]?.agentProfile ?? '']
+      out(`  ${n} → ${ap?.agent ?? DEFAULT_AGENT_ID}`)
+    }
     return 0
   }
 
@@ -266,8 +270,10 @@ function agentCommand({
     return 2
   }
 
+  const agentProfileName = profile.agentProfile
+  const agentProfile = state.agentProfiles?.[agentProfileName]
   if (agentId === undefined) {
-    out(`${profileName} → ${profile.agent ?? DEFAULT_AGENT_ID}`)
+    out(`${profileName} → ${agentProfile?.agent ?? DEFAULT_AGENT_ID}`)
     return 0
   }
 
@@ -278,12 +284,33 @@ function agentCommand({
     return 2
   }
   if (loaded.readOnly) return refuseWrite(err)
+  if (!agentProfile) {
+    err(
+      `swisscode: profile "${profileName}" uses agent profile "${agentProfileName}", which ` +
+        'does not exist. Run `swisscode config ' + profileName + '` to repair it.',
+    )
+    return 2
+  }
+  // Written to the AGENT PROFILE, not the profile: since v3 that is where the
+  // coding CLI lives, and an agent profile may back several profiles — which is
+  // the point of the split, and worth the reminder in the confirmation line.
   const next: State = {
     ...state,
-    profiles: { ...state.profiles, [profileName]: { ...profile, agent: agentId } },
+    agentProfiles: {
+      ...state.agentProfiles,
+      [agentProfileName]: { ...agentProfile, agent: agentId },
+    },
   }
   deps.store.save(next)
-  out(`${profileName} now launches ${agentId}.`)
+  const alsoUsing = Object.entries(state.profiles ?? {})
+    .filter(([n, pr]) => n !== profileName && pr.agentProfile === agentProfileName)
+    .map(([n]) => n)
+  out(
+    `${profileName} now launches ${agentId}.` +
+      (alsoUsing.length
+        ? ` (shared agent profile "${agentProfileName}" — also used by ${alsoUsing.join(', ')})`
+        : ''),
+  )
   return 0
 }
 
@@ -308,40 +335,62 @@ function listProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
 
   for (const name of names.sort()) {
     // `!` is noUncheckedIndexedAccess meeting Object.keys: `names` was read off
-    // this very object three lines up, so every key is present. Asserted once
-    // at the binding rather than at each of the seven reads below.
+    // this very object three lines up, so every key is present.
     const p = state.profiles[name]!
     const isDefault = state.defaultProfile === name
-    const provider = deps.registry.byId(p.provider)
+
+    // Show what the profile RESOLVES to, not what it references. A list of key
+    // names would make the reader do the dereference in their head, and the
+    // question this command answers is "what happens if I launch this".
+    const resolution = resolveProfileRefs(state, name)
+    const resolved = resolution.ok ? resolution.resolved : null
+    const provider = resolved ? deps.registry.byId(resolved.provider) : null
+
     const flags = [
       isDefault ? 'default' : null,
-      provider ? null : 'unknown provider',
+      resolution.ok ? null : 'broken',
+      resolved && !provider ? 'unknown provider' : null,
       // The subcommand always wins positionally, so such a profile can only be
       // selected with --cc-profile.
       SUBCOMMANDS.includes(name) ? 'shadowed' : null,
     ].filter(Boolean)
 
     out(`${isDefault ? '*' : ' '} ${name}${flags.length ? `  (${flags.join(', ')})` : ''}`)
-    out(`    provider   ${p.provider}${provider ? '' : '  — not in this build'}`)
-    if (p.baseUrl) out(`    baseUrl    ${p.baseUrl}`)
+
+    if (!resolution.ok) {
+      out(`    ${resolution.reason}`)
+      continue
+    }
+    const r = resolved!
+
+    // The three-way structure, named. Which account pays is the most
+    // consequential line here, so it is first and it is never elided.
+    const others = (p.accounts ?? []).filter((a) => a !== r.accountName)
+    out(
+      `    account    ${r.accountName} → ${r.provider}` +
+        (provider ? '' : '  — not in this build') +
+        (others.length ? `  (+${others.length} more, ${p.strategy ?? 'single'})` : ''),
+    )
+    out(`    agent      ${r.agentProfileName} → ${r.agent ?? DEFAULT_AGENT_ID}`)
+    if (r.baseUrl) out(`    baseUrl    ${r.baseUrl}`)
     // Presence and ORIGIN only. Never a prefix, never a suffix, never a length:
     // a masked key is still a fingerprint, and this output gets pasted into bug
     // reports.
-    out(`    key        ${credentialOrigin(p)}`)
+    out(`    key        ${credentialOrigin(r)}`)
     // What will actually be sent, not just what is stored: an absent tier
     // inherits the provider default at launch, and printing "—" for something
     // that resolves to a real model is how a config gets debugged twice.
     const models = TIERS.map((t) => {
-      const pinned = p.models?.[t]
+      const pinned = r.models?.[t]
       if (pinned) return `${t}=${pinned}`
       const inherited = provider?.defaultModels?.[t]
       return inherited ? `${t}=${inherited}*` : `${t}=—`
     }).join('  ')
     out(`    models     ${models}`)
-    if (TIERS.some((t) => !p.models?.[t] && provider?.defaultModels?.[t])) {
+    if (TIERS.some((t) => !r.models?.[t] && provider?.defaultModels?.[t])) {
       out('               * inherited from the provider preset')
     }
-    if (p.skipPermissions) out('    perms      --dangerously-skip-permissions by default')
+    if (r.skipPermissions) out('    perms      --dangerously-skip-permissions by default')
     for (const key of bindingsByProfile.get(name) ?? []) out(`    bound      ${key}`)
   }
 
@@ -352,9 +401,9 @@ function listProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
   return 0
 }
 
-function credentialOrigin(profile: Profile): string {
-  if (profile.apiKeyFromEnv) return `read from $${profile.apiKeyFromEnv} at launch`
-  if (profile.apiKey) return 'stored in config.json (0600)'
+function credentialOrigin(account: { apiKey?: string; apiKeyFromEnv?: string }): string {
+  if (account.apiKeyFromEnv) return `read from $${account.apiKeyFromEnv} at launch`
+  if (account.apiKey) return 'stored in config.json (0600)'
   return 'none'
 }
 
@@ -494,7 +543,15 @@ function showBinding({
     if (known) {
       // `!` — `known` is a hasOwnProperty check on this exact key, which tsc
       // does not treat as a narrowing but which is a real runtime proof.
-      out(`effective   profile "${info.match.name}" (${state.profiles[info.match.name]!.provider})`)
+      // Report the ACCOUNT the binding resolves to, not a stored provider id:
+      // since v3 the profile holds neither, and "which account pays here" is
+      // the question `use --show` exists to answer.
+      const bound = resolveProfileRefs(state, info.match.name)
+      out(
+        `effective   profile "${info.match.name}" (` +
+          (bound.ok ? `${bound.resolved.accountName} → ${bound.resolved.provider}` : 'broken') +
+          ')',
+      )
     } else {
       out(`effective   profile "${state.defaultProfile ?? 'none'}" — the binding is dangling, so it is ignored`)
     }

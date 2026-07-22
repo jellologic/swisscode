@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import type { Profile, State } from '../src/ports/config-store.ts'
+import { makeProfile } from './support/fixtures.ts'
 
 /**
  * dist/ui.js is BUILD OUTPUT — see src/cli.ts for the full reasoning. tsc must
@@ -39,14 +40,17 @@ const CWD = '/work/proj'
 
 const baseState = (): State => ({
   version: 2,
+  providerAccounts: {
+    work: { provider: 'zai', apiKey: SECRET },
+    personal: makeProfile({ provider: 'openrouter', apiKey: 'or-secret' }),
+  },
+  agentProfiles: {
+    work: { models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' }, skipPermissions: true },
+    personal: {},
+  },
   profiles: {
-    work: {
-      provider: 'zai',
-      apiKey: SECRET,
-      models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' },
-      skipPermissions: true,
-    },
-    personal: { provider: 'openrouter', apiKey: 'or-secret' },
+    work: { agentProfile: 'work', accounts: ['work'] },
+    personal: { agentProfile: 'personal', accounts: ['personal'] },
   },
   defaultProfile: 'work',
   bindings: {},
@@ -154,7 +158,7 @@ function mount(props: Partial<AppProps>) {
     ['personal', 'work'],
     'no profile may be touched by a default change',
   )
-  assert.equal(store.saves[0]!.profiles.work!.apiKey, SECRET, 'other profiles survive intact')
+  assert.equal(store.saves[0]!.providerAccounts.work!.apiKey, SECRET, 'other profiles survive intact')
   ui.unmount()
   console.log('profiles ui: set-default writes only the default')
 }
@@ -226,7 +230,7 @@ function mount(props: Partial<AppProps>) {
   assert.equal(store.saves.length, 1)
   const saved = store.saves[0]!
   assert.equal(saved.profiles.personal, undefined)
-  assert.equal(saved.profiles.work!.apiKey, SECRET, 'the other profile is untouched')
+  assert.equal(saved.providerAccounts.work!.apiKey, SECRET, 'the other profile is untouched')
   assert.deepEqual(Object.keys(saved.bindings), ['/other'], 'its bindings went with it')
   assert.equal(saved.defaultProfile, 'work', 'the survivor becomes the default')
   ui.unmount()
@@ -309,7 +313,7 @@ function mount(props: Partial<AppProps>) {
   assert.equal(store.saves.length, 1)
   const saved = store.saves[0]!
   assert.ok(saved.profiles.personal, 'the edited profile keeps its name')
-  assert.equal(saved.profiles.personal!.apiKey, 'or-secret', 'the existing key survives an edit')
+  assert.equal(saved.providerAccounts.personal!.apiKey, 'or-secret', 'the existing key survives an edit')
   assert.ok(saved.profiles.work, 'the other profile survives the write')
   assert.equal(saved.defaultProfile, 'work', 'editing must not steal the default')
   ui.unmount()

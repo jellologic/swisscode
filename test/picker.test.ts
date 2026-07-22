@@ -7,7 +7,7 @@
 // nothing else. The second is what proves the abstraction generalizes — the
 // picker has to degrade to honest blanks rather than rendering "$0.00" over
 // data it does not have.
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
@@ -186,10 +186,16 @@ await tick()
 // here stay exactly the ones that were here before. `assert.ok` still runs and
 // still fails first if the wizard produced nothing.
 assert.ok(result, 'wizard should have produced a profile')
-assert.equal((result as Profile).provider, 'openrouter')
-assert.equal((result as Profile).models!.opus, 'anthropic/claude-opus-4.8', 'picked model must persist')
-assert.equal((result as Profile).models!.sonnet, 'openrouter/fusion', 'untouched tiers keep defaults')
-assert.equal((result as Profile).models!.fable, 'openrouter/fusion', 'the fable tier must not be left unset')
+
+// The wizard returns the stored profile — references only since v3 — so what it
+// configured is read back out of the file it wrote.
+const written = JSON.parse(readFileSync(join(home, 'swisscode', 'config.json'), 'utf8'))
+const account = written.providerAccounts[(result as Profile).accounts[0]!]
+const agentProfile = written.agentProfiles[(result as Profile).agentProfile]
+assert.equal(account.provider, 'openrouter')
+assert.equal(agentProfile.models.opus, 'anthropic/claude-opus-4.8', 'picked model must persist')
+assert.equal(agentProfile.models.sonnet, 'openrouter/fusion', 'untouched tiers keep defaults')
+assert.equal(agentProfile.models.fable, 'openrouter/fusion', 'the fable tier must not be left unset')
 
 // ModelScope: no prices, no benchmarks
 

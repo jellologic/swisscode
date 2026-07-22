@@ -32,6 +32,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildEnvPlan } from '../src/adapters/agents/claude-code/env.ts'
 import { PROVIDERS, byId } from '../src/adapters/providers/registry.ts'
+import { makeProfile } from './support/fixtures.ts'
 
 const AMBIENT = Object.freeze({
   PATH: '/usr/bin',
@@ -155,7 +156,7 @@ function planFor(id: string) {
     apiKey: 'KEY',
     ...(provider.askBaseUrl ? { baseUrl: 'https://custom.example' } : {}),
   }
-  return buildEnvPlan(profile, provider, AMBIENT)
+  return buildEnvPlan(makeProfile(profile), provider, AMBIENT)
 }
 
 for (const provider of PROVIDERS) {

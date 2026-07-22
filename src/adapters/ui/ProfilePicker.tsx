@@ -2,19 +2,32 @@ import React from 'react'
 import { Box, Text } from 'ink'
 import SelectInput from 'ink-select-input'
 import { TIERS } from '../../core/tiers.ts'
-import type { Profile, State } from '../../ports/config-store.ts'
+import { resolveProfileRefs } from '../../core/resolve.ts'
+import type { ResolvedProfile, State } from '../../ports/config-store.ts'
 
 /**
  * Presence and ORIGIN of the credential, never any part of the value.
  * A masked key still leaks its length, and this screen gets screen-shared.
  */
-function credentialLabel(profile: Profile | undefined): string {
+function credentialLabel(profile: ResolvedProfile | undefined): string {
   if (profile?.apiKeyFromEnv) return `key from $${profile.apiKeyFromEnv}`
   if (profile?.apiKey) return 'key stored'
   return 'no key'
 }
 
-function summarize(profile: Profile | undefined, boundPaths: number): string {
+/**
+ * The flattened view of a profile, or undefined when it cannot be resolved.
+ *
+ * A profile with a dangling reference still LISTS — it summarises as blank
+ * rather than vanishing, because this screen is how you reach the editor that
+ * repairs it.
+ */
+function resolvedOrUndefined(state: State, name: string): ResolvedProfile | undefined {
+  const r = resolveProfileRefs(state, name)
+  return r.ok ? r.resolved : undefined
+}
+
+function summarize(profile: ResolvedProfile | undefined, boundPaths: number): string {
   const models = TIERS.map((t) => profile?.models?.[t]).filter(Boolean)
   const distinct = [...new Set(models)]
   const modelLabel =
@@ -65,7 +78,9 @@ export function ProfilePicker({ state, onPick, onNew }: ProfilePickerProps) {
             <Box width={18}>
               <Text dimColor>{name}</Text>
             </Box>
-            <Text dimColor>{summarize(state.profiles[name], bindingCounts.get(name) ?? 0)}</Text>
+            <Text dimColor>
+              {summarize(resolvedOrUndefined(state, name), bindingCounts.get(name) ?? 0)}
+            </Text>
           </Box>
         ))}
       </Box>

@@ -166,14 +166,18 @@ test("a profile can clear the window with the '' sentinel", () => {
 })
 
 test('the shipped z.ai preset sets the window it documents', () => {
-  const plan = buildEnvPlan({ provider: 'zai', apiKey: 'k' }, byId('zai'), {})
+  const plan = buildEnvPlan(makeProfile({ provider: 'zai', apiKey: 'k' }), byId('zai'), {})
   assert.equal(plan.set[VAR], '1000000')
 })
 
 test('providers with no documented window set none', () => {
   for (const id of ['modelscope', 'siliconflow', 'openrouter', 'custom']) {
     const p = byId(id)
-    const plan = buildEnvPlan({ provider: id, apiKey: 'k', baseUrl: 'https://x.example' }, p, {})
+    const plan = buildEnvPlan(
+      makeProfile({ provider: id, apiKey: 'k', baseUrl: 'https://x.example' }),
+      p,
+      {},
+    )
     assert.equal(plan.set[VAR], undefined, `${id} guessed a context window`)
   }
 })

@@ -26,7 +26,15 @@ const custom = {
 const stateWith = (providers: Record<string, unknown>): State =>
   ({
     version: 2,
-    profiles: { p: { provider: 'my-gw', apiKey: 'k' } },
+    providerAccounts: {
+      p: makeProfile({ provider: 'my-gw', apiKey: 'k' }),
+    },
+    agentProfiles: {
+      p: {},
+    },
+    profiles: {
+      p: { agentProfile: 'p', accounts: ['p'] },
+    },
     defaultProfile: 'p',
     bindings: {},
     settings: {},
@@ -74,7 +82,7 @@ test('a custom provider produces a real environment, billing guard included', ()
   // The proof that this is a descriptor like any other: the Claude Code adapter
   // does not special-case it, so the stale-key guard applies unchanged.
   const plan = buildEnvPlan(
-    makeProfile({ provider: 'my-gw', apiKey: 'k' }),
+    makeProfile(({ provider: 'my-gw', apiKey: 'k' })),
     toDescriptor(custom),
     { ANTHROPIC_API_KEY: 'sk-ant-STALE' },
   )

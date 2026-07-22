@@ -12,11 +12,19 @@ import { createFsCacheStore } from '../store/fs-cache-store.ts'
 import { createCatalogRegistry } from '../catalog/registry.ts'
 import { fetchNet } from '../net/fetch-net.ts'
 import { systemClock } from '../clock/system-clock.ts'
+import { resolveProfileRefs } from '../../core/resolve.ts'
 import { ModelPicker } from './ModelPicker.tsx'
 import { ConfirmDelete, ProfileActions, ProfilePicker } from './ProfilePicker.tsx'
 import type { ProfileAction } from './ProfilePicker.tsx'
 import type { Tier, TierRecord, ProviderDescriptor, ProviderRegistryPort } from '../../ports/provider.ts'
-import type { Profile, State, ConfigStorePort } from '../../ports/config-store.ts'
+import type {
+  AgentProfile,
+  ConfigStorePort,
+  Profile,
+  ProviderAccount,
+  ResolvedProfile,
+  State,
+} from '../../ports/config-store.ts'
 import type { CatalogRegistryPort } from '../../ports/catalog.ts'
 
 export { ModelPicker, ProfilePicker }
@@ -137,7 +145,12 @@ export type AppProps = {
    * here: undefined means "nothing was supplied, work it out", null means
    * "explicitly start blank". The component branches on `initial !== undefined`.
    */
-  initial?: Profile | null | undefined
+  /**
+   * A pre-filled form, used by the tests that drive the wizard directly.
+   * RESOLVED shape, because that is what the form edits — the wizard mints the
+   * three stored objects at save time, not before.
+   */
+  initial?: ResolvedProfile | null | undefined
   profileName?: string | null | undefined
   /** called exactly once, with the saved profile or null if cancelled */
   onResult: (profile: Profile | null) => void
@@ -207,12 +220,14 @@ export function App({
   // A user with a profile named `null` and no default has that profile silently
   // loaded here, while `editingName` stays null and finish() saves under a
   // DIFFERENT, derived name.
-  const startProfile =
-    profileName !== null
-      ? (loadedState.profiles?.[profileName] ?? null)
-      : initial !== undefined
-        ? initial
-        : (loadedState.profiles?.[openDirectly as string] ?? null)
+  // Resolved, not stored: the form is a view of the flattened account + agent
+  // profile, so this reads through the same resolution the launch path uses.
+  const startProfileName =
+    profileName !== null ? profileName : initial !== undefined ? null : (openDirectly ?? null)
+  const startResolution =
+    startProfileName !== null ? resolveProfileRefs(loadedState, startProfileName) : null
+  const startProfile: ResolvedProfile | null =
+    startResolution?.ok ? startResolution.resolved : (initial ?? null)
 
   // More than one profile and no particular one named: choose first. With
   // exactly one, open it directly — that is the pre-profiles behaviour and
@@ -288,7 +303,12 @@ export function App({
   }
 
   const loadProfileIntoForm = (name: string) => {
-    const p = doc.profiles?.[name] ?? null
+    // Read through the RESOLVED view: since v3 a profile is three objects, and
+    // the wizard's form is a view of the flattened one. Anything unresolvable
+    // (a dangling reference) loads as blank rather than throwing, so the wizard
+    // stays the tool you use to REPAIR a broken profile.
+    const r = resolveProfileRefs(doc, name)
+    const p = r.ok ? r.resolved : null
     setEditingName(name)
     setProviderId(p?.provider ?? null)
     setBaseUrl(p?.baseUrl ?? '')
@@ -372,7 +392,8 @@ export function App({
     // start from that provider's defaults. Compared against the profile
     // currently loaded in the form, which is not necessarily the one this
     // wizard opened with.
-    const stored = editingName ? doc.profiles?.[editingName] : startProfile
+    const storedResolution = editingName ? resolveProfileRefs(doc, editingName) : null
+    const stored = storedResolution?.ok ? storedResolution.resolved : startProfile
     // `byId(id)!` — `id` is the `value` of an item built from `registry.all()`
     // a few lines below, so it always names a shipped descriptor. This is the
     // one lookup in the file that genuinely cannot miss; everywhere else byId
@@ -400,10 +421,17 @@ export function App({
     // STEP-MACHINE INVARIANT (`providerId!`, `provider!`): finish() runs only
     // from the permissions screen, which is reachable only via the models step,
     // which is reachable only via chooseProvider(). Both are set.
-    const profile: Profile = {
+    // v3 mints THREE objects, all sharing this profile's name — the same 1:1:1
+    // shape the v2 migration produces. The wizard deliberately does not express
+    // multi-account profiles: rotating between accounts is a thing you set up
+    // once, in the web UI or `config accounts`, not something a first-run
+    // terminal flow should ask everyone about.
+    const account: ProviderAccount = {
       provider: providerId!,
       ...(provider!.askBaseUrl ? { baseUrl: baseUrl.trim() } : {}),
       apiKey: apiKey.trim(),
+    }
+    const agentProfile: AgentProfile = {
       models,
       ...(Object.keys(keptWindows).length > 0 ? { contextWindows: keptWindows } : {}),
       skipPermissions,
@@ -411,8 +439,21 @@ export function App({
     // An explicitly named profile keeps its name; a first run derives one from
     // the provider, exactly as before profiles existed.
     const name = editingName ?? profileNameFor(doc, providerId)
-    const next = {
+    const profile: Profile = {
+      agentProfile: name,
+      accounts: [name],
+      strategy: 'single',
+    }
+    // The existing agent selection is preserved: `config agent` writes to the
+    // agent profile, and re-running the wizard must not silently reset a
+    // profile back to Claude Code.
+    const existingAgent = doc.agentProfiles?.[name]?.agent
+    if (existingAgent !== undefined) agentProfile.agent = existingAgent
+
+    const next: State = {
       ...doc,
+      providerAccounts: { ...(doc.providerAccounts ?? {}), [name]: account },
+      agentProfiles: { ...(doc.agentProfiles ?? {}), [name]: agentProfile },
       profiles: { ...(doc.profiles ?? {}), [name]: profile },
       defaultProfile: doc.defaultProfile ?? name,
     }
@@ -718,7 +759,12 @@ export function App({
 export type RunUiOptions = {
   mode?: AppMode | undefined
   state?: State | null | undefined
-  initial?: Profile | null | undefined
+  /**
+   * A pre-filled form, used by the tests that drive the wizard directly.
+   * RESOLVED shape, because that is what the form edits — the wizard mints the
+   * three stored objects at save time, not before.
+   */
+  initial?: ResolvedProfile | null | undefined
   profileName?: string | null | undefined
 }
 

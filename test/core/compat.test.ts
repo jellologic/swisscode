@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { buildEnvPlan, COMPAT_ENV } from '../../src/adapters/agents/claude-code/env.ts'
 import type { ClaudeCodeCompatFlags } from '../../src/ports/claude-code.ts'
 import type { ProviderDescriptor } from '../../src/ports/provider.ts'
-import type { Profile } from '../../src/ports/config-store.ts'
+import type { ResolvedProfile } from '../../src/ports/config-store.ts'
 import type { EnvMap } from '../../src/ports/process.ts'
 
 const gateway: ProviderDescriptor = {
@@ -21,7 +21,7 @@ const gateway: ProviderDescriptor = {
 }
 
 /**
- * A profile fixture. Deliberately looser than `Profile` in exactly two ways,
+ * A profile fixture. Deliberately looser than `ResolvedProfile` in exactly two ways,
  * and a test in this file depends on each:
  *
  *  - `Partial`, because these fixtures omit `provider`. buildEnvPlan never
@@ -32,10 +32,10 @@ const gateway: ProviderDescriptor = {
  *    compile, and the only way to satisfy the compiler would be to delete the
  *    case it exists to cover.
  *
- * Every other field stays checked against Profile, so a typo'd `apiKey` or a
+ * Every other field stays checked against ResolvedProfile, so a typo'd `apiKey` or a
  * misspelled `env` is still an error here.
  */
-type ProfileFixture = Partial<Omit<Profile, 'compat'>> & {
+type ProfileFixture = Partial<Omit<ResolvedProfile, 'compat'>> & {
   compat?: Record<string, boolean | undefined>
 }
 
@@ -44,7 +44,7 @@ const planOf = (
   profile: ProfileFixture | null | undefined,
   provider: ProviderDescriptor | null | undefined,
   ambient: EnvMap = {},
-) => buildEnvPlan(profile as Profile | null | undefined, provider, ambient)
+) => buildEnvPlan(profile as ResolvedProfile | null | undefined, provider, ambient)
 
 test('each flag maps to the variable that fixes its documented symptom', () => {
   // The mapping IS the feature. If one of these is wrong the flag does nothing

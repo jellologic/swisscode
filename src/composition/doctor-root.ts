@@ -13,6 +13,7 @@ import { buildEnvPlan } from '../adapters/agents/claude-code/env.ts'
 import { claudeCode } from '../adapters/agents/claude-code/index.ts'
 import { applyOverrides } from '../core/overrides.ts'
 import { resolveProfile } from '../core/profile.ts'
+import { resolveProfileRefs } from '../core/resolve.ts'
 import { buildIntent } from '../core/intent.ts'
 import { sanitizeUrlForDisplay, urlCredentials } from '../core/url-safety.ts'
 import {
@@ -91,7 +92,13 @@ export async function runDoctor({
   }
 
   const selection = resolveProfile(loaded.state, { cwd, platform: process.platform })
-  const profile = selection.profile ? applyOverrides(selection.profile, selection.overrides) : null
+  // The doctor resolves exactly as the launch path does, or it would diagnose a
+  // configuration nobody runs. A broken reference surfaces as a check below
+  // rather than as an exception here, which is the whole point of a doctor.
+  const resolution = selection.name ? resolveProfileRefs(loaded.state, selection.name) : null
+  const resolutionError = resolution && !resolution.ok ? resolution.reason : null
+  const profile =
+    resolution?.ok ? applyOverrides(resolution.resolved, selection.overrides) : null
   // Same composition as the launch path: a doctor that could not see a custom
   // provider would report "unknown provider" for a profile that launches fine.
   const registry = withCustomProviders(baseRegistry, loaded.state)
@@ -138,6 +145,8 @@ export async function runDoctor({
   const deadBindingPaths = bindingEntries(loaded.state)
     .filter((b) => !existsSync(b.key))
     .map((b) => b.key)
+
+  if (resolutionError) notes.push(resolutionError)
 
   const checks = staticChecks({
     loaded,

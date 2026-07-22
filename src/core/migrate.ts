@@ -8,9 +8,17 @@
 
 import { pickTiers } from './tiers.ts'
 import { isAbsolutePath, normalizeBindingKey } from './binding.ts'
-import type { BindingValue, ConfigV1, MigrateResult, Settings, State } from '../ports/config-store.ts'
+import type {
+  BindingValue,
+  ConfigV1,
+  ConfigV2,
+  CustomProvider,
+  MigrateResult,
+  Settings,
+  State,
+} from '../ports/config-store.ts'
 
-export const SUPPORTED_VERSION = 2
+export const SUPPORTED_VERSION = 3
 
 /** Enforced at creation, never at parse — a hand-edited file is still read. */
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -58,9 +66,27 @@ type V2Draft = {
   settings: Settings
 }
 
+/**
+ * The v3 SHAPE, before validation. Same reasoning as `V2Draft`: the three maps
+ * are `Record<string, unknown>` because rule M1 carries unrecognized keys
+ * through unchecked, and saying so keeps that step visible.
+ */
+type V3Draft = {
+  version: number
+  providerAccounts: Record<string, Record<string, unknown>>
+  agentProfiles: Record<string, Record<string, unknown>>
+  profiles: Record<string, Record<string, unknown>>
+  defaultProfile: string | null
+  bindings: Record<string, BindingValue>
+  settings: Settings
+  providers?: Record<string, CustomProvider>
+}
+
 export function emptyState(): State {
   return {
     version: SUPPORTED_VERSION,
+    providerAccounts: {},
+    agentProfiles: {},
     profiles: {},
     defaultProfile: null,
     bindings: {},
@@ -123,12 +149,91 @@ export function fromV1(raw: ConfigV1): V2Draft {
 
   const name = NAME_RE.test(raw.provider) ? raw.provider : 'default'
   return {
-    version: SUPPORTED_VERSION,
+    // VERSION 2, not SUPPORTED_VERSION. This output is fed straight into
+    // `fromV2` by the ladder below; stamping it with the current version would
+    // make the chain silently skip the v2->v3 step the moment a v4 exists.
+    version: 2,
     profiles: { [name]: profile },
     defaultProfile: name,
     bindings: {},
     settings: {},
   }
+}
+
+/**
+ * The v2 keys that move to a `ProviderAccount`, and those that move to an
+ * `AgentProfile`. Anything in NEITHER list is an unrecognized key and rides
+ * along on the agent profile — rule M1, inherited from v1→v2.
+ */
+const V2_ACCOUNT_KEYS = Object.freeze(['provider', 'baseUrl', 'apiKey', 'apiKeyFromEnv'])
+const V2_AGENT_KEYS = Object.freeze([
+  'agent', 'models', 'skipPermissions', 'env', 'compat', 'contextWindows',
+])
+
+/**
+ * v2 -> v3. Lossless, deterministic, and it repairs nothing.
+ *
+ * Each v2 profile `N` becomes THREE objects, all named `N`: an account, an
+ * agent profile, and a profile referencing both. Bindings and defaultProfile
+ * keep pointing at profile names, so `swisscode <name>` and every directory
+ * binding survive untouched — which is the whole reason the split is named this
+ * way round.
+ *
+ * ACCOUNTS ARE NOT DEDUPED, even when two profiles obviously share a key.
+ * Merging them would be clever, irreversible, and wrong the first time two
+ * accounts happen to hold the same value for different reasons. One account per
+ * profile is lossless and obvious; consolidating is a thing a person can do
+ * later, in the UI, on purpose.
+ */
+export function fromV2(raw: ConfigV2): V3Draft {
+  const providerAccounts: Record<string, Record<string, unknown>> = {}
+  const agentProfiles: Record<string, Record<string, unknown>> = {}
+  const profiles: Record<string, Record<string, unknown>> = {}
+
+  for (const [name, p] of Object.entries(raw.profiles ?? {})) {
+    if (!isPlainObject(p)) continue
+
+    const account: Record<string, unknown> = {}
+    for (const k of V2_ACCOUNT_KEYS) if (p[k] !== undefined) account[k] = p[k]
+    // `provider` is required on an account. A v2 profile without one was
+    // already broken — carry it through as-is rather than inventing a default,
+    // so the resolution error names the real problem instead of a guess.
+    providerAccounts[name] = account
+
+    const agentProfile: Record<string, unknown> = {}
+    for (const k of V2_AGENT_KEYS) if (p[k] !== undefined) agentProfile[k] = p[k]
+    // M1: unrecognized keys ride along. They land on the agent profile because
+    // that is where v2's own extras (anything not a credential) belonged.
+    for (const [k, v] of Object.entries(p)) {
+      if (!V2_ACCOUNT_KEYS.includes(k) && !V2_AGENT_KEYS.includes(k) && k !== 'label') {
+        agentProfile[k] = v
+      }
+    }
+    agentProfiles[name] = agentProfile
+
+    const profile: Record<string, unknown> = {
+      agentProfile: name,
+      accounts: [name],
+      strategy: 'single',
+    }
+    // The label described the pairing, so it stays on the pairing.
+    if (p.label !== undefined) profile.label = p.label
+    profiles[name] = profile
+  }
+
+  const draft: V3Draft = {
+    version: SUPPORTED_VERSION,
+    providerAccounts,
+    agentProfiles,
+    profiles,
+    defaultProfile: typeof raw.defaultProfile === 'string' ? raw.defaultProfile : null,
+    bindings: raw.bindings ?? {},
+    settings: raw.settings ?? {},
+  }
+  // Custom providers are already a top-level concept and are unrelated to the
+  // split; they pass through untouched.
+  if (raw.providers !== undefined) draft.providers = raw.providers
+  return draft
 }
 
 /** Fill defaults, drop junk, resolve the default profile. Idempotent. */
@@ -156,6 +261,28 @@ export function normalize(raw: unknown): { state: State; warnings: string[] } {
       profiles[name] = p
     }
     state.profiles = profiles
+  }
+
+  // The two new v3 maps, validated exactly as `profiles` is: an entry that is
+  // not an object is dropped with a warning rather than reaching a consumer
+  // that will read fields off a number.
+  for (const key of ['providerAccounts', 'agentProfiles'] as const) {
+    if (!isPlainObject(state[key])) {
+      if (state[key] !== undefined) {
+        warnings.push(`config.json: \`${key}\` is not an object; ignoring it.`)
+      }
+      state[key] = {}
+    } else {
+      const kept: Record<string, Record<string, unknown>> = {}
+      for (const [name, entry] of Object.entries(state[key])) {
+        if (!isPlainObject(entry)) {
+          warnings.push(`config.json: ${key} entry "${name}" is not an object; ignoring it.`)
+          continue
+        }
+        kept[name] = entry
+      }
+      state[key] = kept
+    }
   }
 
   if (!isPlainObject(state.bindings)) {
@@ -242,6 +369,8 @@ export function migrate(raw: unknown): MigrateResult {
   if (version > SUPPORTED_VERSION) {
     const salvage = {
       version,
+      providerAccounts: isPlainObject(raw.providerAccounts) ? raw.providerAccounts : {},
+      agentProfiles: isPlainObject(raw.agentProfiles) ? raw.agentProfiles : {},
       profiles: isPlainObject(raw.profiles) ? raw.profiles : {},
       defaultProfile: typeof raw.defaultProfile === 'string' ? raw.defaultProfile : null,
       bindings: isPlainObject(raw.bindings) ? raw.bindings : {},
@@ -250,6 +379,11 @@ export function migrate(raw: unknown): MigrateResult {
     const { state, warnings } = normalize(salvage)
     state.version = version
     return { state, migratedFrom: null, corrupt: false, readOnly: true, warnings }
+  }
+
+  if (version === 2) {
+    const { state, warnings } = normalize(fromV2(raw as unknown as ConfigV2))
+    return { state, migratedFrom: 2, corrupt: false, readOnly: false, warnings }
   }
 
   if (version === 1) {
@@ -261,7 +395,10 @@ export function migrate(raw: unknown): MigrateResult {
     // reaches `fromV1`, where `raw.provider` is undefined, `NAME_RE.test(undefined)`
     // coerces to the string "undefined" and MATCHES, and rule M1 nests the
     // entire file inside a single profile named "undefined".
-    const { state, warnings } = normalize(fromV1(raw as unknown as ConfigV1))
+    // CHAINED, not parallel. fromV1 produces a v2 draft, which fromV2 then
+    // splits — so a 0.1.0 file reaches v3 in a single read and there is exactly
+    // one implementation of each step to keep correct.
+    const { state, warnings } = normalize(fromV2(fromV1(raw as unknown as ConfigV1) as unknown as ConfigV2))
     return { state, migratedFrom: 1, corrupt: false, readOnly: false, warnings }
   }
 

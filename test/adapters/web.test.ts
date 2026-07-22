@@ -17,12 +17,12 @@ import {
   guardDocumentRequest,
   tokensMatch,
 } from '../../src/adapters/web/security.ts'
-import { handleApi, parseProfile, redactProfile, redactState } from '../../src/adapters/web/api.ts'
+import { handleApi, parseAccount, parseAgentProfile, redactAccount, redactState } from '../../src/adapters/web/api.ts'
 import { FALLBACK_SCRIPT_PATH, resolveAsset, startWebServer } from '../../src/adapters/web/server.ts'
 import { request } from 'node:http'
 import { registry as providers } from '../../src/adapters/providers/registry.ts'
 import { registry as agents } from '../../src/adapters/agents/registry.ts'
-import { makeProfile } from '../support/fixtures.ts'
+import { makeAccount, makeAgentProfile, makeProfile } from '../support/fixtures.ts'
 import type { ConfigStorePort, State } from '../../src/ports/config-store.ts'
 
 const PORT = 4242
@@ -105,8 +105,10 @@ test('path traversal cannot escape the asset directory', () => {
 // redaction
 
 test('an API key never crosses the boundary to the browser', () => {
-  const profile = makeProfile({ provider: 'zai', apiKey: 'sk-super-secret', models: {} })
-  const out = redactProfile(profile)
+  // Redaction moved to the ACCOUNT with the credential. That is an improvement:
+  // one of the three shapes is security-sensitive and it is obvious which.
+  const account = makeAccount(makeProfile({ provider: 'zai', apiKey: 'sk-super-secret' }))
+  const out = redactAccount(account)
   const serialized = JSON.stringify(out)
   assert.ok(!serialized.includes('sk-super-secret'), 'the key leaked')
   assert.ok(!serialized.includes('sk-super'), 'a prefix of the key leaked')
@@ -114,7 +116,7 @@ test('an API key never crosses the boundary to the browser', () => {
   assert.ok(!('apiKey' in out))
 
   // A variable NAME is not a secret, and the user needs to see it.
-  const fromEnv = redactProfile(makeProfile({ provider: 'zai', apiKeyFromEnv: 'MY_TOKEN' }))
+  const fromEnv = redactAccount(makeAccount({ provider: 'zai', apiKeyFromEnv: 'MY_TOKEN' }))
   assert.equal(fromEnv.apiKeyFromEnv, 'MY_TOKEN')
   assert.equal(fromEnv.hasKey, false)
 })
@@ -145,8 +147,15 @@ function store(initial: State): ConfigStorePort & { state: State; saves: number 
 
 const baseState = (): State =>
   ({
-    version: 2,
-    profiles: { work: { provider: 'zai', apiKey: 'secret', models: {} } },
+    version: 2,    providerAccounts: {
+      work: makeProfile({ provider: 'zai', apiKey: 'secret' }),
+    },
+    agentProfiles: {
+      work: { models: {} },
+    },
+    profiles: {
+      work: { agentProfile: 'work', accounts: ['work'] },
+    },
     defaultProfile: 'work',
     bindings: {},
     settings: {},
@@ -195,32 +204,32 @@ test('a current revision writes, and returns the next one', () => {
   const res = handleApi(
     {
       method: 'PUT',
-      path: '/api/profiles/acme',
-      body: { revision: s.revision!(), profile: { provider: 'openrouter' } },
+      path: '/api/accounts/acme',
+      body: { revision: s.revision!(), account: { provider: 'openrouter' } },
     },
     deps(s),
   )
   assert.equal(res.status, 200)
-  assert.equal(s.state.profiles.acme!.provider, 'openrouter')
+  assert.equal(s.state.providerAccounts.acme!.provider, 'openrouter')
   assert.notEqual((res.body as { revision: string }).revision, 'stale')
 })
 
 test('an omitted key does not erase the stored one; an explicit null does', () => {
   // The single most destructive mistake this endpoint could make is treating an
   // untouched form field as "delete my credential".
-  const existing = makeProfile({ provider: 'zai', apiKey: 'keep-me' })
-  const kept = parseProfile({ provider: 'zai' }, existing)
+  const existing = makeAccount(makeProfile({ provider: 'zai', apiKey: 'keep-me' }))
+  const kept = parseAccount(makeProfile({ provider: 'zai' }), existing)
   assert.equal(typeof kept === 'string' ? null : kept.apiKey, 'keep-me')
 
-  const blanked = parseProfile({ provider: 'zai', apiKey: '' }, existing)
+  const blanked = parseAccount(makeProfile({ provider: 'zai', apiKey: '' }), existing)
   assert.equal(typeof blanked === 'string' ? null : blanked.apiKey, 'keep-me')
 
-  const cleared = parseProfile({ provider: 'zai', apiKey: null }, existing)
+  const cleared = parseAccount({ provider: 'zai', apiKey: null }, existing)
   assert.equal(typeof cleared === 'string' ? undefined : cleared.apiKey, undefined)
 })
 
 test('unknown fields from the client never reach config.json', () => {
-  const parsed = parseProfile(
+  const parsed = parseAccount(
     { provider: 'zai', evil: 'payload', __proto__: { polluted: true } },
     undefined,
   )
@@ -472,11 +481,33 @@ test('deleting a provider reports orphaned profiles rather than silently repairi
     },
     deps(s),
   )
+  // A profile reaches a provider THROUGH an account now, so the chain has three
+  // links: provider -> account -> profile. Deleting the provider orphans the
+  // account, which in turn orphans the profile, and both are reported.
+  handleApi(
+    {
+      method: 'PUT',
+      path: '/api/accounts/gw-acct',
+      body: { revision: s.revision!(), account: { provider: 'my-gw' } },
+    },
+    deps(s),
+  )
+  handleApi(
+    {
+      method: 'PUT',
+      path: '/api/agent-profiles/gw-agent',
+      body: { revision: s.revision!(), agentProfile: {} },
+    },
+    deps(s),
+  )
   handleApi(
     {
       method: 'PUT',
       path: '/api/profiles/uses-gw',
-      body: { revision: s.revision!(), profile: { provider: 'my-gw' } },
+      body: {
+        revision: s.revision!(),
+        profile: { agentProfile: 'gw-agent', accounts: ['gw-acct'] },
+      },
     },
     deps(s),
   )
@@ -485,15 +516,17 @@ test('deleting a provider reports orphaned profiles rather than silently repairi
     deps(s),
   )
   assert.equal(res.status, 200)
-  assert.deepEqual((res.body as { orphanedProfiles: string[] }).orphanedProfiles, ['uses-gw'])
+  const body = res.body as { orphanedAccounts: string[]; orphanedProfiles: string[] }
+  assert.deepEqual(body.orphanedAccounts, ['gw-acct'])
+  assert.deepEqual(body.orphanedProfiles, ['uses-gw'])
   assert.ok(s.state.profiles['uses-gw'], 'the profile must survive; only the user can repoint it')
 })
 
 test('contextWindows accepts measured integers and drops anything else', () => {
   // It feeds CLAUDE_CODE_AUTO_COMPACT_WINDOW; a bad value there overflows the
   // conversation instead of compacting it.
-  const parsed = parseProfile(
-    { provider: 'zai', contextWindows: { good: 200000, zero: 0, neg: -1, str: '100', frac: 1.5 } },
+  const parsed = parseAgentProfile(
+    { contextWindows: { good: 200000, zero: 0, neg: -1, str: '100', frac: 1.5 } },
     undefined,
   )
   assert.notEqual(typeof parsed, 'string')

@@ -20,9 +20,9 @@ import type { DoctorCheck } from '../../src/ports/doctor.ts'
 import type { ProbeResult } from '../../src/ports/doctor.ts'
 import type { LoadResult, State } from '../../src/ports/config-store.ts'
 import type { ProfileSelection } from '../../src/core/profile.ts'
-import type { Profile } from '../../src/ports/config-store.ts'
+import type { ResolvedProfile } from '../../src/ports/config-store.ts'
 import type { ProviderDescriptor } from '../../src/ports/provider.ts'
-import { makeDescriptor, makeProfile, makeSelection } from '../support/fixtures.ts'
+import { makeDescriptor, makeProfile, makeSelection, makeProfileRefs } from '../support/fixtures.ts'
 
 /**
  * The knobs `run()` below turns. Every field mirrors one of StaticChecksInput's
@@ -46,7 +46,7 @@ const profile = makeProfile({
 const loaded = (over: Partial<Omit<LoadResult, 'state'>> & { state?: Partial<State> } = {}): LoadResult =>
   ({
   state: {
-    version: 2,
+    version: 2,    agentProfiles: {},
     profiles: { z: profile },
     defaultProfile: 'z',
     bindings: {},
@@ -59,7 +59,16 @@ const loaded = (over: Partial<Omit<LoadResult, 'state'>> & { state?: Partial<Sta
   ...over,
   }) as LoadResult
 
-const selection = makeSelection({ name: 'z', source: 'default', profile, overrides: {}, warnings: [], error: null })
+// `makeSelection.profile` is the STORED profile (references); the resolved view
+// is what `run()` passes to staticChecks separately.
+const selection = makeSelection({
+  name: 'z',
+  source: 'default',
+  profile: makeProfileRefs({ agentProfile: 'z', accounts: ['z'] }),
+  overrides: {},
+  warnings: [],
+  error: null,
+})
 
 function run(over: RunOver = {}) {
   const l = over.loaded ?? loaded()
@@ -69,7 +78,7 @@ function run(over: RunOver = {}) {
   return staticChecks({
     loaded: l,
     selection: over.selection ?? selection,
-    profile: p as Profile | null,
+    profile: p as ResolvedProfile | null,
     provider: provider as ProviderDescriptor | null,
     plan,
     modes: over.modes ?? { dir: 0o700, file: 0o600 },
@@ -183,7 +192,11 @@ test('an unknown provider is fatal only when there is no baseUrl to fall back on
 test('a profile that reads its key from an unset variable is an error', () => {
   const c = byId(
     run({
-      profile: { provider: 'zai', apiKeyFromEnv: 'ZAI_TOKEN', models: profile.models ?? {} },
+      profile: makeProfile({
+        provider: 'zai',
+        apiKeyFromEnv: 'ZAI_TOKEN',
+        models: profile.models ?? {},
+      }),
     }),
     'credential',
   )
@@ -192,13 +205,17 @@ test('a profile that reads its key from an unset variable is an error', () => {
 })
 
 test('an optional credential is fine when absent', () => {
-  const c = byId(run({ profile: { provider: 'anthropic' }, provider: anthropic }), 'credential')
+  const c = byId(run({ profile: makeProfile({ provider: 'anthropic' }), provider: anthropic }), 'credential')
   assert.equal(c!.status, 'ok')
 })
 
 test('no models pinned at all is fine; some but not all is a warning', () => {
-  assert.equal(byId(run({ profile: { provider: 'anthropic' }, provider: anthropic }), 'models')!.status, 'ok')
-  const partial = { provider: 'zai', apiKey: SECRET, models: { ...profile.models, fable: '' } }
+  assert.equal(byId(run({ profile: makeProfile({ provider: 'anthropic' }), provider: anthropic }), 'models')!.status, 'ok')
+  const partial = makeProfile({
+    provider: 'zai',
+    apiKey: SECRET,
+    models: { ...profile.models, fable: '' },
+  })
   const c = byId(run({ profile: partial }), 'models')
   assert.equal(c!.status, 'warn')
   assert.match(c!.detail, /fable/)
@@ -232,7 +249,10 @@ test('dangling bindings and dead paths are separate, prunable warnings', () => {
 
 test('a profile shadowed by a subcommand is flagged with the way out', () => {
   const st = loaded()
-  st.state.profiles = { ...st.state.profiles, doctor: { provider: 'zai' } }
+  st.state.profiles = {
+    ...st.state.profiles,
+    doctor: makeProfileRefs({ agentProfile: 'z', accounts: ['z'] }),
+  }
   const c = byId(run({ loaded: st }), 'shadowed-names')
   assert.equal(c!.status, 'warn')
   assert.match(c!.fix!, /--cc-profile/)
@@ -262,8 +282,8 @@ test('probeSpec bounds itself at four requests however many tiers differ', () =>
 })
 
 test('probeSpec has nothing to probe for a first-party profile', () => {
-  const plan = buildEnvPlan({ provider: 'anthropic' }, anthropic, {})
-  assert.equal(probeSpec({ provider: 'anthropic' }, anthropic, plan).baseUrl, null)
+  const plan = buildEnvPlan(makeProfile({ provider: 'anthropic' }), anthropic, {})
+  assert.equal(probeSpec(makeProfile({ provider: 'anthropic' }), anthropic, plan).baseUrl, null)
 })
 
 // Probe interpretation. Status codes carry the finding; bodies are advisory.

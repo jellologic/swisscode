@@ -11,7 +11,7 @@ import { byId } from '../../src/adapters/providers/registry.ts'
 import type { PlanFacts } from '../../src/adapters/agents/claude-code/hygiene.ts'
 import type { EnvWarning } from '../../src/ports/agent.ts'
 import type { ProviderDescriptor } from '../../src/ports/provider.ts'
-import type { Profile } from '../../src/ports/config-store.ts'
+import type { ResolvedProfile } from '../../src/ports/config-store.ts'
 import type { EnvMap } from '../../src/ports/process.ts'
 import { makeProfile } from '../support/fixtures.ts'
 
@@ -26,7 +26,7 @@ const gateway: ProviderDescriptor = {
 const codesOf = (ws: EnvWarning[]) => ws.map((w) => w.code).sort()
 const find = (ws: EnvWarning[], code: string) => ws.find((w) => w.code === code)
 const planFor = (
-  profile: Profile | null | undefined,
+  profile: ResolvedProfile | null | undefined,
   provider: ProviderDescriptor | null | undefined,
   ambient: EnvMap,
 ) => buildEnvPlan(profile, provider, ambient)
@@ -212,7 +212,7 @@ test('every warning carries a severity, a code and a message', () => {
 })
 
 test('warnings are advisory: the plan is identical with and without a dirty env', () => {
-  // "Profile wins; the warning is informational." Detection must never change
+  // "ResolvedProfile wins; the warning is informational." Detection must never change
   // what actually gets launched.
   const clean = planFor(makeProfile({ apiKey: 'k' }), gateway, {})
   const dirty = planFor(makeProfile({ apiKey: 'k' }), gateway, {
