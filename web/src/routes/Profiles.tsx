@@ -1,87 +1,86 @@
 import { useState } from 'react'
 import { css } from '../../styled-system/css'
-import { ApiError, api, type Bootstrap, type Profile } from '../api'
-import { Banner, Button, Dot, Empty, Field, Panel, inputStyle, monoInput } from '../ui'
-import { ModelPicker } from './ModelPicker'
+import { ApiError, api, type Bootstrap, type SelectionStrategy } from '../api'
+import { Banner, Button, Dot, Empty, Field, Panel, inputStyle } from '../ui'
 
 /**
- * The profile editor exposes everything the CLI can express: provider, agent,
- * all four tiers, permissions, compat flags, extra environment, and the
- * measured context windows that drive auto-compaction.
+ * Profiles — the pairing, and the only screen that expresses MULTIPLE accounts.
  *
- * The credential is WRITE-ONLY. The server sends `hasKey` and never the key, so
- * the field shows whether one is stored and offers to replace it — leaving it
- * blank changes nothing, which is why "I did not touch this" and "delete my
- * credential" are different actions here.
+ * Holds no credential and no agent settings of its own: it names one agent
+ * profile, one or more accounts, and the rule for choosing among them. Editing
+ * what those references point AT happens on the other two screens, which is the
+ * whole reason the split exists.
  */
+const STRATEGIES: { id: SelectionStrategy; label: string; note: string }[] = [
+  { id: 'single', label: 'Single', note: 'Always the first account. No state, no surprises.' },
+  {
+    id: 'round-robin',
+    label: 'Round robin',
+    note:
+      'Advances one account per LAUNCH, not per request — swisscode hands off and exits, so ' +
+      'there is nothing left to rotate mid-session.',
+  },
+  {
+    id: 'usage',
+    label: 'By remaining capacity',
+    note:
+      'Picks the account with the most left, from the last measurement. swisscode cannot check ' +
+      'this at launch, so it uses what the doctor or this UI cached — and falls back to the ' +
+      'first account, saying so, when nothing has measured it yet.',
+  },
+]
+
 export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Promise<void> }) {
-  const names = Object.keys(data.state.profiles)
+  const names = Object.keys(data.state.profiles ?? {})
+  const accountNames = Object.keys(data.state.providerAccounts ?? {})
+  const agentProfileNames = Object.keys(data.state.agentProfiles ?? {})
+
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [error, setError] = useState<string | null>(null)
-  const [errors, setErrors] = useState<string[]>([])
-  const [picking, setPicking] = useState<string | null>(null)
 
   const open = (name: string | null) => {
     setError(null)
-    setErrors([])
     setEditing(name ?? '')
-    const existing = name ? data.state.profiles[name] : undefined
     setDraft(
-      existing
-        ? { ...existing, apiKey: '' }
-        : { provider: data.providers[0]?.id ?? 'anthropic', models: {}, compat: {}, apiKey: '' },
+      name
+        ? { ...data.state.profiles[name] }
+        : {
+            agentProfile: agentProfileNames[0] ?? '',
+            accounts: accountNames[0] ? [accountNames[0]] : [],
+            strategy: 'single',
+          },
     )
   }
 
   const save = async (name: string) => {
     setError(null)
-    setErrors([])
     try {
-      const body: Record<string, unknown> = { ...draft }
-      // An empty string means "untouched", so it is removed rather than sent —
-      // the server would ignore it, but not sending it is what makes that
-      // intent explicit at the boundary that owns it.
-      if (!body.apiKey) delete body.apiKey
-      delete body.hasKey
-      await api.saveProfile(name, body, data.revision)
+      await api.saveProfile(name, draft, data.revision)
       setEditing(null)
       await reload()
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message)
-        setErrors(err.errors)
-      } else setError(String(err))
+      setError(err instanceof ApiError ? err.message : String(err))
     }
   }
 
-  const remove = async (name: string) => {
+  const act = async (fn: () => Promise<unknown>) => {
     setError(null)
     try {
-      await api.deleteProfile(name, data.revision)
+      await fn()
       await reload()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err))
     }
   }
 
-  const setDefault = async (name: string) => {
-    try {
-      await api.setDefault(name, data.revision)
-      await reload()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err))
-    }
-  }
-
-  const field = (key: string) => (draft[key] as string) ?? ''
-  const put = (key: string, value: unknown) => setDraft((d) => ({ ...d, [key]: value }))
-  const models = (draft.models as Record<string, string>) ?? {}
-  const compat = (draft.compat as Record<string, boolean>) ?? {}
+  const put = (k: string, v: unknown) => setDraft((d) => ({ ...d, [k]: v }))
+  const accounts = (draft.accounts as string[]) ?? []
+  const strategy = (draft.strategy as SelectionStrategy) ?? 'single'
 
   if (editing !== null) {
-    const isNew = !names.includes(editing)
-    const provider = data.providers.find((p) => p.id === draft.provider)
+    const isNew = !data.state.profiles?.[editing]
+    const canCreate = agentProfileNames.length > 0 && accountNames.length > 0
     return (
       <>
         <div className={css({ display: 'flex', alignItems: 'center', gap: '3', mb: '5' })}>
@@ -90,17 +89,11 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
             {isNew ? 'New profile' : `Profile · ${editing}`}
           </h1>
         </div>
-
-        {error ? (
-          <Banner tone="danger">
-            {error}
-            {errors.length > 1 ? (
-              <ul className={css({ mt: '1.5', pl: '4' })}>
-                {errors.slice(1).map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            ) : null}
+        {error ? <Banner tone="danger">{error}</Banner> : null}
+        {!canCreate ? (
+          <Banner tone="warn">
+            A profile references an account and an agent profile, so at least one of each has to
+            exist first.
           </Banner>
         ) : null}
 
@@ -118,182 +111,88 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
               />
             </Field>
           ) : null}
-
-          <Field label="Provider">
+          <Field label="Agent profile" hint="What runs. Edit the setup itself under Agent profiles.">
             <select
               className={inputStyle}
-              value={String(draft.provider ?? '')}
-              onChange={(e) => put('provider', e.target.value)}
+              value={String(draft.agentProfile ?? '')}
+              onChange={(e) => put('agentProfile', e.target.value)}
             >
-              {data.providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                  {data.reservedProviderIds.includes(p.id) ? '' : '  (custom)'}
+              {agentProfileNames.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                  {data.state.agentProfiles[n]?.agent ? ` — ${data.state.agentProfiles[n]!.agent}` : ''}
                 </option>
               ))}
             </select>
           </Field>
-
-          <Field
-            label="Agent"
-            hint="Which coding CLI to launch. Blank uses Claude Code."
-          >
-            <select
-              className={inputStyle}
-              value={String(draft.agent ?? '')}
-              onChange={(e) => put('agent', e.target.value)}
-            >
-              <option value="">Claude Code (default)</option>
-              {data.agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.label}
-                  {data.installedAgents?.find((i) => i.id === a.id)?.installed === false
-                    ? '  — not installed'
-                    : ''}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          {provider?.askBaseUrl || draft.baseUrl ? (
-            <Field label="Base URL" hint="Anthropic-compatible endpoint. No /v1 — that is the OpenAI route.">
-              <input
-                className={monoInput}
-                value={field('baseUrl')}
-                onChange={(e) => put('baseUrl', e.target.value)}
-                placeholder={provider?.baseUrl ?? 'https://…'}
-              />
-            </Field>
-          ) : null}
         </Panel>
 
-        <Panel title="Credential">
-          <Field
-            label={
-              (data.state.profiles[editing]?.hasKey ?? false)
-                ? 'Replace stored key'
-                : 'API key'
-            }
-            hint={
-              provider?.hints.keyHint ??
-              'Write-only: the key is never sent to this page. Leave blank to keep the stored one.'
-            }
-          >
-            <input
-              className={monoInput}
-              type="password"
-              value={field('apiKey')}
-              onChange={(e) => put('apiKey', e.target.value)}
-              placeholder={
-                (data.state.profiles[editing]?.hasKey ?? false) ? '•••••••• stored' : 'paste key'
-              }
-            />
-          </Field>
-          <Field
-            label="…or read it from an environment variable"
-            hint="Keeps the secret out of config.json entirely."
-          >
-            <input
-              className={monoInput}
-              value={field('apiKeyFromEnv')}
-              onChange={(e) => put('apiKeyFromEnv', e.target.value)}
-              placeholder="MY_TOKEN"
-            />
-          </Field>
-        </Panel>
-
-        <Panel title="Models">
+        <Panel title="Accounts">
           <p className={css({ fontSize: '12px', color: 'faint', mb: '3', lineHeight: 1.55 })}>
-            All four tiers, from one table. Claude Code reads the extended-context marker per
-            variable, so a tier left out is the bug where three run wide and the fourth silently
-            does not. Blank inherits the provider default.
+            Who pays, in preference order. Attach more than one to rotate or to pick by remaining
+            capacity.
           </p>
-          {data.tiers.map((tier) => (
-            <Field key={tier} label={tier}>
-              <span className={css({ display: 'flex', gap: '2' })}>
-                <input
-                  className={monoInput}
-                  value={models[tier] ?? ''}
-                  onChange={(e) => put('models', { ...models, [tier]: e.target.value })}
-                  placeholder={provider?.defaultModels?.[tier] ?? '—'}
-                />
-                {/* Only providers that publish a catalog get a picker. The rest
-                    take a typed id, which is the honest option — a picker over
-                    a list we do not have would be worse than none. */}
-                {provider?.catalogId ? (
-                  <Button onClick={() => setPicking(tier)}>Browse</Button>
-                ) : null}
-              </span>
-            </Field>
-          ))}
-
-          {picking && provider?.catalogId ? (
-            <ModelPicker
-              catalogId={provider.catalogId}
-              tier={picking}
-              onClose={() => setPicking(null)}
-              onPick={(model) => {
-                const next = { ...models, [picking]: model.id }
-                setDraft((d) => ({
-                  ...d,
-                  models: next,
-                  // Capture the MEASURED window alongside the id. This is the
-                  // only moment it is known, and it is what lets swisscode set
-                  // an auto-compact window later without ever guessing one.
-                  ...(model.context
-                    ? {
-                        contextWindows: {
-                          ...((d.contextWindows as Record<string, number>) ?? {}),
-                          [model.id]: model.context,
-                        },
-                      }
-                    : {}),
-                }))
-                setPicking(null)
-              }}
-            />
-          ) : null}
-        </Panel>
-
-        <Panel title="Behaviour">
-          <label className={css({ display: 'flex', gap: '2', alignItems: 'center', mb: '4', fontSize: '13px' })}>
-            <input
-              type="checkbox"
-              checked={Boolean(draft.skipPermissions)}
-              onChange={(e) => put('skipPermissions', e.target.checked)}
-            />
-            Skip permission prompts (--dangerously-skip-permissions)
-          </label>
-
-          <div className={css({ fontSize: '12px', fontWeight: 500, color: 'dim', mb: '2' })}>
-            Gateway compatibility
-          </div>
-          {data.compatFlags.map((flag) => (
-            <label
-              key={flag.id}
-              className={css({ display: 'block', mb: '2.5', fontSize: '12.5px', lineHeight: 1.5 })}
-            >
-              <span className={css({ display: 'flex', gap: '2', alignItems: 'center' })}>
+          {accountNames.map((n) => {
+            const on = accounts.includes(n)
+            const a = data.state.providerAccounts[n]!
+            return (
+              <label
+                key={n}
+                className={css({ display: 'flex', gap: '2', alignItems: 'baseline', mb: '2', fontSize: '13px' })}
+              >
                 <input
                   type="checkbox"
-                  checked={Boolean(compat[flag.id])}
-                  onChange={(e) => put('compat', { ...compat, [flag.id]: e.target.checked })}
+                  checked={on}
+                  onChange={(e) =>
+                    put('accounts', e.target.checked ? [...accounts, n] : accounts.filter((x) => x !== n))
+                  }
                 />
-                <code className={css({ fontFamily: 'mono', fontSize: '12px' })}>{flag.id}</code>
-              </span>
-              {flag.consequence ? (
-                <span
-                  className={css({ display: 'block', color: 'warn', pl: '6', fontSize: '11.5px' })}
-                >
-                  costs: {flag.consequence}
+                <span>
+                  {n}
+                  <span className={css({ color: 'faint', fontSize: '11.5px', ml: '2', fontFamily: 'mono' })}>
+                    {a.provider}
+                    {a.hasKey || a.apiKeyFromEnv ? '' : '  · no key'}
+                  </span>
                 </span>
-              ) : null}
-            </label>
-          ))}
+              </label>
+            )
+          })}
+          {accounts.length === 0 ? (
+            <p className={css({ fontSize: '11.5px', color: 'danger', mt: '2' })}>
+              A profile with no account has nothing to authenticate with and will not launch.
+            </p>
+          ) : null}
         </Panel>
 
+        {accounts.length > 1 ? (
+          <Panel title="Selection">
+            {STRATEGIES.map((s) => (
+              <label key={s.id} className={css({ display: 'block', mb: '3', fontSize: '13px' })}>
+                <span className={css({ display: 'flex', gap: '2', alignItems: 'center' })}>
+                  <input
+                    type="radio"
+                    name="strategy"
+                    checked={strategy === s.id}
+                    onChange={() => put('strategy', s.id)}
+                  />
+                  {s.label}
+                </span>
+                <span
+                  className={css({ display: 'block', color: 'faint', pl: '6', fontSize: '11.5px', lineHeight: 1.55 })}
+                >
+                  {s.note}
+                </span>
+              </label>
+            ))}
+          </Panel>
+        ) : null}
+
         <div className={css({ display: 'flex', gap: '2', mb: '10' })}>
-          <Button variant="primary" onClick={() => void save(editing)} disabled={!editing.trim()}>
+          <Button
+            variant="primary"
+            onClick={() => void save(editing)}
+            disabled={!editing.trim() || !canCreate || accounts.length === 0}
+          >
             {isNew ? 'Create profile' : 'Save changes'}
           </Button>
           <Button onClick={() => setEditing(null)}>Cancel</Button>
@@ -310,16 +209,21 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
           New profile
         </Button>
       </div>
-
       {error ? <Banner tone="danger">{error}</Banner> : null}
 
       <Panel title={`${names.length} profile${names.length === 1 ? '' : 's'}`}>
         {names.length === 0 ? (
-          <Empty>No profiles yet. Create one to launch anything.</Empty>
+          <Empty>No profiles yet. A profile pairs an agent profile with one or more accounts.</Empty>
         ) : (
           names.map((name) => {
-            const p: Profile | undefined = data.state.profiles[name]
+            const p = data.state.profiles[name]!
             const isDefault = data.state.defaultProfile === name
+            // Report what it RESOLVES to, not what it references — a list of
+            // key names would make the reader do the dereference in their head.
+            const first = p.accounts?.[0]
+            const account = first ? data.state.providerAccounts?.[first] : undefined
+            const broken =
+              !data.state.agentProfiles?.[p.agentProfile] || (p.accounts ?? []).length === 0 || !account
             return (
               <div
                 key={name}
@@ -333,7 +237,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
                   _last: { borderBottom: 'none' },
                 })}
               >
-                <Dot tone={p?.hasKey || p?.apiKeyFromEnv ? 'ok' : 'faint'} />
+                <Dot tone={broken ? 'danger' : 'ok'} />
                 <div className={css({ flex: 1, minW: 0 })}>
                   <div className={css({ fontSize: '13px', fontWeight: 500 })}>
                     {name}
@@ -344,12 +248,24 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
                     ) : null}
                   </div>
                   <div className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono' })}>
-                    {p?.provider} · {p?.models?.opus || 'provider default'}
+                    {broken
+                      ? 'broken reference — open to repair'
+                      : `${p.agentProfile} · ${first} → ${account!.provider}` +
+                        ((p.accounts?.length ?? 0) > 1
+                          ? `  (+${p.accounts!.length - 1}, ${p.strategy ?? 'single'})`
+                          : '')}
                   </div>
                 </div>
-                {!isDefault ? <Button onClick={() => void setDefault(name)}>Make default</Button> : null}
+                {!isDefault ? (
+                  <Button onClick={() => void act(() => api.setDefault(name, data.revision))}>
+                    Make default
+                  </Button>
+                ) : null}
                 <Button onClick={() => open(name)}>Edit</Button>
-                <Button variant="danger" onClick={() => void remove(name)}>
+                <Button
+                  variant="danger"
+                  onClick={() => void act(() => api.deleteProfile(name, data.revision))}
+                >
                   Delete
                 </Button>
               </div>

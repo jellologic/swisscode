@@ -3,13 +3,18 @@ import { css } from '../styled-system/css'
 import { ApiError, api, type Bootstrap } from './api'
 import { Banner, Dot } from './ui'
 import { Profiles } from './routes/Profiles'
+import { Accounts } from './routes/Accounts'
+import { AgentProfiles } from './routes/AgentProfiles'
 import { Providers } from './routes/Providers'
 import { Settings } from './routes/Settings'
 import { Doctor } from './routes/Doctor'
 
-type Tab = 'profiles' | 'providers' | 'doctor' | 'settings'
+type Tab = 'profiles' | 'accounts' | 'agentProfiles' | 'providers' | 'doctor' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
+  // Ordered as the concepts compose: who pays, what runs, then the pairing.
+  { id: 'accounts', label: 'Accounts' },
+  { id: 'agentProfiles', label: 'Agent profiles' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'providers', label: 'Providers' },
   { id: 'doctor', label: 'Doctor' },
@@ -136,6 +141,8 @@ export function App() {
           </Banner>
         ))}
 
+        {tab === 'accounts' ? <Accounts data={data} reload={reload} /> : null}
+        {tab === 'agentProfiles' ? <AgentProfiles data={data} reload={reload} /> : null}
         {tab === 'profiles' ? <Profiles data={data} reload={reload} /> : null}
         {tab === 'providers' ? <Providers data={data} reload={reload} /> : null}
         {tab === 'doctor' ? <Doctor /> : null}

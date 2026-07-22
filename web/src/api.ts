@@ -52,18 +52,40 @@ export type InstalledAgent = {
   error: string | null
 }
 
-/** A profile as the browser is allowed to see it: `hasKey`, never the key. */
-export type Profile = {
+/**
+ * WHO PAYS, as the browser is allowed to see it: `hasKey`, never the key.
+ *
+ * Only one of the three shapes is security-sensitive, and this is it — which is
+ * itself a benefit of the split, since there is one type to get right rather
+ * than one field on a type carrying everything else.
+ */
+export type ProviderAccount = {
   provider: string
-  agent?: string
+  label?: string
   baseUrl?: string
   hasKey: boolean
   apiKeyFromEnv?: string
+}
+
+/** WHAT RUNS. Holds no credential, so it crosses whole. */
+export type AgentProfile = {
+  agent?: string
+  label?: string
   models?: Record<string, string>
   compat?: Record<string, boolean>
   env?: Record<string, string>
   contextWindows?: Record<string, number>
   skipPermissions?: boolean
+}
+
+export type SelectionStrategy = 'single' | 'round-robin' | 'usage'
+
+/** THE PAIRING. References plus the rule for choosing among them. */
+export type Profile = {
+  label?: string
+  agentProfile: string
+  accounts: string[]
+  strategy?: SelectionStrategy
 }
 
 export type CustomProvider = {
@@ -82,6 +104,8 @@ export type CustomProvider = {
 
 export type Bootstrap = {
   state: {
+    providerAccounts: Record<string, ProviderAccount>
+    agentProfiles: Record<string, AgentProfile>
     profiles: Record<string, Profile>
     defaultProfile: string | null
     bindings: Record<string, unknown>
@@ -172,6 +196,30 @@ export type CatalogResult = {
 
 export const api = {
   bootstrap: () => call<Bootstrap>('/api/bootstrap'),
+
+  saveAccount: (name: string, account: unknown, revision: string | null) =>
+    call<{ revision: string }>(`/api/accounts/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ revision, account }),
+    }),
+
+  deleteAccount: (name: string, revision: string | null) =>
+    call<{ revision: string; affectedProfiles: string[] }>(
+      `/api/accounts/${encodeURIComponent(name)}`,
+      { method: 'DELETE', body: JSON.stringify({ revision }) },
+    ),
+
+  saveAgentProfile: (name: string, agentProfile: unknown, revision: string | null) =>
+    call<{ revision: string }>(`/api/agent-profiles/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ revision, agentProfile }),
+    }),
+
+  deleteAgentProfile: (name: string, revision: string | null) =>
+    call<{ revision: string; affectedProfiles: string[] }>(
+      `/api/agent-profiles/${encodeURIComponent(name)}`,
+      { method: 'DELETE', body: JSON.stringify({ revision }) },
+    ),
 
   saveProfile: (name: string, profile: unknown, revision: string | null) =>
     call<{ revision: string }>(`/api/profiles/${encodeURIComponent(name)}`, {

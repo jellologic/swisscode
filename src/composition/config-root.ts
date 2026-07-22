@@ -374,12 +374,21 @@ function listProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
 
     // The three-way structure, named. Which account pays is the most
     // consequential line here, so it is first and it is never elided.
-    const others = (p.accounts ?? []).filter((a) => a !== r.accountName)
+    //
+    // LIVE accounts only. Counting a dangling reference as "+1 more" would
+    // promise a rotation partner that does not exist — confidently wrong about
+    // billing, which is the one thing this listing must not be.
+    const others = (p.accounts ?? []).filter(
+      (a) => a !== r.accountName && state.providerAccounts?.[a],
+    )
     out(
       `    account    ${r.accountName} → ${r.provider}` +
         (provider ? '' : '  — not in this build') +
         (others.length ? `  (+${others.length} more, ${p.strategy ?? 'single'})` : ''),
     )
+    // Resolution warnings say what was skipped and why; swallowing them here
+    // would leave a stale reference invisible until someone read the JSON.
+    for (const w of resolution.warnings) out(`    ⚠ ${w}`)
     out(`    agent      ${r.agentProfileName} → ${r.agent ?? DEFAULT_AGENT_ID}`)
     if (r.baseUrl) out(`    baseUrl    ${r.baseUrl}`)
     // Presence and ORIGIN only. Never a prefix, never a suffix, never a length:
