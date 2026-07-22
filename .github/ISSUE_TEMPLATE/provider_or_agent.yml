@@ -1,6 +1,6 @@
 name: New provider or agent
 description: Ask for a model backend or a coding CLI that swisscode does not ship yet
-labels: ['enhancement', 'provider/agent']
+labels: ['enhancement', 'provider']
 body:
   - type: markdown
     attributes:
