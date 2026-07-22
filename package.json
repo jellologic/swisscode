@@ -1,7 +1,7 @@
 {
   "name": "swisscode",
   "version": "0.3.0",
-  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode against Ollama (local, no key), OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen & more — named profiles, per-directory bindings and real 1M-context fixes, with no proxy or daemon.",
+  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode. Run multiple Claude Pro/Max accounts, check usage limits and switch accounts without /login — or point any coding CLI at Ollama (local, no key), OpenRouter, z.ai/GLM, DeepSeek & Qwen. No proxy, no daemon.",
   "type": "module",
   "bin": {
     "swisscode": "./bin/swisscode.js"
@@ -29,14 +29,11 @@
     "claude",
     "claude-code",
     "anthropic",
-    "anthropic-api",
     "cli",
     "launcher",
-    "ai",
     "llm",
     "coding-agent",
     "ai-agent",
-    "agentic",
     "provider-switcher",
     "claude-code-router",
     "openrouter",
@@ -51,10 +48,16 @@
     "siliconflow",
     "ollama",
     "local-llm",
-    "local-ai",
-    "offline-ai",
-    "self-hosted",
-    "developer-tools"
+    "developer-tools",
+    "claude-max",
+    "claude-pro",
+    "subscription",
+    "multiple-accounts",
+    "account-switcher",
+    "usage-limits",
+    "rate-limits",
+    "claude-usage",
+    "bunx"
   ],
   "license": "MIT",
   "repository": {

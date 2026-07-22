@@ -59,6 +59,19 @@ invocation, which you'll feel on a tool you launch dozens of times a day:
 npm install -g swisscode
 ```
 
+**Bun works too**, both as a runner and as the runtime:
+
+```sh
+bunx swisscode
+bun install -g swisscode
+```
+
+Nothing special was needed for this: swisscode is plain ESM with no native
+addons, and `process.execve` — the call that makes handoff free — exists on Bun
+as well as Node. Verified by resolving a full launch plan under both and
+diffing: same profile, same agent, same provider, and a byte-identical set of
+`ANTHROPIC_*` / `CLAUDE_CODE_*` variables. Deno is untested.
+
 Every argument that isn't listed below is forwarded to `claude` untouched:
 
 ```sh
