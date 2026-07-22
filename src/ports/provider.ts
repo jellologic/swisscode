@@ -104,6 +104,21 @@ export type ProviderDescriptor = {
   credentialEnv: ClaudeCodeCredentialEnv
   credentialOptional?: boolean
   /**
+   * The credential to send when the profile carries none.
+   *
+   * For endpoints that require the field to be POPULATED but do not check it —
+   * a local Ollama accepts any token, a wrong token and no token identically.
+   * The alternative is telling every user to type a fake key into the wizard
+   * and storing that fiction in config.json, where it looks like a secret.
+   *
+   * NOT a secret and never treated as one: it ships in the source. A provider
+   * that needs a real credential must leave this unset, so that "no key" stays
+   * an error rather than silently becoming a placeholder that 401s later.
+   * Pairs with `credentialOptional`, which is what stops the wizard demanding
+   * one in the first place.
+   */
+  defaultCredential?: string
+  /**
    * BARE ids, never [1m].
    *
    * `Partial`, not `TierRecord`: a descriptor pinning NO models is a real and

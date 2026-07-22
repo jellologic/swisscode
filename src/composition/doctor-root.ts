@@ -34,10 +34,12 @@ import {
 import { bindingEntries, pruneBindings } from '../core/binding.ts'
 import { createProbe } from '../adapters/doctor/probe.ts'
 import type { LaunchDeps } from './launch-root.ts'
+import { createOllamaIntrospect, interpretOllamaContext } from '../adapters/doctor/ollama.ts'
 import type {
   AnthropicMessagesProbePort,
   DoctorReport,
   DoctorRun,
+  OllamaIntrospectPort,
 } from '../ports/doctor.ts'
 
 export type RunDoctorOptions = {
@@ -55,6 +57,8 @@ export type RunDoctorOptions = {
    * call site rather than at the first await.
    */
   probe?: AnthropicMessagesProbePort | null
+  /** Injected in tests, like `probe`. Only consulted for an Ollama profile. */
+  ollama?: OllamaIntrospectPort | null
 }
 
 /**
@@ -71,6 +75,7 @@ export async function runDoctor({
   probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
   now = () => Date.now(),
   probe = null,
+  ollama = null,
 }: RunDoctorOptions): Promise<DoctorRun> {
   const { store, registry, agents, proc } = deps
   const ambient = proc.env()
@@ -153,7 +158,19 @@ export async function runDoctor({
   const spec = plan ? probeSpec(profile, provider, plan) : null
   // Redaction also covers a credential carried as https://user:pass@host userinfo,
   // which is distinct from the header credential above.
-  const secrets = [...(spec?.credential ? [spec.credential] : []), ...urlCredentials(spec?.baseUrl)]
+  //
+  // A provider's `defaultCredential` is deliberately NOT redacted. It is not a
+  // secret — it ships in the source, the endpoint ignores it, and the port says
+  // so. Treating it as one actively corrupts the report: Ollama's placeholder is
+  // the literal string "ollama", so redaction rewrote the provider line to
+  // `Ollama (local) (<redacted>)` and would eat any model id containing the
+  // word. Redaction has to cover real secrets exactly, not every string that
+  // happens to sit in a credential-shaped slot.
+  const isPlaceholder = Boolean(spec?.credential) && spec?.credential === provider?.defaultCredential
+  const secrets = [
+    ...(spec?.credential && !isPlaceholder ? [spec.credential] : []),
+    ...urlCredentials(spec?.baseUrl),
+  ]
 
   if (offline) {
     checks.push(makeCheck('probe', 'endpoint probe', SKIP, 'skipped (--offline)'))
@@ -238,6 +255,53 @@ export async function runDoctor({
         'token with HTTP 200 and an SSE stream that dies silently, which a streaming probe ' +
         'cannot tell apart from success.',
     )
+  }
+
+  // Provider-specific diagnosis: the context window a local Ollama actually
+  // serves.
+  //
+  // Gated on the provider ID rather than generalised, and deliberately so. This
+  // is not a capability every provider has a version of — it exists because
+  // Ollama is the one preset whose effective context is set OUTSIDE the model
+  // id, by however the server was started, and therefore cannot be derived at
+  // launch or seen at runtime. Inventing a port method for "introspect a
+  // provider" on a sample size of one would be a shape guessed from a single
+  // example; when a second provider needs it, its second caller will show what
+  // the abstraction actually is.
+  //
+  // Unlike the messages probe this bills nothing — /api/ps and /api/show run no
+  // inference — but it is still a network call, so --offline skips it.
+  if (provider?.id === 'ollama' && spec?.baseUrl) {
+    if (offline) {
+      checks.push(makeCheck('ollama-context', 'context window', SKIP, 'skipped (--offline)'))
+    } else if (spec.models.length === 0) {
+      checks.push(
+        makeCheck('ollama-context', 'context window', SKIP, 'skipped: this profile pins no model ids'),
+      )
+    } else {
+      const introspect = ollama ?? createOllamaIntrospect()
+      for (const model of spec.models) {
+        // `probeTimeoutMs` per call rather than a slice of the total budget.
+        // The total budget exists to bound BILLABLE inference; these are
+        // free local metadata reads, at most one per distinct pinned model,
+        // each already capped by its own timeout.
+        const ctx = await introspect.context({
+          baseUrl: spec.baseUrl,
+          model: model.id,
+          timeoutMs: probeTimeoutMs,
+        })
+        const verdict = interpretOllamaContext(ctx, { model: model.id })
+        checks.push(
+          makeCheck(
+            `ollama-context-${model.id}`,
+            'context window',
+            verdict.status === 'ok' ? OK : verdict.status === 'warn' ? WARN : SKIP,
+            verdict.detail,
+            verdict.fix ? { fix: verdict.fix } : {},
+          ),
+        )
+      }
+    }
   }
 
   // repairs

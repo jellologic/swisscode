@@ -132,4 +132,47 @@ export type AnthropicMessagesProbePort = {
   messages: (req: ProbeRequest) => Promise<ProbeResult>
 }
 
+// PROVIDER INTROSPECTION
+//
+// Distinct from the probe above on both axes: this speaks a PROVIDER's own
+// native API rather than the Anthropic one, and it costs nothing — no inference
+// happens, so unlike `messages` it can be asked freely.
+//
+// It exists because a local Ollama has a failure mode nothing else here does.
+// Claude Code assumes a 200K window for any non-first-party endpoint, while the
+// window Ollama actually serves is a property of how the SERVER was started
+// (OLLAMA_CONTEXT_LENGTH, or a Modelfile `PARAMETER num_ctx` that overrides it),
+// not of the model id. When they disagree nothing errors — the model silently
+// forgets the beginning of the conversation. That is unguessable at launch and
+// invisible at runtime, so the doctor is the only place it can be caught.
+
+/**
+ * Two DIFFERENT numbers, and collapsing them would defeat the point.
+ *
+ * `loaded` is what the server has genuinely allocated for a resident model —
+ * the number that governs. `ceiling` is the model's own maximum from its
+ * metadata, which is only an upper bound: verified on Ollama 0.32.0, a model
+ * whose ceiling is 40960 was loaded at 32768.
+ *
+ * Both are null when the value could not be established. Neither is ever
+ * defaulted to the other.
+ */
+export type OllamaContext = {
+  /** effective window of the resident model; null when it is not loaded */
+  loaded: number | null
+  /** the model's maximum, an upper bound on `loaded`; null when unpublished */
+  ceiling: number | null
+  /** null = the calls succeeded */
+  error: string | null
+}
+
+/** NEVER REJECTS, for the same reason `messages` does not: failures are findings. */
+export type OllamaIntrospectPort = {
+  context: (req: {
+    baseUrl: string
+    model: string
+    timeoutMs?: number
+  }) => Promise<OllamaContext>
+}
+
 export {}

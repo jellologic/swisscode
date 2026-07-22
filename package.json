@@ -1,7 +1,7 @@
 {
   "name": "swisscode",
   "version": "0.2.1",
-  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode against OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen & more — named profiles, per-directory bindings and real 1M-context fixes, with no proxy or daemon.",
+  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode against Ollama (local, no key), OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen & more — named profiles, per-directory bindings and real 1M-context fixes, with no proxy or daemon.",
   "type": "module",
   "bin": {
     "swisscode": "./bin/swisscode.js"
@@ -46,6 +46,11 @@
     "qwen",
     "modelscope",
     "siliconflow",
+    "ollama",
+    "local-llm",
+    "local-ai",
+    "offline-ai",
+    "self-hosted",
     "developer-tools"
   ],
   "license": "MIT",

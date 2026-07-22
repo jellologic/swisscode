@@ -15,6 +15,10 @@ import {
   createModelScopeCatalog,
   normalizeModelScope,
 } from '../../src/adapters/catalog/modelscope.ts'
+import {
+  OLLAMA_CAPABILITIES,
+  normalizeOllama,
+} from '../../src/adapters/catalog/ollama.ts'
 import { createCatalogRegistry } from '../../src/adapters/catalog/registry.ts'
 import { createFsCacheStore } from '../../src/adapters/store/fs-cache-store.ts'
 import { CACHE_TTL_MS, CACHE_VERSION } from '../../src/core/catalog.ts'
@@ -123,6 +127,85 @@ test('the ModelScope catalog endpoint is the /v1 OpenAI route, unlike the base U
   const { modelscope } = await import('../../src/adapters/providers/modelscope.ts')
   assert.equal(MODELSCOPE_ENDPOINT, 'https://api-inference.modelscope.cn/v1/models')
   assert.equal(modelscope.baseUrl, 'https://api-inference.modelscope.cn')
+})
+
+// Ollama
+
+// Captured verbatim from `GET /api/tags` on a live Ollama 0.32.0. The
+// `capabilities` array and `details.context_length` are both real — an earlier
+// version of this adapter assumed neither existed, which is what pulling an
+// actual model corrected.
+const OLLAMA_PAYLOAD = {
+  models: [
+    {
+      name: 'qwen3:0.6b',
+      model: 'qwen3:0.6b',
+      size: 522_653_767,
+      details: {
+        family: 'qwen3',
+        parameter_size: '751.63M',
+        quantization_level: 'Q4_K_M',
+        context_length: 40960,
+      },
+      capabilities: ['completion', 'tools', 'thinking'],
+    },
+    // No tools: the case that must be visibly distinguishable.
+    { name: 'embed-only:1b', model: 'embed-only:1b', size: 700_000_000, capabilities: ['completion'] },
+    // An older Ollama omits `capabilities` entirely — UNKNOWN, not "no tools".
+    { name: 'legacy:7b', model: 'legacy:7b', size: 4_100_000_000, details: {} },
+    { name: '', model: 'nameless' },
+    'not-an-object',
+  ],
+}
+
+test('Ollama normalizes local models, and refuses the context length it is handed', () => {
+  const rows = normalizeOllama(OLLAMA_PAYLOAD)
+  // The blank name and the primitive row are dropped, not rendered blank.
+  assert.equal(rows.length, 3)
+  assert.equal(rows[0]!.id, 'qwen3:0.6b')
+  assert.match(rows[0]!.description!, /751\.63M/)
+  assert.match(rows[0]!.description!, /523MB/)
+  for (const row of rows) {
+    // /api/tags DOES publish details.context_length (40960 above) and it is
+    // deliberately dropped: that is the model's ceiling, while the same server
+    // with no OLLAMA_CONTEXT_LENGTH set loaded this model at 32768. A catalog
+    // context flows into contextWindows and out as CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+    // so publishing the ceiling would compact at a boundary the server does not
+    // serve. The doctor reads /api/ps for the window that is genuinely loaded.
+    assert.equal(row.context, null, 'the model ceiling leaked in as the context window')
+    assert.equal(row.pricing, null, 'local models have no prices to publish')
+    assert.equal(row.benchmarks, null)
+  }
+})
+
+test('Ollama publishes tool support, and UNKNOWN survives where it does not', () => {
+  // Claude Code cannot work without tool calling, so a confirmed answer is
+  // worth having — but an older Ollama omits `capabilities`, and "this server
+  // does not say" must not collapse into "this model cannot".
+  const [qwen, embed, legacy] = normalizeOllama(OLLAMA_PAYLOAD)
+  assert.equal(qwen!.tools, true)
+  assert.equal(qwen!.reasoning, true, 'thinking is published the same way')
+  assert.equal(embed!.tools, false, 'a confirmed absence must be reportable')
+  assert.equal(legacy!.tools, null, 'a missing capabilities array is UNKNOWN')
+  assert.equal(legacy!.reasoning, null)
+
+  // Safe against that UNKNOWN because filterModels hides a row only on
+  // `tools === false`; nulls stay visible rather than emptying the picker.
+  assert.equal(OLLAMA_CAPABILITIES.toolSupportKnown, true)
+})
+
+test('an unexpected Ollama response is an error, not a silent empty list', () => {
+  assert.throws(() => normalizeOllama({ models: 'nope' }), /unexpected response shape/)
+  assert.throws(() => normalizeOllama(null), /unexpected response shape/)
+})
+
+test('the Ollama catalog uses the native /api/tags route, not the launch base URL', async () => {
+  const { OLLAMA_ENDPOINT } = await import('../../src/adapters/catalog/ollama.ts')
+  const { ollama } = await import('../../src/adapters/providers/ollama.ts')
+  assert.equal(OLLAMA_ENDPOINT, 'http://localhost:11434/api/tags')
+  // The base URL must stay a bare host: Claude Code appends /v1/messages, so a
+  // /v1 here would produce /v1/v1/messages and a 404.
+  assert.equal(ollama.baseUrl, 'http://localhost:11434')
 })
 
 // caching / TTL

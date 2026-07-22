@@ -36,7 +36,7 @@ import type {
   ModelCacheStorePort,
   ModelCatalogPort,
 } from '../src/ports/catalog.ts'
-import type { AnthropicMessagesProbePort } from '../src/ports/doctor.ts'
+import type { AnthropicMessagesProbePort, OllamaIntrospectPort } from '../src/ports/doctor.ts'
 import type { AgentCliPort, AgentRegistryPort } from '../src/ports/agent.ts'
 
 import { anthropic } from '../src/adapters/providers/anthropic.ts'
@@ -66,6 +66,7 @@ import {
 } from '../src/adapters/catalog/modelscope.ts'
 import { createCatalogRegistry } from '../src/adapters/catalog/registry.ts'
 import { createProbe } from '../src/adapters/doctor/probe.ts'
+import { createOllamaIntrospect } from '../src/adapters/doctor/ollama.ts'
 
 // provider
 
@@ -130,6 +131,11 @@ export const _catalogRegistry: CatalogRegistryPort = createCatalogRegistry(catal
 // doctor probe
 
 export const _probe: AnthropicMessagesProbePort = createProbe()
+
+// Provider introspection. Deliberately NOT folded into the probe port: it
+// speaks Ollama's native API rather than the Anthropic one, and it bills
+// nothing, so the two have different rules about when they may be called.
+export const _ollamaIntrospect: OllamaIntrospectPort = createOllamaIntrospect()
 
 // the lazy UI boundary
 //

@@ -111,6 +111,31 @@ const GOLDEN: Record<string, GoldenPlan> = {
     },
     unset: ['ANTHROPIC_API_KEY', ...TIER_VARS],
   },
+  ollama: {
+    set: {
+      // Bare host, http, loopback. The cleartext guard exempts loopback, so
+      // this is the one provider that ships an http:// URL without warning.
+      ANTHROPIC_BASE_URL: 'http://localhost:11434',
+      // compat.forceIdleTimeoutOff — "stalls on slow or locally hosted models",
+      // which is this case exactly. Note the value is '0', not '1': the flag
+      // turns the timeout OFF.
+      API_FORCE_IDLE_TIMEOUT: '0',
+      ANTHROPIC_AUTH_TOKEN: 'KEY',
+    },
+    // CLAUDE_CODE_SUBAGENT_MODEL is UNSET rather than absent: subagentFollowsOpus
+    // pins it to the opus tier, this provider pins no models, and the ambient
+    // env carries a stale value that must not survive into a local launch.
+    unset: ['ANTHROPIC_API_KEY', ...TIER_VARS, 'CLAUDE_CODE_SUBAGENT_MODEL'],
+  },
+  'ollama-cloud': {
+    set: {
+      ANTHROPIC_BASE_URL: 'https://ollama.com',
+      // ANTHROPIC_AUTH_TOKEN, never ANTHROPIC_API_KEY: ollama.com accepts only
+      // `Authorization: Bearer`, and this is the spelling that produces one.
+      ANTHROPIC_AUTH_TOKEN: 'KEY',
+    },
+    unset: ['ANTHROPIC_API_KEY', ...TIER_VARS, 'CLAUDE_CODE_SUBAGENT_MODEL'],
+  },
   custom: {
     set: {
       ANTHROPIC_BASE_URL: 'https://custom.example',

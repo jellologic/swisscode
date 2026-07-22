@@ -2,10 +2,12 @@ import type { CatalogRegistryPort, ModelCatalogPort } from '../../ports/catalog.
 import type { CatalogDeps } from './cached-catalog.ts'
 import { createOpenRouterCatalog } from './openrouter.ts'
 import { createModelScopeCatalog } from './modelscope.ts'
+import { createOllamaCatalog } from './ollama.ts'
 
 const FACTORIES = Object.freeze({
   openrouter: createOpenRouterCatalog,
   modelscope: createModelScopeCatalog,
+  ollama: createOllamaCatalog,
 })
 
 /** The ids this build ships a catalog for, derived from the table itself. */

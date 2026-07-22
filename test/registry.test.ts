@@ -183,22 +183,28 @@ for (const p of PROVIDERS) {
   })
 }
 
-test('no compat flag can reach CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', () => {
-  // It also disables gateway model discovery. It must not hide behind a
-  // boolean that reads like a harmless compatibility switch, and no provider
-  // may set it through the descriptor `env` escape hatch either.
-  const vars = Object.values(COMPAT_ENV).map(([k]) => k)
-  assert.ok(!vars.includes('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'))
-  for (const p of PROVIDERS) {
-    assert.ok(
-      !('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC' in (p.env ?? {})),
-      `${p.id} sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC directly`,
-    )
+test('a flag that costs something declares what, and no descriptor bypasses it', () => {
+  // The `env` block stays banned for these variables, and now for a reason that
+  // generalises rather than a name on a list: `env` writes straight to the
+  // environment, so it would set the variable WITHOUT the consequence warning
+  // the compat mechanism attaches. A costly switch must go through the path
+  // that announces it.
+  const costly = Object.entries(COMPAT_ENV).filter(([, e]) => e.consequence)
+  assert.ok(costly.length > 0, 'no flag declares a consequence; the mechanism is inert')
+
+  for (const [flag, entry] of costly) {
+    assert.ok(entry.consequence!.length > 20, `${flag}'s consequence is a note, not an explanation`)
+    for (const p of PROVIDERS) {
+      assert.ok(
+        !(entry.env in (p.env ?? {})),
+        `${p.id} sets ${entry.env} through \`env\`, bypassing the ${flag} warning`,
+      )
+    }
   }
 })
 
 test('every compat flag maps to a distinct env var', () => {
-  const vars = Object.values(COMPAT_ENV).map(([k]) => k)
+  const vars = Object.values(COMPAT_ENV).map((e) => e.env)
   assert.deepEqual([...new Set(vars)], vars, 'two flags fight over one variable')
 })
 

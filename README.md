@@ -7,9 +7,11 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/swisscode"><img src="https://img.shields.io/npm/v/swisscode?logo=npm&label=npm&color=cb3837" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/swisscode"><img src="https://img.shields.io/npm/dm/swisscode?color=cb3837" alt="npm downloads"></a>
+  <a href="https://github.com/jellologic/swisscode/actions/workflows/ci.yml"><img src="https://github.com/jellologic/swisscode/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/node/v/swisscode?logo=node.js&logoColor=white&color=5fa04e" alt="node current">
   <img src="https://img.shields.io/npm/l/swisscode?color=3da639" alt="MIT license">
   <img src="https://img.shields.io/badge/no%20proxy-no%20daemon-8957e5" alt="no proxy, no daemon">
+  <a href="AGENTS.md"><img src="https://img.shields.io/badge/agent--written%20PRs-welcome-2f81f7" alt="agent-written PRs welcome"></a>
 </p>
 
 # swisscode — drop-in launcher for Claude Code, Kilo &amp; OpenCode
@@ -18,8 +20,9 @@
 and other coding CLIs ([Kilo](https://kilo.ai), [OpenCode](https://opencode.ai)).
 Pick a provider, models and permission flags once — then `swisscode` behaves
 exactly like `claude`, only pointed at [OpenRouter](https://openrouter.ai),
-[z.ai / GLM](https://z.ai), Kimi, DeepSeek, Qwen, ModelScope, SiliconFlow, or any
-other Anthropic-compatible endpoint.
+[z.ai / GLM](https://z.ai), Kimi, DeepSeek, Qwen, ModelScope, SiliconFlow,
+[Ollama](https://ollama.com) running on your own machine, or any other
+Anthropic-compatible endpoint.
 
 Unlike a router/proxy or a desktop GUI, swisscode is a **launcher**: it sets the
 right environment and `exec`s the real CLI, so there is **no proxy, no daemon, no
@@ -28,10 +31,11 @@ background process** — and it fixes third-party correctness bugs (like the
 proxy structurally cannot.
 
 - **Any provider** — OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen, ModelScope, SiliconFlow, or a custom Anthropic-compatible endpoint.
+- **Local models, no key** — [Ollama](#ollama) speaks the Anthropic Messages API natively, so `swisscode` points Claude Code at `localhost` with no proxy and nothing to sign up for.
 - **Any agent** — Claude Code (default), [Kilo](https://kilo.ai) or [OpenCode](https://opencode.ai), selectable per profile or per run.
 - **Named profiles &amp; per-directory bindings** — the right backend per repo, automatically.
 - **Correctness fixes** — real 1M context (`[1m]`), catalog-driven auto-compaction, gateway compatibility flags.
-- **A preflight `doctor`** — check binary, endpoint, credential, models and tool support before you launch.
+- **A preflight `doctor`** — binary, endpoint, credential, models, real tool-calling probe, and the context window your local server actually loaded.
 - **No proxy, no daemon, no GUI** — a single binary that `exec`s the real CLI, so nothing sits between you and your agent.
 
 It replaces shell aliases like this:
@@ -215,11 +219,13 @@ checks that don't fit are reported as skipped rather than silently passing.
 | OpenRouter | `https://openrouter.ai/api` | browsable catalog; pins `CLAUDE_CODE_SUBAGENT_MODEL`, which subagents need in order not to 404 |
 | ModelScope | `https://api-inference.modelscope.cn` | browsable catalog; keep the `ms-` prefix on your token |
 | SiliconFlow | `https://api.siliconflow.com` | use `https://api.siliconflow.cn` for mainland accounts; a `Pro/` prefix selects the paid variant |
+| Ollama | `http://localhost:11434` | local models, no key; browsable catalog of what you've pulled — see [Ollama](#ollama) |
+| Ollama Cloud | `https://ollama.com` | Ollama's hosted models; needs an API key |
 | Custom | any Anthropic-compatible endpoint | |
 
-Note the ModelScope and SiliconFlow endpoints are **bare hosts**. The `/v1` that
-appears alongside them in the vendors' docs is the OpenAI-compatible route;
-adding it here produces `/v1/v1/messages` and a 404.
+Note the ModelScope, SiliconFlow and Ollama endpoints are **bare hosts**. The
+`/v1` that appears alongside them in the vendors' docs is the OpenAI-compatible
+route; adding it here produces `/v1/v1/messages` and a 404.
 
 Whichever provider you pick, swisscode removes `ANTHROPIC_API_KEY` from the
 child environment unless that provider is the one that uses it. A stale key left
@@ -232,6 +238,71 @@ endpoints from your own scripts risks account suspension), and **DeepSeek
 direct** (`api.deepseek.com/anthropic` returns `400 unknown variant "system"` on
 Claude Code >= 2.1.154, with no verified workaround — DeepSeek weights through
 OpenRouter are fine).
+
+### Ollama
+
+Ollama **v0.14.0+** implements the Anthropic Messages API natively — this is a
+real endpoint, not an OpenAI shim being translated — so a local model is just
+another provider. No proxy, and no key:
+
+```sh
+swisscode config local        # pick Ollama, leave the key blank
+swisscode local               # launches Claude Code against localhost:11434
+```
+
+The picker browses the models you have actually pulled, and marks which of them
+support tool calling — Claude Code cannot function without it, and plenty of
+local models lack it. `qwen3-coder` and `gpt-oss` are the usual choices.
+
+Doctor also probes tool calling for real, which catches the case a capability
+flag cannot: a model that *advertises* tools but is too small to reliably emit
+one.
+
+> **The one thing that will bite you: context.** The window Ollama serves is a
+> property of **how you started the server** — `OLLAMA_CONTEXT_LENGTH`, or a
+> Modelfile `PARAMETER num_ctx` that overrides it — not of the model id. Claude
+> Code assumes 200K regardless, and nothing errors when they disagree: the model
+> just silently forgets the beginning of the conversation.
+>
+> So `swisscode config doctor` measures it and warns below 32K:
+>
+> ```
+> ✓ context window       qwen3:0.6b loaded with a 32K window (model ceiling 40K)
+> ! context window       qwen3:0.6b is loaded with a 4K window; Claude Code assumes
+>                        200K and will not be told otherwise, so it silently forgets
+>                        the start of long conversations
+>   ↳ Restart Ollama with OLLAMA_CONTEXT_LENGTH=65536 (64K). A Modelfile
+>     `PARAMETER num_ctx` overrides that variable, so check it too
+> ```
+>
+> Those are two different numbers on purpose: the **loaded** window is what
+> governs, while the model's **ceiling** is only an upper bound. swisscode does
+> not guess either one at launch — a window set too large means the conversation
+> overflows instead of compacting.
+
+`http://` is correct for the local endpoint and is exempt from the
+cleartext-credential warning, which applies to non-loopback hosts only — point
+a profile at a *remote* Ollama over `http://` and swisscode will tell you.
+
+Ollama Cloud is a separate preset because it authenticates for real, and
+currently accepts only `Authorization: Bearer` rather than Anthropic's
+`x-api-key` ([ollama/ollama#16922](https://github.com/ollama/ollama/issues/16922)).
+swisscode already sends the bearer spelling, so it works today.
+
+**If Ollama becomes unresponsive**, you have hit
+[ollama/ollama#13949](https://github.com/ollama/ollama/issues/13949): Claude
+Code polls `/v1/messages/count_tokens?beta=true`, which Ollama does not
+implement. It did not reproduce here on 0.32.0, but if it happens to you:
+
+```sh
+swisscode --cc-env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+```
+
+or set `"compat": {"disableNonessentialTraffic": true}` on the profile. That
+switch **also disables gateway model discovery**, so swisscode says so on
+stderr when it is on — it is not shipped on by default, because a preset that
+quietly removed a feature to dodge an upstream bug would be the kind of silent
+behaviour this tool exists to avoid.
 
 ## Agents
 
@@ -426,14 +497,18 @@ below names the symptom it clears; set them per profile under `compat`:
 | `enableToolSearch` | MCP tool search being off by default off-first-party |
 | `forceIdleTimeoutOff` | long stalls on slow or locally hosted models |
 | `dropAttributionHeader` | poor prompt-cache hit rate through a gateway |
+| `disableNonessentialTraffic` | an endpoint wedged by background requests (Ollama) — **has a cost, see below** |
 
 A profile's `compat` overrides the provider's defaults key by key. Setting one
 to `false` actively clears the variable, so turning a flag off also defeats one
 left set in your shell.
 
-There is deliberately no flag for `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`: it
-also disables gateway model discovery, which is not what anyone reaching for a
-compatibility switch is asking for.
+**A flag that trades something away says so.** `disableNonessentialTraffic` also
+disables gateway model discovery, so swisscode prints what it costs rather than
+letting it look like a free switch — loudly on stderr when a *provider* turns it
+on for you, quietly (doctor-only) when you asked for it yourself. That
+distinction is the rule: a compatibility flag may never remove a capability
+silently.
 
 ### Warnings about your shell
 
@@ -544,6 +619,31 @@ out, so `dist/` still says `.js`.
 and ship a second, unbundled copy of React. `src/cli.ts` therefore declares the
 bundle's shape structurally, and `test/ports.conformance.ts` — which is never
 emitted — checks that declaration against the real module.
+
+## Contributing
+
+Contributions are very welcome, and the docs are written to make one cheap:
+
+| | |
+| --- | --- |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | setup, the inner loop, recipes, review, sign-off |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the map, the layers, the agent seam, the invariants |
+| [docs/STYLE.md](docs/STYLE.md) | the project's DNA — how code is written here, and why |
+| [docs/TESTING.md](docs/TESTING.md) | the suite's structure and the 0.3s inner loop |
+| [docs/SECURITY.md](docs/SECURITY.md) | threat model, and how to report a vulnerability privately |
+| [AGENTS.md](AGENTS.md) | the machine-readable brief for coding agents |
+
+**Coding agents are first-class contributors here.** Plenty of projects are
+working out how to say *no* to AI-written patches; this one says yes, and is
+built for it — the invariants are enforced by `test/architecture.test.ts` rather
+than left as norms to infer, the file headers carry the reasoning behind each
+decision, and the core test loop runs in 0.3 seconds with no build. Point your
+agent at [AGENTS.md](AGENTS.md).
+
+No disclosure is required, and human-written PRs are welcome on identical terms.
+The only real standard: understand the change well enough to answer questions
+about it. Sign your commits off with `git commit -s`
+([DCO](https://developercertificate.org/), not a CLA).
 
 ## Licence
 

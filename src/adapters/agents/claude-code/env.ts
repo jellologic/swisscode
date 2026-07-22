@@ -12,7 +12,7 @@ import { TIER_ENV } from './tiers.ts'
 import { autoCompactWindow, withExtendedContext } from './context.ts'
 import { inspectAmbient } from './hygiene.ts'
 import type { Profile } from '../../../ports/config-store.ts'
-import type { ClaudeCodeCompatFlag } from '../../../ports/claude-code.ts'
+import type { ClaudeCodeCompatEnv, ClaudeCodeCompatFlag } from '../../../ports/claude-code.ts'
 import type { ProviderDescriptor, ResolvedModels, Tier } from '../../../ports/provider.ts'
 import type { EnvMap } from '../../../ports/process.ts'
 import type { EnvWarning } from '../../../ports/agent.ts'
@@ -22,29 +22,39 @@ import type { EnvWarning } from '../../../ports/agent.ts'
  * boolean and this table decides what that means. Each entry below has a
  * documented symptom it addresses.
  *
- * CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is deliberately absent. It also
- * disables gateway model discovery, so it must not be reachable from a boolean
- * that reads like a harmless compatibility switch.
- *
  * `satisfies Record<ClaudeCodeCompatFlag, ...>` makes the table EXHAUSTIVE:
  * adding a flag to the port without adding its variable here is a compile error.
  * The `Record<string, ...>` annotation is what the lookups below need, since
  * they index with a key that came back from `Object.entries` (a plain string).
+ *
+ * A `consequence` marks a flag that TRADES SOMETHING AWAY. The loop below turns
+ * one into an EnvWarning, which is what lets a flag like
+ * disableNonessentialTraffic exist at all — see ports/claude-code.ts for why
+ * that replaced a deny-list.
  */
-export const COMPAT_ENV: Record<string, readonly [string, string]> = Object.freeze({
+export const COMPAT_ENV: Record<string, ClaudeCodeCompatEnv> = Object.freeze({
   // "400 Extra inputs are not permitted"
-  disableExperimentalBetas: ['CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS', '1'],
+  disableExperimentalBetas: { env: 'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS', value: '1' },
   // "400 Input tag 'adaptive' found"
-  disableAdaptiveThinking: ['CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING', '1'],
+  disableAdaptiveThinking: { env: 'CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING', value: '1' },
   // fast mode reported as "disabled by organization"
-  skipFastModeOrgCheck: ['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK', '1'],
+  skipFastModeOrgCheck: { env: 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK', value: '1' },
   // MCP tool search is off by default away from first-party
-  enableToolSearch: ['ENABLE_TOOL_SEARCH', '1'],
+  enableToolSearch: { env: 'ENABLE_TOOL_SEARCH', value: '1' },
   // stalls on slow or locally hosted models
-  forceIdleTimeoutOff: ['API_FORCE_IDLE_TIMEOUT', '0'],
+  forceIdleTimeoutOff: { env: 'API_FORCE_IDLE_TIMEOUT', value: '0' },
   // improves prompt-cache hit rate through gateways
-  dropAttributionHeader: ['CLAUDE_CODE_ATTRIBUTION_HEADER', '0'],
-} as const) satisfies Record<ClaudeCodeCompatFlag, readonly [string, string]>
+  dropAttributionHeader: { env: 'CLAUDE_CODE_ATTRIBUTION_HEADER', value: '0' },
+  // an endpoint that degrades under Claude Code's background requests — e.g.
+  // Ollama, whose /v1/messages/count_tokens?beta=true 404s (ollama/ollama#13949)
+  disableNonessentialTraffic: {
+    env: 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+    value: '1',
+    consequence:
+      'gateway model discovery is disabled too, so Claude Code can no longer ask the ' +
+      'endpoint which models it serves — pin every tier explicitly',
+  },
+}) satisfies Record<ClaudeCodeCompatFlag, ClaudeCodeCompatEnv>
 
 /**
  * The finished plan, Claude-Code-internal shape. `set`/`unset` are the neutral
@@ -80,15 +90,37 @@ export function buildEnvPlan(
 
   // 3. Compatibility switches. The provider ships defaults; the profile may
   //    override any individual key, including turning one OFF.
+  //
+  //    A flag carrying a `consequence` announces it. Severity depends on WHO
+  //    asked: a provider default is something the user did not choose, so it
+  //    surfaces on stderr every launch; a profile that names the flag itself is
+  //    an explicit choice already made, so it stays `info` — reported by the
+  //    doctor, never nagged about. Same distinction the profile banner draws.
+  const compatWarnings: EnvWarning[] = []
+  const announce = (flag: string, entry: ClaudeCodeCompatEnv, chosenByProfile: boolean): void => {
+    if (!entry.consequence) return
+    compatWarnings.push({
+      severity: chosenByProfile ? 'info' : 'medium',
+      code: 'compat-consequence',
+      message:
+        `compat flag "${flag}" is on${chosenByProfile ? '' : ' by provider default'}: ` +
+        entry.consequence,
+    })
+  }
+
   const profileCompat = definedEntriesOf(profile?.compat)
   for (const [flag, on] of Object.entries(provider?.compat ?? {})) {
     if (!on || flag in profileCompat) continue
     const mapped = COMPAT_ENV[flag]
-    if (mapped) write(mapped[0], mapped[1])
+    if (!mapped) continue
+    write(mapped.env, mapped.value)
+    announce(flag, mapped, false)
   }
   for (const [flag, on] of Object.entries(profileCompat)) {
     const mapped = COMPAT_ENV[flag]
-    if (mapped) write(mapped[0], on ? mapped[1] : '')
+    if (!mapped) continue
+    write(mapped.env, on ? mapped.value : '')
+    if (on) announce(flag, mapped, true)
   }
 
   // 4. Structural billing guard. A stale ANTHROPIC_API_KEY in the shell makes
@@ -99,8 +131,13 @@ export function buildEnvPlan(
   }
 
   // 5. Credential, unconditionally — an empty one clears a stale variable.
+  //    `defaultCredential` covers the keyless endpoint: a local Ollama ignores
+  //    the token entirely (verified: no header, a wrong key and a bearer token
+  //    all behave identically), but Claude Code still wants the variable to
+  //    carry something, so the descriptor supplies the placeholder rather than
+  //    every user being told to invent one.
   const credentialEnv = provider?.credentialEnv ?? 'ANTHROPIC_AUTH_TOKEN'
-  write(credentialEnv, resolveCredential(profile, ambientEnv))
+  write(credentialEnv, resolveCredential(profile, ambientEnv) || (provider?.defaultCredential ?? ''))
 
   // 6. All four tiers, from one table.
   const effectiveModels: Partial<Record<Tier, string>> = {
@@ -143,7 +180,9 @@ export function buildEnvPlan(
   }
 
   // Warnings describe decisions already made above, so they are computed from
-  // the finished plan rather than accumulated during it.
-  plan.warnings = inspectAmbient(plan, ambientEnv, { provider, profile })
+  // the finished plan rather than accumulated during it. The compat
+  // consequences are the exception: they are a property of WHICH flag was set
+  // and by whom, which the finished plan no longer records.
+  plan.warnings = [...compatWarnings, ...inspectAmbient(plan, ambientEnv, { provider, profile })]
   return plan
 }

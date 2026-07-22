@@ -47,7 +47,10 @@ export function buildIntent(
 
   const intent: LaunchIntent = {
     baseUrl: profile?.baseUrl ?? provider?.baseUrl ?? null,
-    credential: resolveCredential(profile, ambientEnv),
+    // `||`, not `??`: resolveCredential returns '' for "no key", and a keyless
+    // provider's placeholder has to fill that. Applied here so every agent gets
+    // it — Kilo and OpenCode reach a local endpoint through the same intent.
+    credential: resolveCredential(profile, ambientEnv) || (provider?.defaultCredential ?? ''),
     models,
     skipPermissions: opts.skipOverride ?? profile?.skipPermissions ?? false,
     extendedContext: provider?.extendedContext ?? null,

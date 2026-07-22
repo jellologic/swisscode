@@ -173,12 +173,17 @@ test('compat flags map to env vars and unset ones are never written', () => {
   assert.ok(!plan.unset.includes('ENABLE_TOOL_SEARCH'))
 })
 
-test('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is not reachable from a compat flag', async () => {
+test('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is reachable only with a declared cost', async () => {
   // It also disables gateway model discovery, so it must not hide behind a
-  // boolean that reads like a harmless compatibility switch.
+  // boolean that reads like a harmless compatibility switch. The mechanism —
+  // not a deny-list — is what enforces that now: the flag exists, and it
+  // carries the `consequence` that obliges the adapter to warn.
   const { COMPAT_ENV } = await import('../../src/adapters/agents/claude-code/env.ts')
-  const vars = Object.values(COMPAT_ENV).map(([k]) => k)
-  assert.ok(!vars.includes('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'))
+  const entry = Object.values(COMPAT_ENV).find(
+    (e) => e.env === 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+  )
+  assert.ok(entry, 'the variable is no longer reachable at all')
+  assert.ok(entry.consequence, 'it is reachable from a flag that declares no cost')
 })
 
 test('subagent pinning follows the resolved opus value', () => {

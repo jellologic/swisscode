@@ -268,7 +268,18 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
   const credential = plan?.set?.[credentialEnv] ?? null
   if (credential) {
     // Says WHERE it came from and never WHAT it is.
-    const origin = profile.apiKeyFromEnv ? `$${profile.apiKeyFromEnv}` : 'config.json'
+    //
+    // The placeholder case is called out rather than folded into 'config.json',
+    // which would be a lie: nothing about it is in the user's config, and a
+    // report that names the wrong source sends someone editing a file that does
+    // not contain what they are looking for.
+    const fromPreset =
+      !profile.apiKey && !profile.apiKeyFromEnv && credential === provider?.defaultCredential
+    const origin = profile.apiKeyFromEnv
+      ? `$${profile.apiKeyFromEnv}`
+      : fromPreset
+        ? `the ${provider?.label ?? 'provider'} preset — this endpoint ignores it`
+        : 'config.json'
     checks.push(makeCheck('credential', 'credential', OK, `${credentialEnv} set from ${origin}`))
   } else if (provider?.credentialOptional) {
     checks.push(

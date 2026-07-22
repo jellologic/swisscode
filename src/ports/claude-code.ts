@@ -38,10 +38,9 @@ export type ClaudeCodeCredentialEnv = 'ANTHROPIC_AUTH_TOKEN' | 'ANTHROPIC_API_KE
  *   enableToolSearch          MCP tool search is off by default off-first-party
  *   forceIdleTimeoutOff       long stalls on slow or locally hosted models
  *   dropAttributionHeader     poor prompt-cache hit rate through a gateway
- *
- * There is deliberately NO flag for CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC.
- * It also disables gateway model discovery, so it must not be reachable from a
- * boolean that reads like a harmless compatibility switch.
+ *   disableNonessentialTraffic  an endpoint wedged by Claude Code's background
+ *                               requests (see `consequence` below — this one
+ *                               TRADES SOMETHING AWAY and must announce it)
  */
 export type ClaudeCodeCompatFlag =
   | 'disableExperimentalBetas'
@@ -50,6 +49,47 @@ export type ClaudeCodeCompatFlag =
   | 'enableToolSearch'
   | 'forceIdleTimeoutOff'
   | 'dropAttributionHeader'
+  | 'disableNonessentialTraffic'
+
+/**
+ * One flag's lowering: which variable it writes, and what turning it on COSTS.
+ *
+ * `consequence` is the whole reason this is an object rather than the
+ * [variable, value] pair it replaced, and it exists because a blacklist was the
+ * wrong shape for the problem.
+ *
+ * CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC used to be banned outright — no
+ * flag, and a test forbidding any provider from reaching it through the
+ * descriptor `env` escape hatch. The stated objection was never that the
+ * variable is illegitimate; it was that it "must not hide behind a boolean that
+ * reads like a harmless compatibility switch", because it also disables gateway
+ * model discovery. That objection is about SILENCE, not about the variable.
+ *
+ * A blacklist also does not generalise. Every provider brings its own rules —
+ * one gateway needs a beta header dropped, the next needs background traffic
+ * off to stay upright — and answering each with another name in a deny-list
+ * grows a list instead of a mechanism.
+ *
+ * So the mechanism carries the cost instead: a flag that trades something away
+ * declares what, the Claude Code adapter emits an EnvWarning naming it, and the
+ * flag stops being able to act silently. That is the property the ban was
+ * protecting, expressed as a capability of the port rather than as a name no
+ * descriptor may type.
+ */
+export type ClaudeCodeCompatEnv = {
+  /** the variable this flag writes */
+  env: string
+  /** the value written when the flag is ON. Turning it off always unsets. */
+  value: string
+  /**
+   * What enabling this flag GIVES UP, phrased for a user reading stderr.
+   *
+   * Present only on flags with a real trade-off. Its presence is what obliges
+   * the adapter to warn, so omitting it on a flag that costs something is the
+   * bug this field exists to make visible.
+   */
+  consequence?: string
+}
 
 /**
  * A set of compat switches. Every key optional and every key a known flag: a

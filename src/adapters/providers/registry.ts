@@ -4,6 +4,8 @@ import { zai } from './zai.ts'
 import { openrouter } from './openrouter.ts'
 import { modelscope } from './modelscope.ts'
 import { siliconflow } from './siliconflow.ts'
+import { ollama } from './ollama.ts'
+import { ollamaCloud } from './ollama-cloud.ts'
 import { custom } from './custom.ts'
 
 /**
@@ -19,6 +21,8 @@ export const PROVIDERS: readonly ProviderDescriptor[] = Object.freeze([
   openrouter,
   modelscope,
   siliconflow,
+  ollama,
+  ollamaCloud,
   custom,
 ])
 

@@ -205,6 +205,33 @@ function deps(over: { state?: State; env?: EnvMap } = {}) {
   }
 }
 
+test('a provider placeholder is not treated as a secret and is not redacted', async () => {
+  // Regression. Ollama's defaultCredential is the literal string "ollama",
+  // which also appears in the provider id — so redacting it rewrote the
+  // provider line to `Ollama (local) (<redacted>)`, and would have eaten any
+  // model id containing the word. A placeholder that ships in the source is not
+  // a secret, and redaction must cover real secrets exactly rather than
+  // everything sitting in a credential-shaped slot.
+  const state = {
+    version: 2,
+    profiles: { local: { provider: 'ollama', models: { opus: 'qwen3-coder:30b' } } },
+    defaultProfile: 'local',
+    bindings: {},
+    settings: {},
+  } as unknown as State
+
+  const { report } = await runDoctor({ deps: deps({ state }).deps, offline: true })
+  const rendered = JSON.stringify(report)
+  assert.ok(!rendered.includes('<redacted>'), 'the placeholder was redacted as if secret')
+  assert.equal(report.provider, 'ollama')
+
+  // …and the report still says where it came from, without claiming it is
+  // something the user typed into config.json.
+  const credential = report.checks.find((c) => c.id === 'credential')
+  assert.match(credential!.detail, /preset/)
+  assert.doesNotMatch(credential!.detail, /config\.json/)
+})
+
 test('doctor probes each distinct model once, then tool calling once', async () => {
   const seen: { model: string; tools: boolean }[] = []
   const probe = {
