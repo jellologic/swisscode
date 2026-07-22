@@ -459,3 +459,52 @@ test('a profile on a genuinely unknown provider still says so', async () => {
   await h.run(['list'])
   assert.match(h.text(), /not in this build/)
 })
+
+// the two concepts the v3 split made addressable
+
+test('config accounts lists who pays, and the reverse index of who uses them', async () => {
+  // The reverse index is the point: a profile lists its accounts, but nothing
+  // else says which profiles an account backs — and that is the question you
+  // have before deleting one or rotating a key.
+  const state = STATE()
+  state.providerAccounts.spare = { provider: 'openrouter', apiKey: 'sk-or-B' }
+  state.profiles.z!.accounts = ['z', 'spare']
+  const h = harness({ state })
+  assert.equal(await h.run(['accounts']), 0)
+
+  const text = h.text()
+  assert.match(text, /spare/)
+  assert.match(text, /used by\s+z/)
+  // Presence and origin only — never any part of the value.
+  assert.match(text, /stored in config\.json/)
+  assert.ok(!text.includes('sk-or-B'), 'an account key reached the terminal')
+})
+
+test('config agents marks a shared agent profile as shared', async () => {
+  // Sharing is the capability the split bought; a listing that did not show it
+  // would leave the user unable to tell one setup from two identical ones.
+  const state = STATE()
+  state.profiles.or!.agentProfile = state.profiles.z!.agentProfile
+  const h = harness({ state })
+  assert.equal(await h.run(['agents']), 0)
+  assert.match(h.text(), /used by\s+or, z\s+\(shared\)|used by\s+z, or\s+\(shared\)/)
+})
+
+test('both list commands cope with an empty config rather than printing nothing', async () => {
+  const empty = {
+    version: 3,
+    providerAccounts: {},
+    agentProfiles: {},
+    profiles: {},
+    defaultProfile: null,
+    bindings: {},
+    settings: {},
+  } as unknown as State
+  const a = harness({ state: empty })
+  await a.run(['accounts'])
+  assert.match(a.text(), /No provider accounts yet/)
+
+  const b = harness({ state: empty })
+  await b.run(['agents'])
+  assert.match(b.text(), /No agent profiles yet/)
+})

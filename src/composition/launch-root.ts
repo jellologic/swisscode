@@ -12,6 +12,7 @@ import { applyOverrides, retargetProvider } from '../core/overrides.ts'
 import { resolveProfile } from '../core/profile.ts'
 import { resolveProfileRefs, type CursorPort } from '../core/resolve.ts'
 import { createFsConfigStore } from '../adapters/store/fs-config-store.ts'
+import { createFsCursorStore } from '../adapters/store/fs-cursor-store.ts'
 import { createNodeProcess, detectRecursion } from '../adapters/process/node-process.ts'
 import { registry as providerRegistry } from '../adapters/providers/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
@@ -62,6 +63,7 @@ export function defaultDeps(): LaunchDeps {
     registry: providerRegistry,
     agents: agentRegistry,
     proc: createNodeProcess(),
+    cursor: createFsCursorStore(),
   }
 }
 

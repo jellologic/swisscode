@@ -68,6 +68,8 @@ export type RunConfigCommandOptions = {
 
 const SUBCOMMANDS = Object.freeze([
   'list', 'default', 'agent', 'rm', 'use', 'bind', 'unbind', 'bindings', 'doctor', 'help',
+  'accounts',
+  'agents',
 ])
 
 const USAGE = `swisscode config — manage profiles and directory bindings
@@ -77,6 +79,9 @@ const USAGE = `swisscode config — manage profiles and directory bindings
   swisscode config list               every profile, with its provider and models
   swisscode config default <name>     set the profile used when nothing else applies
   swisscode config rm <name>          delete a profile and any bindings to it
+
+  swisscode config accounts           provider accounts, and which profiles use each
+  swisscode config agents             agent profiles, and which profiles use each
 
   swisscode config agent              list agents and which profile uses each
   swisscode config agent <name>       show which coding CLI <name> launches
@@ -161,6 +166,10 @@ export async function runConfigCommand({
       return doctorCommand({ deps, args: rest, out, err })
     case 'web':
       return webCommand({ deps, args: rest, out, err })
+    case 'accounts':
+      return listAccounts({ deps, out })
+    case 'agents':
+      return listAgentProfiles({ deps, out })
     default:
       break
   }
@@ -779,4 +788,75 @@ async function webCommand({
     err(`swisscode: ${(e as { message?: string }).message ?? 'could not start the web UI'}`)
     return 2
   }
+}
+
+/**
+ * `swisscode config accounts` — who pays, and who uses them.
+ *
+ * The reverse index is the point. A profile lists its accounts; nothing else
+ * says which profiles an account backs, and that is the question you have
+ * before deleting one or rotating a key.
+ */
+function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
+  const { state } = deps.store.load()
+  const names = Object.keys(state.providerAccounts ?? {}).sort()
+  if (names.length === 0) {
+    out('No provider accounts yet. Run `swisscode config` to make one.')
+    return 0
+  }
+
+  for (const name of names) {
+    // `!` — read off Object.keys of this very object.
+    const a = state.providerAccounts[name]!
+    const provider = deps.registry.byId(a.provider)
+    const usedBy = Object.entries(state.profiles ?? {})
+      .filter(([, p]) => (p.accounts ?? []).includes(name))
+      .map(([n]) => n)
+
+    out(`  ${name}${a.label ? `  (${a.label})` : ''}`)
+    out(`    provider   ${a.provider}${provider ? '' : '  — not in this build'}`)
+    if (a.baseUrl) out(`    baseUrl    ${a.baseUrl}`)
+    // Presence and ORIGIN only, exactly as `config list` does: a masked key is
+    // still a fingerprint and this output gets pasted into bug reports.
+    out(`    key        ${credentialOrigin(a)}`)
+    out(`    used by    ${usedBy.length > 0 ? usedBy.join(', ') : '— nothing'}`)
+  }
+  return 0
+}
+
+/**
+ * `swisscode config agents` — what runs, and who uses it.
+ *
+ * Named for the concept rather than the CLI: `config agent <profile> <id>`
+ * already existed and still edits which coding CLI a profile launches. This
+ * lists the agent PROFILES, which is the thing that can now be shared.
+ */
+function listAgentProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
+  const { state } = deps.store.load()
+  const names = Object.keys(state.agentProfiles ?? {}).sort()
+  if (names.length === 0) {
+    out('No agent profiles yet. Run `swisscode config` to make one.')
+    return 0
+  }
+
+  for (const name of names) {
+    const ap = state.agentProfiles[name]!
+    const usedBy = Object.entries(state.profiles ?? {})
+      .filter(([, p]) => p.agentProfile === name)
+      .map(([n]) => n)
+
+    out(`  ${name}${ap.label ? `  (${ap.label})` : ''}`)
+    out(`    agent      ${ap.agent ?? DEFAULT_AGENT_ID}`)
+    const pinned = TIERS.filter((t) => ap.models?.[t]).map((t) => `${t}=${ap.models![t]}`)
+    out(`    models     ${pinned.length > 0 ? pinned.join('  ') : '— provider defaults'}`)
+    if (ap.skipPermissions) out('    perms      --dangerously-skip-permissions by default')
+    const flags = Object.entries(ap.compat ?? {}).filter(([, on]) => on).map(([f]) => f)
+    if (flags.length > 0) out(`    compat     ${flags.join(', ')}`)
+    // Shared setups are the reason this concept exists, so say when one is.
+    out(
+      `    used by    ${usedBy.length > 0 ? usedBy.join(', ') : '— nothing'}` +
+        (usedBy.length > 1 ? '  (shared)' : ''),
+    )
+  }
+  return 0
 }
