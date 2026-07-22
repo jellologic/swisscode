@@ -184,12 +184,22 @@ export function parseAccount(
 
   const account: ProviderAccount = { ...(existing ?? {}), provider }
   if (typeof input.label === 'string') account.label = input.label
+  if (typeof input.configDir === 'string') {
+    if (input.configDir) account.configDir = input.configDir
+    else delete account.configDir
+  }
   if (typeof input.baseUrl === 'string') account.baseUrl = input.baseUrl
   if (typeof input.apiKey === 'string' && input.apiKey.length > 0) account.apiKey = input.apiKey
   if (input.apiKey === null) delete account.apiKey
   if (typeof input.apiKeyFromEnv === 'string') {
     if (input.apiKeyFromEnv) account.apiKeyFromEnv = input.apiKeyFromEnv
     else delete account.apiKeyFromEnv
+  }
+  // The two modes are MUTUALLY EXCLUSIVE, and the conflict is refused rather
+  // than resolved by precedence: "which credential did this actually use" must
+  // never have a subtle answer.
+  if (account.configDir && (account.apiKey || account.apiKeyFromEnv)) {
+    return 'an account uses either a key or an existing login directory, never both'
   }
   return account
 }

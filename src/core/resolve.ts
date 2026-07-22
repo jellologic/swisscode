@@ -88,6 +88,7 @@ function flatten(
   if (account.baseUrl !== undefined) resolved.baseUrl = account.baseUrl
   if (account.apiKey !== undefined) resolved.apiKey = account.apiKey
   if (account.apiKeyFromEnv !== undefined) resolved.apiKeyFromEnv = account.apiKeyFromEnv
+  if (account.configDir !== undefined) resolved.configDir = account.configDir
 
   if (agentProfile.agent !== undefined) resolved.agent = agentProfile.agent
   if (agentProfile.models !== undefined) resolved.models = agentProfile.models

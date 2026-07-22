@@ -125,3 +125,30 @@ export function extendedContextWarning(
       `Claude-Code-specific model suffix that ${agentLabel} does not send.`,
   }
 }
+
+/**
+ * Warn when an account authenticates by SESSION and this agent cannot use one.
+ *
+ * A session-mode account carries no credential — only a path to a directory
+ * where some agent already logged in. Claude Code can be pointed at it;
+ * Kilo and OpenCode take their credential inline and have no equivalent, so
+ * they would launch with nothing to authenticate with and fail at the first
+ * request with a message about the endpoint rather than about the account.
+ *
+ * `high`, unlike the tier-collapse warning: a collapsed tier still launches
+ * something useful, whereas this launch cannot work at all.
+ */
+export function sessionUnavailableWarning(
+  intent: LaunchIntent,
+  agentLabel: string,
+): EnvWarning | null {
+  if (!intent.sessionDir) return null
+  return {
+    severity: 'high',
+    code: 'session-unsupported',
+    message:
+      `this account authenticates with an existing ${'`claude`'} login (a session directory), ` +
+      `and ${agentLabel} cannot use one — it needs a credential of its own. Give the ` +
+      `account an API key, or point this profile at an agent that supports sessions.`,
+  }
+}

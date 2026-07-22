@@ -19,6 +19,7 @@ import {
   ambientUnset,
   anthropicOptions,
   collapsedTierWarning,
+  sessionUnavailableWarning,
   extendedContextWarning,
   modelRef,
   modelsBlock,
@@ -50,6 +51,9 @@ export const kilo = {
     skipPermissions: true,
     extendedContextSuffix: false,
     compatFlags: false,
+    // Kilo takes its credential inline in KILO_CONFIG_CONTENT and has no notion of
+    // an existing login directory, so a session-mode account gives it nothing.
+    sessionDir: false,
   },
   binary,
   translate(input: TranslateInput): Translation {
@@ -72,6 +76,8 @@ export const kilo = {
     const set: Record<string, string> = { [KILO_CONFIG_ENV]: JSON.stringify(config) }
 
     const warnings: EnvWarning[] = []
+    const noSession = sessionUnavailableWarning(intent, 'Kilo')
+    if (noSession) warnings.push(noSession)
     const collapse = collapsedTierWarning(intent, ['opus'], 'Kilo')
     if (collapse) warnings.push(collapse)
     const ext = extendedContextWarning(intent, primary, 'Kilo')

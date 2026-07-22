@@ -45,6 +45,24 @@ export type ProviderAccount = {
   apiKey?: string
   /** read from the ambient env instead, so no secret sits in the file */
   apiKeyFromEnv?: string
+  /**
+   * SESSION MODE: a directory holding a login the agent already performed.
+   *
+   * The third way to authenticate, and the odd one out — there is no secret
+   * here at all, only a path to somewhere the agent keeps its own credential.
+   * A Claude Code subscription works this way: you log in once with the
+   * official OAuth flow inside this directory, and every launch that names the
+   * account points the agent back at it.
+   *
+   * MUTUALLY EXCLUSIVE with `apiKey`/`apiKeyFromEnv`. An account carrying both
+   * is refused rather than resolved by precedence: "which credential did this
+   * actually use" is exactly the question that must never have a subtle answer.
+   *
+   * Neutral on purpose. Which environment variable expresses it belongs to the
+   * agent adapter — see `LaunchIntent.sessionDir` in ports/agent.ts — because
+   * core/ may not name an agent's dialect, and this port is read by core.
+   */
+  configDir?: string
 }
 
 /**
@@ -112,6 +130,8 @@ export type ResolvedProfile = {
   baseUrl?: string
   apiKey?: string
   apiKeyFromEnv?: string
+  /** session mode: a directory holding a login the agent already performed */
+  configDir?: string
   // ── from the agent profile ──
   agent?: string
   models?: Partial<Record<Tier, string>>

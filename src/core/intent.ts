@@ -57,5 +57,8 @@ export function buildIntent(
   }
   // Under exactOptionalPropertyTypes, only present it when there is one.
   if (profile?.contextWindows) intent.contextWindows = profile.contextWindows
+  // Session mode. Neutral here — which variable expresses it is the adapter's
+  // business, and core/ may not name an agent's dialect in emitted code.
+  if (profile?.configDir) intent.sessionDir = profile.configDir
   return intent
 }

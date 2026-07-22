@@ -145,14 +145,37 @@ export function buildEnvPlan(
     write('ANTHROPIC_API_KEY', '')
   }
 
+  // 4b. SESSION MODE. The account points at a directory holding a login Claude
+  //     Code already performed, so the credential is not ours to supply — we
+  //     just tell it where to look.
+  //
+  //     BOTH credential variables are cleared, and that is the whole point.
+  //     ANTHROPIC_API_KEY overrides an OAuth login outright, and a stale
+  //     ANTHROPIC_AUTH_TOKEN left in a shell would be presented instead of the
+  //     subscription this account names. Verified before this was written: the
+  //     anthropic-direct path cleared only the first, so a stale auth token
+  //     survived into the child — a silent wrong-account launch, which is the
+  //     exact failure the golden maps exist to catch.
+  const sessionDir = profile?.configDir
+  if (sessionDir) {
+    write('CLAUDE_CONFIG_DIR', sessionDir)
+    write('ANTHROPIC_API_KEY', '')
+    write('ANTHROPIC_AUTH_TOKEN', '')
+  }
+
   // 5. Credential, unconditionally — an empty one clears a stale variable.
   //    `defaultCredential` covers the keyless endpoint: a local Ollama ignores
   //    the token entirely (verified: no header, a wrong key and a bearer token
   //    all behave identically), but Claude Code still wants the variable to
   //    carry something, so the descriptor supplies the placeholder rather than
   //    every user being told to invent one.
-  const credentialEnv = provider?.credentialEnv ?? 'ANTHROPIC_AUTH_TOKEN'
-  write(credentialEnv, resolveCredential(profile, ambientEnv) || (provider?.defaultCredential ?? ''))
+  //    Skipped entirely in session mode: step 4b already cleared both
+  //    variables, and writing one back — even an empty one — would re-open the
+  //    question of which credential a subscription launch presented.
+  if (!sessionDir) {
+    const credentialEnv = provider?.credentialEnv ?? 'ANTHROPIC_AUTH_TOKEN'
+    write(credentialEnv, resolveCredential(profile, ambientEnv) || (provider?.defaultCredential ?? ''))
+  }
 
   // 6. All four tiers, from one table.
   const effectiveModels: Partial<Record<Tier, string>> = {
