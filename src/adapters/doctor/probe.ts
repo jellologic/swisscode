@@ -20,7 +20,7 @@ import type {
   ProbeRequest,
   ProbeResult,
 } from '../../ports/doctor.ts'
-import type { ClaudeCodeCredentialEnv } from '../../ports/provider.ts'
+import type { ClaudeCodeCredentialEnv } from '../../ports/claude-code.ts'
 
 const ANTHROPIC_VERSION = '2023-06-01'
 

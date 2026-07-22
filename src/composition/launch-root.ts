@@ -5,19 +5,26 @@
 // anything under adapters/ui or adapters/catalog. test/architecture.test.ts
 // walks the import graph from bin/swisscode.js and fails if it does.
 
-import { buildArgs } from '../core/args.ts'
-import { buildEnvPlan, materializeEnv } from '../core/env.ts'
+import { buildIntent } from '../core/intent.ts'
+import { materializeEnv } from '../core/env-plan.ts'
 import { applyOverrides, retargetProvider } from '../core/overrides.ts'
 import { resolveProfile } from '../core/profile.ts'
 import { createFsConfigStore } from '../adapters/store/fs-config-store.ts'
 import { createNodeProcess, detectRecursion } from '../adapters/process/node-process.ts'
 import { registry as providerRegistry } from '../adapters/providers/registry.ts'
-import type { EnvPlan } from '../core/env.ts'
+import { DEFAULT_AGENT_ID, registry as agentRegistry } from '../adapters/agents/registry.ts'
 import type { ProfileSelection } from '../core/profile.ts'
 import type { ConfigStorePort, LoadResult, Profile } from '../ports/config-store.ts'
 import type { ProviderDescriptor, ProviderRegistryPort } from '../ports/provider.ts'
 import type { EnvMap, ProcessPort } from '../ports/process.ts'
 import type { ProfileOverrides } from '../ports/config-store.ts'
+import type {
+  AgentCliPort,
+  AgentRegistryPort,
+  EnvWarning,
+  LaunchIntent,
+  Translation,
+} from '../ports/agent.ts'
 
 /**
  * THE WIRING CONTRACT.
@@ -34,6 +41,7 @@ import type { ProfileOverrides } from '../ports/config-store.ts'
 export type LaunchDeps = {
   store: ConfigStorePort
   registry: ProviderRegistryPort
+  agents: AgentRegistryPort
   proc: ProcessPort
 }
 
@@ -41,6 +49,7 @@ export function defaultDeps(): LaunchDeps {
   return {
     store: createFsConfigStore(),
     registry: providerRegistry,
+    agents: agentRegistry,
     proc: createNodeProcess(),
   }
 }
@@ -111,11 +120,18 @@ export type LaunchPlan = {
    * The refusal a few lines below is the only place that combination is fatal.
    */
   provider: ProviderDescriptor | null
-  plan: EnvPlan
+  /** the resolved agent CLI; always present (falls back to the default). */
+  agent: AgentCliPort
+  /** the neutral intent the core produced for this launch. */
+  intent: LaunchIntent
+  /** what the agent adapter lowered it to. */
+  translation: Translation
   borrowedFrom: string | null
   overridden: boolean
   env: EnvMap
   args: string[]
+  /** agent-resolution + adapter warnings, surfaced on stderr by `main`. */
+  warnings: EnvWarning[]
 }
 
 /**
@@ -130,6 +146,7 @@ export type PlannedLaunch = LaunchNeedsSetup | LaunchPlan
 export function planLaunch({
   store,
   registry,
+  agents,
   proc,
   passthrough = [],
   skipOverride = null,
@@ -142,8 +159,8 @@ export function planLaunch({
   if (detectRecursion(ambient)) {
     throw new LaunchError(
       'refusing to launch: SWISSCODE=1 is already set, which means swisscode ' +
-        'resolved to itself (an alias or a shim on PATH). Point ' +
-        'SWISSCODE_CLAUDE_BIN at the real claude binary.',
+        'resolved to itself (an alias or a shim on PATH). Point the agent binary ' +
+        'override (SWISSCODE_CLAUDE_BIN, SWISSCODE_KILO_BIN, …) at the real binary.',
       1,
     )
   }
@@ -202,18 +219,50 @@ export function planLaunch({
     )
   }
 
-  const plan = buildEnvPlan(profile, provider, ambient)
+  // Resolve the agent CLI. `profile.agent` already reflects any --cc-agent (it
+  // was merged by applyOverrides above). An explicit --cc-agent naming an
+  // unknown id is fatal; a stored unknown agent falls back to the default, so a
+  // config written by a newer swisscode still launches something.
+  const warnings: EnvWarning[] = []
+  const requestedAgentId = profile.agent ?? DEFAULT_AGENT_ID
+  let agent = agents.byId(requestedAgentId)
+  if (!agent) {
+    if (overrides.agent) {
+      throw new LaunchError(
+        `--cc-agent "${overrides.agent}" is not a known agent. Valid ids: ` +
+          `${agents.all().map((a) => a.id).join(', ')}.`,
+      )
+    }
+    agent = agents.byId(DEFAULT_AGENT_ID)
+    // The default adapter is always registered; this only narrows the type.
+    if (!agent) throw new LaunchError('the default agent adapter is not registered.', 1)
+    warnings.push({
+      severity: 'medium',
+      code: 'unknown-agent',
+      message:
+        `profile "${sel.name}" names agent "${requestedAgentId}", which this ` +
+        `version of swisscode does not know; launching ${agent.label} instead.`,
+    })
+  }
+
+  const intent = buildIntent(profile, provider, ambient, { skipOverride })
+  const translation = agent.translate({ intent, profile, provider, passthrough: args, ambient })
+  warnings.push(...translation.warnings)
+
   return {
     needsSetup: false,
     loaded,
     selection: sel,
     profile,
     provider,
-    plan,
+    agent,
+    intent,
+    translation,
     borrowedFrom,
     overridden: Object.keys(rest).length > 0 || Boolean(overrides.provider),
-    env: materializeEnv(ambient, plan),
-    args: buildArgs(profile, args, skipOverride),
+    env: materializeEnv(ambient, translation.plan),
+    args: translation.args,
+    warnings,
   }
 }
 
@@ -222,9 +271,10 @@ export function planLaunch({
  * default. Silence is the common case, which is what keeps the line meaningful.
  */
 export function bannerFor(planned: LaunchPlan): string | null {
-  const { selection, provider, profile } = planned
+  const { selection, provider, profile, agent } = planned
   const named = selection.source === 'binding' || selection.source === 'positional' || selection.source === 'flag'
-  if (!named && !planned.overridden) return null
+  const nonDefaultAgent = agent.id !== DEFAULT_AGENT_ID
+  if (!named && !planned.overridden && !nonDefaultAgent) return null
 
   const where =
     selection.source === 'binding'
@@ -233,13 +283,16 @@ export function bannerFor(planned: LaunchPlan): string | null {
         ? ' (--cc-profile)'
         : ''
   const model = profile?.models?.opus ?? provider?.defaultModels?.opus ?? '—'
+  // Only spell the agent when it is not the default — a Claude Code launch reads
+  // the same as it always has.
+  const via = nonDefaultAgent ? ` via ${agent.label}` : ''
   const borrowed = planned.borrowedFrom ? `, credential from profile "${planned.borrowedFrom}"` : ''
   const overridden = planned.overridden ? ', overridden for this run' : ''
   // ' · ' rather than '/': model ids contain slashes, and "openrouter/openrouter/fusion"
   // reads like a typo.
   return (
     `swisscode: profile "${selection.name ?? '—'}"${where} → ` +
-    `${provider?.id ?? profile?.provider} · ${model}${borrowed}${overridden}`
+    `${provider?.id ?? profile?.provider} · ${model}${via}${borrowed}${overridden}`
   )
 }
 
@@ -264,10 +317,11 @@ export function main({
   deps = null,
   report = defaultReport,
 }: MainOptions): PlannedLaunch {
-  const { store, registry, proc } = deps ?? defaultDeps()
+  const { store, registry, agents, proc } = deps ?? defaultDeps()
   const planned = planLaunch({
     store,
     registry,
+    agents,
     proc,
     passthrough,
     skipOverride,
@@ -291,7 +345,7 @@ export function main({
     // `info` describes something working as intended, so it stays off unless
     // someone is deliberately looking. Everything else describes a conflict
     // between the user's shell and their profile, which they cannot see.
-    for (const w of planned.plan.warnings ?? []) {
+    for (const w of planned.warnings ?? []) {
       if (w.severity !== 'info') report(`swisscode: ${w.message}`)
     }
 
@@ -300,7 +354,7 @@ export function main({
   }
 
   // Never stdout: stdout may be piped into something that parses it.
-  proc.replace(proc.resolveBinary(), planned.args, planned.env)
+  proc.replace(proc.resolveBinary(planned.agent.binary), planned.args, planned.env)
   return planned
 }
 

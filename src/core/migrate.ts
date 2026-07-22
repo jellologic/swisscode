@@ -24,7 +24,7 @@ export const SOFT_RESERVED = Object.freeze([
   'config', 'setup', 'help', 'version', 'bind', 'unbind', 'bindings',
   'profile', 'profiles', 'list', 'ls', 'add', 'new', 'rm', 'remove', 'delete',
   'edit', 'rename', 'default', 'use', 'which', 'doctor', 'migrate', 'env',
-  'export', 'import', 'update', 'upgrade', 'login', 'logout',
+  'agent', 'export', 'import', 'update', 'upgrade', 'login', 'logout',
 ])
 
 /**

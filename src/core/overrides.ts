@@ -25,6 +25,7 @@ export function applyOverrides(profile: Profile, overrides: ProfileOverrides = {
   const next = structuredClone(profile ?? {})
 
   if (typeof overrides.provider === 'string') next.provider = overrides.provider
+  if (typeof overrides.agent === 'string') next.agent = overrides.agent
   if (typeof overrides.baseUrl === 'string') next.baseUrl = overrides.baseUrl
 
   if (overrides.models !== undefined) {
@@ -103,8 +104,10 @@ export function retargetProvider(
     return { ok: true, profile: next, borrowedFrom: name }
   }
 
-  const credentialEnv = descriptor?.credentialEnv ?? 'ANTHROPIC_AUTH_TOKEN'
-  if (ambientEnv[credentialEnv]) {
+  // The credential variable is the provider's own (ANTHROPIC_AUTH_TOKEN etc.).
+  // Its name lives in the descriptor, never spelled here — core stays neutral.
+  const credentialEnv = descriptor?.credentialEnv
+  if (credentialEnv && ambientEnv[credentialEnv]) {
     delete next.apiKey
     next.apiKeyFromEnv = credentialEnv
     return { ok: true, profile: next, borrowedFrom: null }
@@ -121,6 +124,7 @@ export function retargetProvider(
     reason:
       `no credential for provider "${targetProviderId}". The current profile's key was ` +
       `entered for "${profile?.provider}" and will not be sent somewhere else. Add a ` +
-      `profile for "${targetProviderId}", or set ${credentialEnv} in your environment.`,
+      `profile for "${targetProviderId}"` +
+      (credentialEnv ? `, or set ${credentialEnv} in your environment.` : '.'),
   }
 }

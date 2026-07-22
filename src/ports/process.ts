@@ -13,13 +13,28 @@
  */
 export type EnvMap = Record<string, string>
 
+/**
+ * How to find one agent CLI's binary. DECLARATIVE data an `AgentCliPort`
+ * carries; the process adapter (which owns node:fs) turns it into a path via
+ * `resolveBinary` and applies the shared self-alias guard. Keeping this here
+ * rather than in ports/agent.ts avoids a type cycle (agent.ts imports it).
+ */
+export type AgentBinarySpec = {
+  /** binary name to look for on PATH, e.g. 'claude', 'kilo', 'opencode' */
+  name: string
+  /** env var that force-points at a specific binary, e.g. 'SWISSCODE_CLAUDE_BIN' */
+  overrideEnv: string
+  /** absolute paths to try when PATH misses, given the user's home directory */
+  fallbacks: (home: string) => string[]
+}
+
 export type ProcessPort = {
   /** A COPY of the ambient environment. Mutating it must not affect the host. */
   env: () => EnvMap
   /** may throw (deleted cwd); callers catch — see launch-root.js `safeCwd` */
   cwd: () => string
-  /** throws with a human-readable message when `claude` cannot be found */
-  resolveBinary: () => string
+  /** throws with a human-readable message when the agent binary cannot be found */
+  resolveBinary: (spec: AgentBinarySpec) => string
 
   /**
    * Hand off to the agent binary.

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { parseArgv } from '../src/core/args.ts'
 import { LaunchError, planLaunch, bannerFor } from '../src/composition/launch-root.ts'
 import { registry } from '../src/adapters/providers/registry.ts'
+import { registry as agents } from '../src/adapters/agents/registry.ts'
 import type { LaunchPlan } from '../src/composition/launch-root.ts'
 import type { EnvMap } from '../src/ports/process.ts'
 import type { State } from '../src/ports/config-store.ts'
@@ -49,7 +50,7 @@ function harness({ state = STATE(), cwd = '/somewhere', env = {} }: HarnessOptio
       throw new Error('planLaunch must not launch')
     },
   }
-  return { saves, store, proc, registry }
+  return { saves, store, proc, registry, agents }
 }
 
 /**
@@ -70,6 +71,7 @@ function plan(argv: string[], opts: HarnessOptions = {}): LaunchPlan & { saves: 
   const result = planLaunch({
     store: h.store,
     registry: h.registry,
+    agents: h.agents,
     proc: h.proc,
     passthrough: parsed.passthrough,
     skipOverride: parsed.skipOverride,
@@ -140,20 +142,20 @@ test('--cc-* after -- reaches claude untouched', () => {
 test('a bare --cc-model sets all four tier variables', () => {
   const r = plan(['--cc-model', 'kimi-k3'])
   for (const v of ['OPUS', 'SONNET', 'HAIKU', 'FABLE']) {
-    assert.equal(r.plan.set[`ANTHROPIC_DEFAULT_${v}_MODEL`], 'kimi-k3', v)
+    assert.equal(r.translation.plan.set[`ANTHROPIC_DEFAULT_${v}_MODEL`], 'kimi-k3', v)
   }
 })
 
 test('--cc-env honours the empty-string-means-unset contract', () => {
   const r = plan(['--cc-env', 'FOO=bar', '--cc-env', 'ANTHROPIC_BASE_URL='])
-  assert.equal(r.plan.set.FOO, 'bar')
-  assert.ok(r.plan.unset.includes('ANTHROPIC_BASE_URL'))
-  assert.equal(r.plan.set.ANTHROPIC_BASE_URL, undefined)
+  assert.equal(r.translation.plan.set.FOO, 'bar')
+  assert.ok(r.translation.plan.unset.includes('ANTHROPIC_BASE_URL'))
+  assert.equal(r.translation.plan.set.ANTHROPIC_BASE_URL, undefined)
 })
 
 test('--cc-base-url replaces the provider endpoint for this run only', () => {
   const r = plan(['--cc-base-url', 'http://127.0.0.1:8080'])
-  assert.equal(r.plan.set.ANTHROPIC_BASE_URL, 'http://127.0.0.1:8080')
+  assert.equal(r.translation.plan.set.ANTHROPIC_BASE_URL, 'http://127.0.0.1:8080')
   assert.equal(r.saves.length, 0)
 })
 
@@ -161,7 +163,7 @@ test('a directory binding still applies when no profile is named', () => {
   const r = plan(['--resume'], { cwd: '/work/or-project/src' })
   assert.equal(r.selection.name, 'or')
   assert.equal(r.selection.source, 'binding')
-  assert.equal(r.plan.set.ANTHROPIC_AUTH_TOKEN, 'or-secret')
+  assert.equal(r.translation.plan.set.ANTHROPIC_AUTH_TOKEN, 'or-secret')
 })
 
 test('an explicitly named profile beats the binding for that directory', () => {
@@ -174,8 +176,8 @@ test('an explicitly named profile beats the binding for that directory', () => {
 
 test('--cc-provider borrows the credential from a profile for that provider', () => {
   const r = plan(['--cc-provider', 'openrouter'])
-  assert.equal(r.plan.set.ANTHROPIC_AUTH_TOKEN, 'or-secret')
-  assert.equal(r.plan.set.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api')
+  assert.equal(r.translation.plan.set.ANTHROPIC_AUTH_TOKEN, 'or-secret')
+  assert.equal(r.translation.plan.set.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api')
   assert.equal(r.borrowedFrom, 'or')
 })
 
@@ -183,13 +185,13 @@ test('--cc-provider drops model ids chosen for the old provider', () => {
   // glm-5.2 posted to OpenRouter is a guaranteed 404 wearing the costume of a
   // working config, for exactly the reason the key is not forwarded either.
   const r = plan(['--cc-provider', 'openrouter'])
-  assert.equal(r.plan.set.ANTHROPIC_DEFAULT_OPUS_MODEL, 'openrouter/fusion')
-  assert.ok(!JSON.stringify(r.plan.set).includes('glm-5.2'))
+  assert.equal(r.translation.plan.set.ANTHROPIC_DEFAULT_OPUS_MODEL, 'openrouter/fusion')
+  assert.ok(!JSON.stringify(r.translation.plan.set).includes('glm-5.2'))
 })
 
 test('--cc-model still wins over the retargeted defaults', () => {
   const r = plan(['--cc-provider', 'openrouter', '--cc-model', 'anthropic/claude-opus-4.8'])
-  assert.equal(r.plan.set.ANTHROPIC_DEFAULT_OPUS_MODEL, 'anthropic/claude-opus-4.8')
+  assert.equal(r.translation.plan.set.ANTHROPIC_DEFAULT_OPUS_MODEL, 'anthropic/claude-opus-4.8')
 })
 
 test('--cc-provider refuses rather than POSTing one host a key meant for another', () => {
@@ -210,7 +212,7 @@ test('--cc-provider accepts a credential already in the ambient environment', ()
     state,
     env: { ANTHROPIC_AUTH_TOKEN: 'from-shell' },
   })
-  assert.equal(r.plan.set.ANTHROPIC_AUTH_TOKEN, 'from-shell')
+  assert.equal(r.translation.plan.set.ANTHROPIC_AUTH_TOKEN, 'from-shell')
 })
 
 test('an unknown --cc-provider lists the valid ids', () => {

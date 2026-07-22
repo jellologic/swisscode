@@ -11,11 +11,11 @@ import {
   renderText,
   staticChecks,
   summarize,
-} from '../../src/core/doctor.ts'
-import { buildEnvPlan } from '../../src/core/env.ts'
+} from '../../src/adapters/agents/claude-code/doctor.ts'
+import { buildEnvPlan } from '../../src/adapters/agents/claude-code/env.ts'
 import { zai } from '../../src/adapters/providers/zai.ts'
 import { anthropic } from '../../src/adapters/providers/anthropic.ts'
-import type { StaticChecksInput } from '../../src/core/doctor.ts'
+import type { StaticChecksInput } from '../../src/adapters/agents/claude-code/doctor.ts'
 import type { DoctorCheck } from '../../src/ports/doctor.ts'
 import type { ProbeResult } from '../../src/ports/doctor.ts'
 import type { LoadResult, State } from '../../src/ports/config-store.ts'

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runConfigCommand } from '../src/composition/config-root.ts'
 import { registry } from '../src/adapters/providers/registry.ts'
+import { registry as agents } from '../src/adapters/agents/registry.ts'
 import type { OpenUi } from '../src/composition/config-root.ts'
 import type { State } from '../src/ports/config-store.ts'
 
@@ -54,6 +55,7 @@ function harness(
       modes: () => ({ dir: 0o700, file: 0o600 }),
     },
     registry,
+    agents,
     proc: {
       env: () => ({}),
       cwd: () => cwd,

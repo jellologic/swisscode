@@ -1,4 +1,4 @@
-// Extended-context model-id suffix.
+// Extended-context model-id suffix — Claude Code's `[1m]` mechanism.
 //
 // Claude Code reads `[1m]` PER ENV VARIABLE, not per model. A config that
 // suffixes three tiers and forgets the fourth runs that fourth tier at the
@@ -6,22 +6,20 @@
 // codebase types the suffix by hand: descriptors carry bare ids plus a list of
 // which of them genuinely support the wider window, and the suffix is derived
 // here, for every tier, from that one list.
+//
+// This is Claude-Code-shaped (the `[1m]` spelling is a client-side signal), so
+// it lives in the adapter. The neutral capability declaration it reads
+// (`ExtendedContext`) stays in ports/provider.ts.
 
-import type { ExtendedContext } from '../ports/provider.ts'
+import type { ExtendedContext } from '../../../ports/provider.ts'
 
 export const SUFFIX = '[1m]'
 
 /**
  * What `Number.isFinite` already guarantees, said in a way the compiler can
- * use.
- *
- * `Number.isFinite` does not coerce — it returns false for every non-number,
- * including `undefined` — so `typeof v === 'number' && Number.isFinite(v)` is
- * EXACTLY the same runtime test. The only thing gained is narrowing: without
- * it, `noUncheckedIndexedAccess` leaves every window lookup below as
- * `number | undefined` and the `> 0` comparison does not compile. The
- * alternative was `!`, which would have asserted away the very case this
- * function exists to check for.
+ * use. `typeof v === 'number' && Number.isFinite(v)` is EXACTLY the same runtime
+ * test; the only thing gained is narrowing, without which every window lookup
+ * below stays `number | undefined` and the `> 0` comparison does not compile.
  */
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
@@ -53,10 +51,9 @@ export function bareModelId(modelId: string): string {
  * OVERLOADED because this function RETURNS WHAT IT WAS GIVEN when the input is
  * not a usable id: null in, null out; undefined in, undefined out. Collapsing
  * that into one nullable return type would push a `null` that cannot actually
- * occur into `ResolvedModels` in env.ts, whose values are `string | undefined`,
- * and the only ways to silence THAT would be a cast or a runtime
- * `?? undefined`. The overloads state the real contract instead, and erase to
- * nothing.
+ * occur into `ResolvedModels`, whose values are `string | undefined`, and the
+ * only ways to silence THAT would be a cast or a runtime `?? undefined`. The
+ * overloads state the real contract instead, and erase to nothing.
  */
 export function withExtendedContext(modelId: string, ec?: ExtendedContext | null): string
 export function withExtendedContext(
@@ -103,8 +100,7 @@ export function supportsExtendedContext(
  * Two sources, most-specific first, and NEITHER of them guesses:
  *
  *   1. `knownWindows` — captured from a catalog's published context_length at
- *      the moment the user picked the model, and stored on the profile. This is
- *      measured data about the exact endpoint being called.
+ *      the moment the user picked the model, and stored on the profile.
  *   2. `extendedContext` — the documented window for a model the descriptor
  *      explicitly declares as extended-context capable.
  *

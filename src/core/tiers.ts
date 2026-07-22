@@ -1,21 +1,24 @@
-// Claude Code's four model tiers and the env var that carries each one.
+// The four model tiers — the NEUTRAL vocabulary a profile uses to pin models.
 //
 // This table is the whole point. Everything that touches models iterates it, so
 // a tier can never be forgotten by omission — the failure mode where three
 // tiers are handled by three hand-written `if`s and the fourth quietly isn't.
+//
+// The env-var NAMES each tier lowers to (ANTHROPIC_DEFAULT_*_MODEL) are Claude
+// Code's, and live in the Claude Code adapter (adapters/agents/claude-code/
+// tiers.ts). This module stays neutral.
 
-import type { Tier, TierRecord } from '../ports/provider.ts'
+import type { Tier } from '../ports/provider.ts'
 
 export const TIERS = Object.freeze(['opus', 'sonnet', 'haiku', 'fable'] as const)
 
 /**
  * THE 0.1.0 BUG, AS A COMPILE ERROR — the array half.
  *
- * `TIER_ENV` below is a `TierRecord`, so dropping a key from IT is already
- * rejected. But `TIERS` is what every loop in this codebase actually iterates
- * (env.ts, args.ts, doctor.ts), so a tier present in the record and missing
- * from the array would still be skipped at launch — the same silent 200K
- * window, wearing a complete-looking table.
+ * `TIERS` is what every loop in this codebase iterates (the adapter's env-build,
+ * args.ts), so a tier present in the `Tier` union and missing from the array
+ * would be skipped at launch — the same silent 200K window, wearing a
+ * complete-looking table.
  *
  * These two aliases close that in both directions and cost nothing at runtime:
  * `AssertNever` fails to instantiate unless its argument is `never`, so a tier
@@ -25,21 +28,6 @@ export const TIERS = Object.freeze(['opus', 'sonnet', 'haiku', 'fable'] as const
 type AssertNever<T extends never> = T
 type _EveryTierIsListed = AssertNever<Exclude<Tier, (typeof TIERS)[number]>>
 type _EveryEntryIsATier = AssertNever<Exclude<(typeof TIERS)[number], Tier>>
-
-/**
- * `satisfies`, not a type annotation: it enforces exhaustiveness over `Tier` —
- * a missing tier is an error HERE, at the declaration, rather than in a distant
- * conformance file — while still inferring each value's literal type, so
- * `TIER_ENV[tier]` stays a known variable name instead of widening to `string`.
- */
-export const TIER_ENV = Object.freeze({
-  opus: 'ANTHROPIC_DEFAULT_OPUS_MODEL',
-  sonnet: 'ANTHROPIC_DEFAULT_SONNET_MODEL',
-  haiku: 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-  fable: 'ANTHROPIC_DEFAULT_FABLE_MODEL',
-}) satisfies TierRecord<string>
-
-export const TIER_ENV_VARS = Object.freeze(TIERS.map((t) => TIER_ENV[t]))
 
 export function isTier(name: string): name is Tier {
   // `readonly Tier[]`.includes(string) is rejected by design (TS#26255): the

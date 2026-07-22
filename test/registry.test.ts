@@ -5,9 +5,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PROVIDERS, REJECTED_PROVIDERS, byId } from '../src/adapters/providers/registry.ts'
 import { CATALOG_IDS } from '../src/adapters/catalog/registry.ts'
-import { SUFFIX } from '../src/core/context.ts'
-import { buildEnvPlan, COMPAT_ENV } from '../src/core/env.ts'
-import { TIERS, TIER_ENV_VARS } from '../src/core/tiers.ts'
+import { SUFFIX } from '../src/adapters/agents/claude-code/context.ts'
+import { buildEnvPlan, COMPAT_ENV } from '../src/adapters/agents/claude-code/env.ts'
+import { TIER_ENV_VARS } from '../src/adapters/agents/claude-code/tiers.ts'
+import { TIERS } from '../src/core/tiers.ts'
 
 const CREDENTIAL_ENVS = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY']
 

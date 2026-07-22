@@ -89,7 +89,7 @@ export type DoctorRun = {
 // the neutral half is `DoctorCheck`/`DoctorReport` above, which say nothing
 // about HTTP.
 
-import type { ClaudeCodeCredentialEnv } from './provider.ts'
+import type { ClaudeCodeCredentialEnv } from './claude-code.ts'
 
 export type ProbeRequest = {
   baseUrl: string

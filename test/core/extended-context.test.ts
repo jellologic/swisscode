@@ -7,10 +7,10 @@
 // bug lived in.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { SUFFIX, supportsExtendedContext } from '../../src/core/context.ts'
-import { buildEnvPlan } from '../../src/core/env.ts'
+import { SUFFIX, supportsExtendedContext } from '../../src/adapters/agents/claude-code/context.ts'
+import { buildEnvPlan } from '../../src/adapters/agents/claude-code/env.ts'
 import { byId, PROVIDERS } from '../../src/adapters/providers/registry.ts'
-import { TIER_ENV_VARS } from '../../src/core/tiers.ts'
+import { TIER_ENV_VARS } from '../../src/adapters/agents/claude-code/tiers.ts'
 
 const zai = byId('zai')
 

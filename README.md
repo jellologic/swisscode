@@ -2,7 +2,8 @@
 
 A drop-in launcher for [Claude Code](https://claude.com/claude-code). Pick a
 provider, models and permission flags once; after that `swisscode` behaves
-exactly like `claude`.
+exactly like `claude`. It can also launch other coding CLIs — [Kilo and
+OpenCode](#agents) — against the same providers.
 
 It replaces shell aliases like this:
 
@@ -116,6 +117,7 @@ disk. All of them are stripped before `claude` is executed.
 | --- | --- |
 | `--cc-profile <name>` | Use this profile. Unknown name → exit 2 |
 | `--cc-provider <id>` | Switch provider (see the credential rule below) |
+| `--cc-agent <id>` | Launch a different coding CLI (see [Agents](#agents)). Unknown id → exit 2 |
 | `--cc-base-url <url>` | Point at a different endpoint |
 | `--cc-model <id>` | Set **all four** tiers |
 | `--cc-model <tier>=<id>` | Set one tier; repeatable; applied left to right |
@@ -201,6 +203,48 @@ endpoints from your own scripts risks account suspension), and **DeepSeek
 direct** (`api.deepseek.com/anthropic` returns `400 unknown variant "system"` on
 Claude Code >= 2.1.154, with no verified workaround — DeepSeek weights through
 OpenRouter are fine).
+
+## Agents
+
+The **provider** is which model backend you talk to; the **agent** is which
+coding CLI you launch against it. They are orthogonal — any provider works with
+any agent, because every provider preset is an Anthropic-compatible endpoint and
+each agent is pointed at it.
+
+| Agent | id | Binary | Install |
+| --- | --- | --- | --- |
+| Claude Code (default) | `claude-code` | `claude` | [claude.com/claude-code](https://claude.com/claude-code) |
+| Kilo | `kilo` | `kilo` | `npm i -g @kilocode/cli` |
+| OpenCode | `opencode` | `opencode` | `npm i -g opencode-ai` |
+
+```sh
+swisscode config agent                 # list agents and which profile uses each
+swisscode config agent work opencode   # make the "work" profile launch OpenCode
+swisscode --cc-agent kilo -p "…"        # one run, without changing the profile
+```
+
+A profile with no agent set launches Claude Code, so nothing changes for an
+existing setup. swisscode resolves the agent's binary the same way it resolves
+`claude` — PATH first, then the usual install locations — and each has its own
+override: `SWISSCODE_CLAUDE_BIN`, `SWISSCODE_KILO_BIN`, `SWISSCODE_OPENCODE_BIN`.
+
+**How it reaches the provider.** Claude Code reads `ANTHROPIC_*` variables
+directly. Kilo and OpenCode instead take a full config inline
+(`KILO_CONFIG_CONTENT` / `OPENCODE_CONFIG_CONTENT`) that swisscode generates on
+the fly — an `@ai-sdk/anthropic` provider aimed at your endpoint and key. No
+file is written to your disk.
+
+**Capability differences are surfaced, never silently dropped.** Claude Code has
+four model tiers; Kilo has one slot and OpenCode has a main plus a small model.
+When a profile pins tiers an agent can't express, swisscode uses the opus-tier
+model and prints which tiers it ignored. The `[1m]` extended-context suffix is a
+Claude-Code-specific signal, so on Kilo/OpenCode you get a one-line warning that
+a 1M-window provider is being reached at its standard window.
+
+> **Kilo/OpenCode support is new.** The generated config matches each CLI's
+> documented schema, but the exact field names live behind single constants in
+> `src/adapters/agents/{kilo,opencode}/index.ts` — if a CLI update moves one,
+> it's a one-line fix with a test to catch it.
 
 ## Model picker
 

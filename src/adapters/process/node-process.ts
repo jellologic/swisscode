@@ -3,7 +3,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { EnvMap, ProcessPort } from '../../ports/process.ts'
+import type { AgentBinarySpec, EnvMap, ProcessPort } from '../../ports/process.ts'
 
 const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD'
 
@@ -163,31 +163,31 @@ export function createNodeProcess({
     }
   }
 
-  function resolveBinary(): string {
-    const override = env.SWISSCODE_CLAUDE_BIN
+  function resolveBinary(spec: AgentBinarySpec): string {
+    const override = env[spec.overrideEnv]
     if (override) {
       if (!isExecutable(override)) {
         throw new Error(
-          `SWISSCODE_CLAUDE_BIN is set to "${override}", which is not an executable file.`,
+          `${spec.overrideEnv} is set to "${override}", which is not an executable file.`,
         )
       }
       // The override was unguarded, so pointing it at swisscode produced an
       // infinite chain of execve calls that presents as a hang, not an error.
       if (isSelf(override)) {
         throw new Error(
-          `SWISSCODE_CLAUDE_BIN points at swisscode itself ("${override}"). ` +
-            'Point it at the real claude binary.',
+          `${spec.overrideEnv} points at swisscode itself ("${override}"). ` +
+            `Point it at the real ${spec.name} binary.`,
         )
       }
       return override
     }
 
     const { bin, skippedSelf } = findBinary({
-      name: 'claude',
+      name: spec.name,
       pathEnv: env.PATH || '',
       pathExt: env.PATHEXT ?? null,
       platform,
-      fallbacks: defaultFallbacks(env.HOME || homedir()),
+      fallbacks: spec.fallbacks(env.HOME || homedir()),
       isExecutable,
       isSelf,
     })
@@ -195,8 +195,8 @@ export function createNodeProcess({
 
     throw new Error(
       skippedSelf
-        ? 'the only `claude` on your PATH is swisscode itself. Point SWISSCODE_CLAUDE_BIN at the real binary.'
-        : 'could not find the `claude` binary on your PATH. Install Claude Code, or set SWISSCODE_CLAUDE_BIN.',
+        ? `the only \`${spec.name}\` on your PATH is swisscode itself. Point ${spec.overrideEnv} at the real binary.`
+        : `could not find the \`${spec.name}\` binary on your PATH. Install it, or set ${spec.overrideEnv}.`,
     )
   }
 

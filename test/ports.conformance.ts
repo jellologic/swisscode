@@ -37,6 +37,7 @@ import type {
   ModelCatalogPort,
 } from '../src/ports/catalog.ts'
 import type { AnthropicMessagesProbePort } from '../src/ports/doctor.ts'
+import type { AgentCliPort, AgentRegistryPort } from '../src/ports/agent.ts'
 
 import { anthropic } from '../src/adapters/providers/anthropic.ts'
 import { zai } from '../src/adapters/providers/zai.ts'
@@ -45,7 +46,11 @@ import { modelscope as modelscopeProvider } from '../src/adapters/providers/mode
 import { siliconflow } from '../src/adapters/providers/siliconflow.ts'
 import { custom } from '../src/adapters/providers/custom.ts'
 import { registry as providerRegistry } from '../src/adapters/providers/registry.ts'
-import { TIER_ENV } from '../src/core/tiers.ts'
+import { TIER_ENV } from '../src/adapters/agents/claude-code/tiers.ts'
+import { claudeCode } from '../src/adapters/agents/claude-code/index.ts'
+import { kilo } from '../src/adapters/agents/kilo/index.ts'
+import { opencode } from '../src/adapters/agents/opencode/index.ts'
+import { registry as agentRegistry } from '../src/adapters/agents/registry.ts'
 import { systemClock } from '../src/adapters/clock/system-clock.ts'
 import { fetchNet } from '../src/adapters/net/fetch-net.ts'
 import { createNodeProcess } from '../src/adapters/process/node-process.ts'
@@ -75,6 +80,15 @@ export const _siliconflow: ProviderDescriptor = siliconflow
 export const _custom: ProviderDescriptor = custom
 
 export const _providerRegistry: ProviderRegistryPort = providerRegistry
+
+// agent CLIs — every adapter against the AgentCliPort, and the registry.
+// A capability field that is not in the union, or a `translate`/`binary` that
+// drifts from the port, is a compile error in the adapter's own file; this is
+// where the whole set is listed against the whole port.
+export const _claudeCode: AgentCliPort = claudeCode
+export const _kilo: AgentCliPort = kilo
+export const _opencode: AgentCliPort = opencode
+export const _agentRegistry: AgentRegistryPort = agentRegistry
 
 /**
  * THE 0.1.0 BUG, AS A COMPILE ERROR.
