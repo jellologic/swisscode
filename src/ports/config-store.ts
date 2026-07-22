@@ -165,6 +165,24 @@ export type ConfigStorePort = {
   save: (state: State) => string
   path: () => string
   /**
+   * An opaque token for the file's current CONTENT, or null when there is no
+   * file yet. Optional in the same genuine sense as `modes`: a store that cannot
+   * derive one is still a valid store, and callers degrade rather than break.
+   *
+   * Exists for LOST-UPDATE detection, which only became reachable when a
+   * long-lived editor arrived. Every writer until now was a single short-lived
+   * command, so last-writer-wins was indistinguishable from correct. A web UI
+   * sitting open in a tab while `swisscode config work` runs in a terminal makes
+   * silent clobbering ordinary, and the clobbered field could be an API key.
+   *
+   * Honest about what it is: a check, not a lock. The window between comparing
+   * and writing is not closed by this — closing it needs an exclusive lock this
+   * project does not otherwise want. It reliably catches the interleaving people
+   * actually hit (read, think, write minutes later) and does not pretend to
+   * serialize concurrent writers.
+   */
+  revision?: () => string | null
+  /**
    * OPTIONAL, and genuinely so. The JSDoc contract this replaces did not list
    * `modes` at all, but composition/doctor-root.js probes for it
    * (`store.modes ? store.modes() : ...`) and the fs adapter implements it. It

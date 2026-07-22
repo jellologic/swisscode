@@ -8,6 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ConfigModes, ConfigStorePort, LoadResult, State } from '../../ports/config-store.ts'
@@ -211,5 +212,24 @@ export function createFsConfigStore({
     return out
   }
 
-  return { load, save, path: () => CONFIG_PATH, dir: () => CONFIG_DIR, modes }
+  /**
+   * Content hash, not mtime. mtime has coarse and platform-dependent
+   * granularity, so two writes inside the same tick can share a timestamp and a
+   * lost update would slip through exactly when writers are most concurrent.
+   * Hashing the bytes cannot have that failure. The file is a few KB, so the
+   * cost is irrelevant next to being wrong.
+   *
+   * Null when there is no file yet — which is itself a meaningful revision: a
+   * caller that read "no config" and then saves must still be told if someone
+   * created one in the meantime.
+   */
+  function revision(): string | null {
+    try {
+      return createHash('sha256').update(readFileSync(CONFIG_PATH)).digest('hex').slice(0, 32)
+    } catch {
+      return null
+    }
+  }
+
+  return { load, save, path: () => CONFIG_PATH, dir: () => CONFIG_DIR, modes, revision }
 }

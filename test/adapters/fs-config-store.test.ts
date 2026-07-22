@@ -204,3 +204,46 @@ test('a v1 config whose provider is no longer known still migrates', () => {
   const loaded = store.load()
   assert.equal(loaded.state.profiles.volcengine!.provider, 'volcengine')
 })
+
+// revision(): lost-update detection for long-lived editors (the web UI).
+
+test('revision is null when there is no file, and a string once there is', () => {
+  // "No config yet" is itself a revision worth quoting back: a caller that read
+  // an empty state and then saves must still be told if someone created one in
+  // the meantime.
+  const { store } = freshHome()
+  assert.equal(store.revision!(), null)
+  store.save({ version: 2, profiles: {}, defaultProfile: null, bindings: {}, settings: {} })
+  assert.equal(typeof store.revision!(), 'string')
+})
+
+test('revision follows CONTENT, not the clock', () => {
+  // Deliberately not mtime. Its granularity is coarse and platform-dependent,
+  // so two writes inside one tick can share a timestamp — a lost update would
+  // slip through exactly when writers are most concurrent. Hashing bytes cannot
+  // have that failure, and this test is what pins the choice.
+  const { store } = freshHome()
+  const base = { version: 2, profiles: {}, defaultProfile: null, bindings: {}, settings: {} }
+
+  store.save(base)
+  const first = store.revision!()
+
+  // Same content written again, immediately: same revision.
+  store.save(base)
+  assert.equal(store.revision!(), first, 'identical content changed the revision')
+
+  // Different content, also immediately: different revision.
+  store.save({ ...base, defaultProfile: 'work', profiles: { work: { provider: 'zai' } } } as never)
+  assert.notEqual(store.revision!(), first, 'a real edit did not change the revision')
+})
+
+test('an edit made behind our back is visible as a revision change', () => {
+  // The interleaving this exists to catch: read, wait, and meanwhile another
+  // swisscode command writes.
+  const { dir, store } = freshHome()
+  store.save({ version: 2, profiles: {}, defaultProfile: null, bindings: {}, settings: {} })
+  const held = store.revision!()
+
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ version: 2, profiles: {}, defaultProfile: 'other', bindings: {}, settings: {} }))
+  assert.notEqual(store.revision!(), held)
+})
