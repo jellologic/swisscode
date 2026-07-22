@@ -155,6 +155,23 @@ export type MeasuredAccount = {
   sevenDay: UsageWindow | null
 }
 
+/** How much is actually known about a variable. See the catalog's header. */
+export type ClaudeEnvKind = 'documented' | 'undocumented' | 'internal'
+
+export type ClaudeEnvVar = {
+  name: string
+  kind: ClaudeEnvKind
+  why?: string
+  category?: string
+  description?: string
+  managed?: boolean
+}
+
+export type ClaudeEnvCatalog = {
+  source: { agent: string; version: string }
+  variables: ClaudeEnvVar[]
+}
+
 export type UsageReport = {
   accounts: MeasuredAccount[]
   checkedAt: number | null
@@ -302,6 +319,14 @@ export const api = {
     }),
 
   catalog: (id: string) => call<CatalogResult>(`/api/catalog/${encodeURIComponent(id)}`),
+
+  /**
+   * Every environment variable Claude Code references.
+   *
+   * Fetched on demand, not in `bootstrap`: ~57 kB that only the Environment
+   * screen wants, and a cold start should not pay for a screen nobody opened.
+   */
+  claudeEnv: () => call<ClaudeEnvCatalog>('/api/claude-env'),
 
   /**
    * Measure every account's remaining subscription window, and cache it.

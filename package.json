@@ -1,7 +1,7 @@
 {
   "name": "swisscode",
   "version": "0.4.0",
-  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode. Run multiple Claude Pro/Max accounts, check usage limits and switch accounts without /login \u2014 or point any coding CLI at Ollama (local, no key), OpenRouter, z.ai/GLM, DeepSeek & Qwen. No proxy, no daemon.",
+  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode. Run multiple Claude Pro/Max accounts, check usage limits and switch accounts without /login — or point any coding CLI at Ollama (local, no key), OpenRouter, z.ai/GLM, DeepSeek & Qwen. No proxy, no daemon.",
   "type": "module",
   "bin": {
     "swisscode": "./bin/swisscode.js"
@@ -26,7 +26,8 @@
     "prepublishOnly": "node build.js",
     "size": "node scripts/size-budget.js",
     "dev:web": "vite --config web/vite.config.ts",
-    "typecheck:web": "tsc --noEmit -p web/tsconfig.json"
+    "typecheck:web": "tsc --noEmit -p web/tsconfig.json",
+    "extract:claude-env": "node scripts/extract-claude-env.mjs > src/adapters/agents/claude-code/env-catalog.ts"
   },
   "keywords": [
     "claude",

@@ -8,8 +8,9 @@ import { AgentProfiles } from './routes/AgentProfiles'
 import { Providers } from './routes/Providers'
 import { Settings } from './routes/Settings'
 import { Doctor } from './routes/Doctor'
+import { Environment } from './routes/Environment'
 
-type Tab = 'profiles' | 'accounts' | 'agentProfiles' | 'providers' | 'doctor' | 'settings'
+type Tab = 'profiles' | 'accounts' | 'agentProfiles' | 'providers' | 'environment' | 'doctor' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   // Ordered as the concepts compose: who pays, what runs, then the pairing.
@@ -17,6 +18,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'agentProfiles', label: 'Agent profiles' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'providers', label: 'Providers' },
+  { id: 'environment', label: 'Environment' },
   { id: 'doctor', label: 'Doctor' },
   { id: 'settings', label: 'Settings' },
 ]
@@ -145,6 +147,7 @@ export function App() {
         {tab === 'agentProfiles' ? <AgentProfiles data={data} reload={reload} /> : null}
         {tab === 'profiles' ? <Profiles data={data} reload={reload} /> : null}
         {tab === 'providers' ? <Providers data={data} reload={reload} /> : null}
+        {tab === 'environment' ? <Environment /> : null}
         {tab === 'doctor' ? <Doctor /> : null}
         {tab === 'settings' ? <Settings data={data} reload={reload} /> : null}
       </main>
