@@ -41,6 +41,7 @@ import {
   sessionDirLooksInitialised,
 } from '../adapters/claude-session/identity.ts'
 import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
+import { CONFLICT_REASON, credentialSource } from '../core/account.ts'
 import type { MeasureOptions } from '../adapters/usage/measure.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import { createOllamaIntrospect, interpretOllamaContext } from '../adapters/doctor/ollama.ts'
@@ -182,6 +183,23 @@ export async function runDoctor({
   for (const w of agentWarnings) {
     checks.push(
       makeCheck(`agent-${w.code}`, `agent (${agent.label})`, w.severity === 'info' ? OK : WARN, w.message),
+    )
+  }
+
+  // An account holding BOTH a key and a session directory.
+  //
+  // This check exists because its absence was a wrong answer, not a missing
+  // one. The web API refuses to save such an account and `accounts login`
+  // refuses to create one, but a hand-edited config reached the launch path,
+  // which silently preferred the session and dropped the key — while the
+  // `credential` check above cheerfully reported "no ANTHROPIC_API_KEY; this
+  // provider allows that" about a config that visibly contains one. The rule
+  // now has a single owner in core/account.ts and this consults it.
+  if (profile && credentialSource(profile) === 'conflict') {
+    checks.push(
+      makeCheck('credential-conflict', 'credential', WARN, CONFLICT_REASON, {
+        fix: `the launch uses the session directory and ignores the key — remove one from account "${profile.accountName}"`,
+      }),
     )
   }
 

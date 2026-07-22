@@ -57,3 +57,24 @@ export function formatToolSupport(tools: boolean | null | undefined): string {
   if (tools === false) return 'no tools'
   return 'tools unknown'
 }
+
+/**
+ * One subscription window — "37% used, resets 15:10" — for a person.
+ *
+ * AN UNPUBLISHED WINDOW IS "—", NEVER 0%. The endpoint genuinely omits these
+ * (both per-model weekly windows were null on the account this was built
+ * against), and rendering an omission as zero reads as "completely unused",
+ * which is the opposite of "we do not know".
+ *
+ * `resets` is optional because the two callers disagree for good reason: a CLI
+ * line has room for the reset time, a table cell in the browser does not.
+ */
+export function formatWindow(
+  window: { utilization: number | null; resetsAt: string | null } | null | undefined,
+  { resets = false }: { resets?: boolean } = {},
+): string {
+  if (!window || window.utilization === null) return '— not published'
+  const at = resets && window.resetsAt ? new Date(window.resetsAt) : null
+  const when = at && !Number.isNaN(at.getTime()) ? `, resets ${at.toLocaleString()}` : ''
+  return `${window.utilization}% used${when}`
+}

@@ -1,7 +1,12 @@
 import { useState } from 'react'
 import { css } from '../../styled-system/css'
-import { ApiError, api, type Bootstrap, type UsageReport, type UsageWindow } from '../api'
+import { ApiError, api, type Bootstrap, type ProviderAccount, type UsageReport } from '../api'
 import { Banner, Button, Dot, Empty, Field, Panel, inputStyle, monoInput } from '../ui'
+// The SAME decisions the CLI and the API make, imported rather than restated.
+// core/ is pure — no I/O, no node builtins — so it bundles into the browser as
+// happily as it compiles for the launch path.
+import { accountsUsedBy, credentialSource } from '../../../src/core/account'
+import { formatWindow } from '../../../src/core/format'
 
 /**
  * Provider accounts — who pays.
@@ -21,15 +26,39 @@ import { Banner, Button, Dot, Empty, Field, Panel, inputStyle, monoInput } from 
  * Only the user knows which account should pay instead.
  */
 /**
- * One window, in the smallest space that stays honest.
+ * Is this account ready to launch? The DECISION is core's; only the question is
+ * asked here.
  *
- * An unpublished window renders as “—”, never as 0%. The endpoint genuinely
- * omits these — both per-model weekly windows were null on the account this was
- * built against — and showing an omission as zero would read as "completely
- * unused", which is the opposite of "we do not know".
+ * A session account is ready when someone has LOGGED IN, not when a path is
+ * set: a directory nobody has logged into is indistinguishable in config.json
+ * from one that works, and fails only after execve.
  */
-function pct(w: UsageWindow | null): string {
-  return w?.utilization === null || w === null ? '—' : `${w.utilization}%`
+function ready(account: ProviderAccount, login: string | null): boolean {
+  switch (credentialSource(account)) {
+    case 'session':
+      return Boolean(login)
+    case 'key':
+    case 'key-from-env':
+      return true
+    default:
+      return false
+  }
+}
+
+/** The one-line credential summary, in the browser's own words. */
+function credentialLine(account: ProviderAccount, login: string | null): string {
+  switch (credentialSource(account)) {
+    case 'session':
+      return login ?? 'not logged in'
+    case 'key-from-env':
+      return `key from $${account.apiKeyFromEnv}`
+    case 'key':
+      return 'key stored'
+    case 'conflict':
+      return 'both a key and a login — the launch ignores the key'
+    default:
+      return 'no key'
+  }
 }
 
 export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Promise<void> }) {
@@ -303,9 +332,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
             // The reverse index: a profile lists its accounts, but only this
             // view can say which profiles an account backs — the question you
             // have before deleting one or rotating a key.
-            const usedBy = Object.entries(data.state.profiles ?? {})
-              .filter(([, p]) => (p.accounts ?? []).includes(name))
-              .map(([n]) => n)
+            const usedBy = accountsUsedBy(data.state.profiles, name)
             const login = a.configDir ? (data.logins?.[name] ?? null) : null
             const measured = usage?.accounts.find((m) => m.name === name)
             return (
@@ -327,17 +354,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
                   looks identical in config.json and fails only after execve, so
                   the dot tracks the login rather than the field.
                 */}
-                <Dot
-                  tone={
-                    a.configDir
-                      ? login
-                        ? 'ok'
-                        : 'faint'
-                      : a.hasKey || a.apiKeyFromEnv
-                        ? 'ok'
-                        : 'faint'
-                  }
-                />
+                <Dot tone={ready(a, login) ? 'ok' : 'faint'} />
                 <div className={css({ flex: 1, minW: 0 })}>
                   <div className={css({ fontSize: '13px', fontWeight: 500 })}>
                     {name}
@@ -350,13 +367,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
                   <div className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono' })}>
                     {a.provider}
                     {' · '}
-                    {a.configDir
-                      ? (login ?? 'not logged in')
-                      : a.apiKeyFromEnv
-                        ? `key from $${a.apiKeyFromEnv}`
-                        : a.hasKey
-                          ? 'key stored'
-                          : 'no key'}
+                    {credentialLine(a, login)}
                     {' · '}
                     {usedBy.length > 0 ? `used by ${usedBy.join(', ')}` : 'unused'}
                   </div>
@@ -366,7 +377,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
                         ? 'key account — no subscription window'
                         : measured.remaining === null
                           ? 'could not be measured'
-                          : `${measured.remaining}% left · 5h ${pct(measured.fiveHour)} · 7d ${pct(measured.sevenDay)}`}
+                          : `${measured.remaining}% left · 5h ${formatWindow(measured.fiveHour)} · 7d ${formatWindow(measured.sevenDay)}`}
                     </div>
                   ) : null}
                 </div>

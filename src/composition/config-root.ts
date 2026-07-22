@@ -35,6 +35,8 @@ import { describeIdentity, readSessionIdentity } from '../adapters/claude-sessio
 import { accountLogin } from '../adapters/claude-session/onboard.ts'
 import { swapCredential } from '../adapters/claude-session/swap.ts'
 import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
+import { CONFLICT_REASON, accountsUsedBy, credentialSource } from '../core/account.ts'
+import { formatWindow } from '../core/format.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import type { LoadResult, Profile, State } from '../ports/config-store.ts'
 import type { ProcessPort } from '../ports/process.ts'
@@ -429,10 +431,22 @@ function listProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
   return 0
 }
 
+/**
+ * Where a key comes from, phrased for a terminal.
+ *
+ * The CLASSIFICATION is core's (`credentialSource`); only the wording is this
+ * file's. That split is the point of the split: the web says the same things in
+ * its own vocabulary from the same decision.
+ */
 function credentialOrigin(account: { apiKey?: string; apiKeyFromEnv?: string }): string {
-  if (account.apiKeyFromEnv) return `read from $${account.apiKeyFromEnv} at launch`
-  if (account.apiKey) return 'stored in config.json (0600)'
-  return 'none'
+  switch (credentialSource(account)) {
+    case 'key-from-env':
+      return `read from $${account.apiKeyFromEnv} at launch`
+    case 'key':
+      return 'stored in config.json (0600)'
+    default:
+      return 'none'
+  }
 }
 
 type NamedProfileOptions = {
@@ -859,8 +873,8 @@ async function refreshUsage({
       continue
     }
     out(`    remaining  ${m.usage.remaining}%  (the tighter of the two windows)`)
-    out(`    5-hour     ${pctUsed(m.usage.fiveHour)}`)
-    out(`    7-day      ${pctUsed(m.usage.sevenDay)}`)
+    out(`    5-hour     ${formatWindow(m.usage.fiveHour, { resets: true })}`)
+    out(`    7-day      ${formatWindow(m.usage.sevenDay, { resets: true })}`)
   }
 
   const remaining = remainingMap(measurements)
@@ -981,16 +995,6 @@ function swapAccount({
   return 0
 }
 
-/** "37% used, resets 15:10 today" — a window, phrased for a person. */
-function pctUsed(w: { utilization: number | null; resetsAt: string | null }): string {
-  if (w.utilization === null) return '— not published'
-  const resets = w.resetsAt ? new Date(w.resetsAt) : null
-  return (
-    `${w.utilization}% used` +
-    (resets && !Number.isNaN(resets.getTime()) ? `, resets ${resets.toLocaleString()}` : '')
-  )
-}
-
 function accountsCommand({
   deps,
   args,
@@ -1053,13 +1057,20 @@ function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
     // `!` — read off Object.keys of this very object.
     const a = state.providerAccounts[name]!
     const provider = deps.registry.byId(a.provider)
-    const usedBy = Object.entries(state.profiles ?? {})
-      .filter(([, p]) => (p.accounts ?? []).includes(name))
-      .map(([n]) => n)
+    const usedBy = accountsUsedBy(state.profiles, name)
 
     out(`  ${name}${a.label ? `  (${a.label})` : ''}`)
     out(`    provider   ${a.provider}${provider ? '' : '  — not in this build'}`)
     if (a.baseUrl) out(`    baseUrl    ${a.baseUrl}`)
+    // A conflicting account is called out BEFORE anything else about it. The
+    // previous version simply rendered the session branch, so a stored key sat
+    // in config.json invisible to the one command whose job is saying what an
+    // account is.
+    if (credentialSource(a) === 'conflict') {
+      out(`    PROBLEM    ${CONFLICT_REASON}`)
+      out('               the launch will use the session directory and ignore the key.')
+      out(`               Remove one: \`swisscode config ${name}\` or edit the config.`)
+    }
     if (a.configDir) {
       // A session account has no key to describe, so describe the LOGIN
       // instead. The email is the thing the user recognises — "which of my
