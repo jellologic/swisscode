@@ -114,10 +114,25 @@ that an adapter meets it. Here the check is real in three places:
   caught. Gated on the provider id rather than generalised into an "introspect a
   provider" port method: one example is not enough to know that abstraction's
   shape, and the second caller is what should define it.
-- **`ui/*`** — the Ink wizard. The only `.tsx` in the project and the only code
-  that imports React.
+- **`claude-session/*`** — Claude subscription logins, which belong to the agent
+  rather than to us. Split three ways on purpose: `identity` reads *who* an
+  account is (a file read, no credential, no prompt, so listing is free),
+  `credentials` reads the token *only* to measure usage and never refreshes, and
+  `swap` is the **only writer in the project**. Keeping the writer in its own
+  module is what makes the read path's "cannot damage a login" claim structural
+  rather than careful.
+- **`usage/*`** — how much of a subscription or a balance is left.
+  `anthropic-subscription` reads the 5-hour and 7-day windows, `openrouter`
+  reads a credit balance, and `measure` is the loop both `config accounts usage`
+  and the doctor share. Configuration-time only, by architecture test.
+- **`web/*`** — the local HTTP API. `api.ts` is a pure
+  `(request, deps) -> response` function, which is why every refusal in it is
+  testable without a socket; `api-async.ts` owns the three routes that do I/O
+  and hands back `null` for anything else, so the pure handler keeps the rest.
+- **`ui/*`** — the Ink wizard. The only `.tsx` in `src/` and the only code there
+  that imports React. (The browser SPA lives in `web/`, outside `src/`.)
 
-### `composition/` — the four roots
+### `composition/` — the five roots
 
 | Root | Reached by | Notes |
 |---|---|---|
@@ -125,6 +140,7 @@ that an adapter meets it. Here the check is real in three places:
 | `config-root` | dynamic import | Every `swisscode config <sub>` subcommand. |
 | `doctor-root` | dynamic import | `config doctor`. Never runs automatically — the probes are real, billable inference requests. |
 | `ui-root` | dynamic import of `dist/ui.js` | The Ink wizard, bundled separately. |
+| `web-root` | dynamic import | `config web`. The port bind is the singleton mutex — no lockfile, no stale-PID reasoning. |
 
 Each takes the same `LaunchDeps` bag (`store`, `registry`, `agents`, `proc`),
 declared once in `launch-root` and imported by the others with `import type`, so
@@ -199,11 +215,19 @@ measuring anything at runtime, so it cannot flake.
 - never reaches React, Ink, or any `.tsx` file
 - never reaches `node_modules` — it resolves only inside `src/` and `node:`
   builtins
-- never reaches `adapters/ui`, `adapters/catalog`, `config-root`, or the doctor
+- never reaches `adapters/ui`, `adapters/catalog`, `adapters/usage`,
+  `adapters/claude-session`, `config-root`, or the doctor. The last two matter
+  for a sharper reason than bundle size: `.claude.json` is a ~200 kB file on a
+  well-used account, and reading a credential can raise a keychain prompt. A
+  launch resolves a session directory and lowers it to an environment variable
+  **without opening it** — the agent reads its own credential, milliseconds
+  later, as it always did
 - never calls `fetch`, and never imports `node:http`/`https`/`net`/`tls`/`dgram`.
   A launcher must not make network calls. The `execve`/`spawn` in the process
   adapter is the one deliberate subprocess exception
-- stays under 40 modules, so it remains auditable in one sitting
+- stays at or under 42 modules, so it remains auditable in one sitting. The
+  ceiling is a real constraint, not a decoration — it has already turned a
+  module away, and every raise has to name the capability that earned it
 
 The **only** sanctioned escape hatch is a dynamic `import()` from `src/cli.ts`.
 That is not a lint rule to be worked around — it is the property the project

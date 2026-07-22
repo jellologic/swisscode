@@ -49,8 +49,8 @@ runtime assertions and is checked by `tsc`. `npm run typecheck` runs it.
 |---|---|
 | `src/core/**` | Pure domain logic. No I/O, no top-level `let`/`var`, imports nothing outside `core/` and `node:` builtins at runtime. |
 | `src/ports/**` | Interfaces only. Every file must erase to exactly `export {}`. |
-| `src/adapters/**` | Implementations: providers, agent CLIs, catalogs, fs, process, net, clock, doctor probe, Ink UI. |
-| `src/composition/**` | Four composition roots: `launch-root` (hot path), `config-root`, `doctor-root`, `ui-root`. |
+| `src/adapters/**` | Implementations: providers, agent CLIs, catalogs, fs, process, net, clock, doctor probe, session logins, usage, web API, Ink UI. |
+| `src/composition/**` | Five composition roots: `launch-root` (hot path), `config-root`, `doctor-root`, `ui-root`, `web-root`. |
 | `bin/swisscode.js` | Published entry shim. Plain JS, never compiled, imports exactly `../dist/cli.js`. |
 | `test/**` | `.ts`, run from source, never compiled, never packed. |
 
@@ -63,9 +63,13 @@ not a patch.
 
 1. **The launch path** — the static import closure rooted at `src/cli.ts` — never
    reaches React, Ink, any `.tsx`, `node_modules`, `adapters/ui`,
-   `adapters/catalog`, `config-root`, or the doctor. It never calls `fetch` and
-   never imports `node:http`/`https`/`net`/`tls`/`dgram`. It stays under 40
-   modules.
+   `adapters/catalog`, `adapters/usage`, `adapters/claude-session`,
+   `config-root`, or the doctor. It never calls `fetch` and never imports
+   `node:http`/`https`/`net`/`tls`/`dgram`. It stays at or under 42 modules.
+   Session inspection is excluded for a sharper reason than bundle size:
+   `.claude.json` runs to ~200 kB on a well-used account and reading a
+   credential can raise a keychain prompt, so a launch lowers a session
+   directory to an env var **without opening it**.
    **The only sanctioned escape hatch is a dynamic `import()` from `src/cli.ts`.**
 2. **`core/` is pure**: no I/O, no clock, no `process.env`, no top-level mutable
    state. `dist/ui.js` inlines its own copy of `core/`, so module state would
@@ -205,6 +209,17 @@ neutral `LaunchIntent` is missing something — propose that instead.
 - CI (`.github/workflows/ci.yml`) runs `npm test` on every push to `main` and
   every PR, across Node 22 + 24 on ubuntu and macOS. `publish.yml` runs it again
   on a `v*` tag before publishing via npm trusted publishing (OIDC, no token).
+- A Claude subscription is a **login**, not a key: an account carries either
+  `apiKey`/`apiKeyFromEnv` or `configDir`, never both, and the validator refuses
+  the combination rather than picking one. Naming the default `~/.claude`
+  **unsets** `CLAUDE_CONFIG_DIR` rather than writing the path — Claude Code
+  branches on whether the variable is set, not on its value, so writing it is a
+  different and empty login. `isDefaultConfigDir` owns that question; do not
+  re-derive it.
+- Exactly one module writes a credential (`adapters/claude-session/swap.ts`) and
+  it writes a `0600` file, never the keychain: `security add-generic-password`
+  either puts the secret in argv or truncates stdin at 128 bytes. Read
+  `docs/SECURITY.md` before touching it.
 - A provider needing no real credential sets `credentialOptional: true` plus
   `defaultCredential` — the placeholder ships in source, is explicitly **not** a
   secret, and is excluded from the doctor's redaction set for that reason.

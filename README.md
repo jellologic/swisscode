@@ -304,6 +304,99 @@ stderr when it is on — it is not shipped on by default, because a preset that
 quietly removed a feature to dodge an upstream bug would be the kind of silent
 behaviour this tool exists to avoid.
 
+## Claude subscription accounts
+
+Everything above assumes an API key. A Claude Pro or Max subscription is not a
+key — it is a **login**, stored by Claude Code in your keychain and pointed at by
+`CLAUDE_CONFIG_DIR`. swisscode can hold several of them and pick between them.
+
+An account is one or the other, never both; a config naming a key *and* a
+session directory is refused rather than resolved by precedence.
+
+```sh
+swisscode config accounts login work          # make a session dir, run /login inside
+swisscode config accounts login personal --dir ~/.claude   # adopt the login you already have
+swisscode config accounts                     # who each account is, no keychain prompt
+```
+
+`login` creates `~/.config/swisscode/accounts/<name>` at `0700`, then runs the
+agent there so you can complete `/login` once. After that the account is a
+normal thing profiles can reference.
+
+> **Naming `~/.claude` means *unsetting* `CLAUDE_CONFIG_DIR`, not setting it to
+> that path.** Claude Code chooses its keychain item on whether the variable is
+> *set*, not on its value — so `CLAUDE_CONFIG_DIR="$HOME/.claude"` is a
+> different, empty login from the one you use every day. swisscode handles this
+> for you; it is documented because the failure is silent. Identity comes from a
+> shared `~/.claude.json`, so a tool that gets this wrong reports the *correct*
+> email for a session that cannot authenticate.
+
+### How much is left
+
+```sh
+swisscode config accounts usage
+```
+
+Reads each subscription's real 5-hour and 7-day windows from Anthropic — the
+same figures `/usage` shows you, for every account at once, without switching
+into each one to look. It caches them, and a profile with
+`"strategy": "usage"` then launches on whichever account has the most left:
+
+```json
+{ "agentProfile": "default", "accounts": ["personal", "work"], "strategy": "usage" }
+```
+
+Ranking uses the **tighter of the two windows, never their average**. An account
+at 5% of its 5-hour window and 95% of its weekly one has almost nothing left,
+and averaging to 50% would send work straight at it. An account that cannot be
+measured is treated as *unknown* and passed over, never as *full*.
+
+`swisscode config doctor` refreshes the same cache, and the Accounts screen in
+the web UI has a button for it. Nothing measures on the launch path — a launch
+resolves a directory and hands it to the agent without opening it, which is why
+an ordinary `swisscode` never raises a keychain prompt.
+
+### Switching a running session
+
+```sh
+swisscode config accounts swap --into work personal
+```
+
+`/login` writes **one global slot**, and every running Claude Code re-reads it
+within about 30 seconds — which is why switching accounts in one terminal
+switches all of them, and why an artifact created just after a switch can land
+on the wrong account. `swap` writes **one directory's** slot instead. Sessions
+using any other directory are unaffected.
+
+Three things to know:
+
+- A session already running in that directory picks it up **within ~30s**, not
+  instantly. swisscode cannot reach into a running process; the agent re-reads
+  its credential on its own timer.
+- Anything that session creates *after* that point belongs to the new account.
+- Overwriting a *different* account's login needs `--yes`.
+
+### Where this sits with Anthropic
+
+Stated plainly, because you are entitled to decide for yourself:
+
+- **Rotating between subscriptions you pay for is fine. Sharing or reselling one
+  is not.** swisscode is structurally incapable of the second: it never sits in
+  the request path, holds no server, and proxies nothing. It sets environment
+  variables and calls `execve`.
+- **`CLAUDE_CONFIG_DIR` and the usage endpoint are undocumented.** Both work,
+  and per-directory isolation is the mechanism Claude Code itself implements,
+  but neither is a contract. If Anthropic changes them, expect the measurement
+  to degrade to "unknown" rather than to lie — every parse here fails to null.
+- **Per-launch selection is the well-trodden part; `swap` is not.** Choosing an
+  account before starting the agent is ordinary. Overwriting a live session's
+  credential is doing programmatically what `/login` already does by hand — same
+  official client, same accounts you pay for — but it is not something Anthropic
+  has explicitly blessed.
+- **`claude -p` bills a credit pool**, not the subscription window, so the
+  5-hour figure describes interactive sessions. No behaviour change; just don't
+  read the number as covering headless runs.
+
 ## Web UI
 
 The CLI is not the only way in. `swisscode config web` serves a local
@@ -435,11 +528,14 @@ holds an API key in plaintext.
 
 ```json
 {
-  "version": 2,
-  "profiles": {
-    "openrouter": {
-      "provider": "openrouter",
-      "apiKey": "sk-or-…",
+  "version": 3,
+  "providerAccounts": {
+    "openrouter": { "provider": "openrouter", "apiKey": "sk-or-…" },
+    "personal":   { "provider": "anthropic", "configDir": "/Users/me/.claude" }
+  },
+  "agentProfiles": {
+    "default": {
+      "agent": "claude-code",
       "models": {
         "opus": "openrouter/fusion",
         "sonnet": "…",
@@ -452,21 +548,32 @@ holds an API key in plaintext.
       "env": { "ANY_EXTRA_VAR": "value" }
     }
   },
-  "defaultProfile": "openrouter",
+  "profiles": {
+    "work": { "agentProfile": "default", "accounts": ["openrouter"], "strategy": "single" }
+  },
+  "defaultProfile": "work",
   "bindings": { "/Users/me/clients/acme": "acme" },
   "settings": { "quiet": false, "bindingWalkDepth": 40 }
 }
 ```
 
+Three separate things, because they vary independently. A **provider account**
+is who pays — a key, or a subscription login. An **agent profile** is what runs
+— which CLI, which model per tier, which flags. A **profile** pairs them and
+says how to choose when it names more than one account (`single`, `round-robin`,
+or `usage`). One agent profile can be shared by several profiles that bill
+different accounts, which is the arrangement the older flat shape could not
+express.
+
 `bindings` records absolute paths, which means client names and project layout.
 That's new non-credential information in this file — worth remembering before
 pasting it into a bug report.
 
-A config written by swisscode 0.1.0 — a single flat object with a top-level
-`provider` — is migrated to this shape automatically the first time a newer
-version reads it. The original is kept beside it as `config.v1.bak.json`, and a
-migration that cannot be written to disk is used in memory rather than blocking
-the launch.
+Older configs migrate automatically the first time a newer version reads them —
+v1's single flat object with a top-level `provider`, and v2's profiles that
+carried credential and agent settings together. The original is kept beside it
+as `config.v1.bak.json`, and a migration that cannot be written to disk is used
+in memory rather than blocking the launch.
 
 Claude Code has **four** model tiers. A tier you leave out inherits the
 provider's default; a tier set to the empty string is explicitly unset. Setting
