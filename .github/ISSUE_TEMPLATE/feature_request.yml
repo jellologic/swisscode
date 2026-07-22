@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest a capability, a flag, or a change in behaviour
+labels: ['enhancement', 'needs triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two constraints worth knowing before you write, because they decide the
+        shape of most answers here:
+
+        - **The reserved namespace is closed.** `config`, `setup`, `--safe`,
+          `--yolo`, `--` and the `--cc-` prefix are the entire list, and it does
+          not grow. Everything else you type is forwarded to the agent verbatim,
+          which is what makes swisscode a drop-in. A new user-facing command
+          goes under `swisscode config <thing>`.
+        - **The launch path carries no new weight.** It must stay dependency-
+          free, network-free and small enough to audit by hand. Features that
+          need more than that live behind a lazy import, like the wizard, the
+          `config` subcommands and the doctor already do.
+
+        Neither is a "no" — they are where the design pressure goes.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do today, and what makes it awkward?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like instead
+      description: A sketch is fine. Exact flag spellings are not required.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you have tried
+      description: |
+        Existing escape hatches often cover more than they look like they do —
+        `--cc-env KEY=VALUE`, a profile's `env` block, `apiKeyFromEnv`, the
+        `custom` provider, per-directory bindings, `compat` flags.
+    validations:
+      required: false

@@ -1,0 +1,92 @@
+name: New provider or agent
+description: Ask for a model backend or a coding CLI that swisscode does not ship yet
+labels: ['enhancement', 'provider/agent']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A **provider** is a model backend (an Anthropic-compatible endpoint).
+        An **agent** is a coding CLI that swisscode launches against one. They
+        are orthogonal — every provider works with every agent.
+
+        Some providers were investigated and deliberately **not** shipped, each
+        for a specific verified reason: see `REJECTED_PROVIDERS` in
+        `src/adapters/providers/registry.ts` (currently iFlow, Volcengine and
+        DeepSeek-direct). If you are asking for one of those, say what changed —
+        a rejection with new evidence is a perfectly good issue.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Which are you requesting
+      options:
+        - A provider (model backend)
+        - An agent (coding CLI)
+    validations:
+      required: true
+
+  - type: input
+    id: name
+    attributes:
+      label: Name
+      placeholder: Fireworks / Cerebras / Amp / …
+    validations:
+      required: true
+
+  - type: input
+    id: docs
+    attributes:
+      label: Link to the official docs
+      description: The vendor page describing the endpoint or the CLI's config schema.
+    validations:
+      required: true
+
+  - type: textarea
+    id: endpoint
+    attributes:
+      label: For a provider — endpoint details
+      description: |
+        The **Anthropic-compatible** base URL (not the OpenAI-compatible `/v1`
+        route — adding `/v1` here produces `/v1/v1/messages` and a 404), which
+        header carries the credential, and any model ids worth defaulting to.
+      placeholder: |
+        base URL: https://api.example.com/anthropic
+        credential header: x-api-key / Authorization: Bearer …
+        default models: example-large, example-small
+    validations:
+      required: false
+
+  - type: textarea
+    id: cli-config
+    attributes:
+      label: For an agent — how it is configured
+      description: |
+        swisscode cannot write files into your project, so an agent has to be
+        configurable by environment alone — Claude Code reads `ANTHROPIC_*`
+        directly; Kilo and OpenCode take a whole config inline via
+        `KILO_CONFIG_CONTENT` / `OPENCODE_CONFIG_CONTENT`. Which does this one
+        support, and how many model slots does it have?
+    validations:
+      required: false
+
+  - type: textarea
+    id: extended-context
+    attributes:
+      label: Extended context, if any
+      description: |
+        Which model ids genuinely serve a window wider than 200K, and how wide?
+        This is used to derive the `[1m]` suffix. Only list models you have
+        confirmed — a speculative entry is the exact bug this field exists to
+        prevent.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Confirm
+      options:
+        - label: I have used this endpoint/CLI myself, or I have linked docs that confirm the details above
+          required: true
+        - label: Nothing above contains an API key or token
+          required: true

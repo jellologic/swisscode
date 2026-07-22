@@ -1,0 +1,74 @@
+name: CI
+
+# The merge gate. Every claim CONTRIBUTING.md makes about "green before review"
+# is this workflow — before it existed, nothing tested a pull request and
+# publish.yml only ran on a v* tag, which is far too late to learn a PR is red.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Nothing here writes. Publishing is publish.yml's job and it is the only
+# workflow that needs id-token.
+permissions:
+  contents: read
+
+# A force-push mid-run should cancel the superseded run rather than race it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test · node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # One red cell must not hide the others: knowing a failure is
+      # macOS-only (or Node-22-only) is most of the diagnosis.
+      fail-fast: false
+      matrix:
+        # Both ends of the supported range, and 22 is not there for symmetry.
+        # It is the floor `engines` promises, so it is where the toolchain has
+        # to hold up: Node's type stripping is what lets the suite run straight
+        # from .ts sources, and tsc's emit is only equivalent to that stripped
+        # program because target es2023 downlevels nothing on 22.
+        #
+        # It is also the version where process.execve does not exist (23.11+),
+        # so a real launch there takes the spawn fallback. Note the suite does
+        # not distinguish: spawnFallback is unit-tested directly with an
+        # injected SignalHost on every version, and nothing asserts on the
+        # dispatch in createNodeProcess().replace(), since exercising the
+        # execve branch would replace the test process.
+        #
+        # ubuntu + macOS because binary resolution, the 0600/0700 config
+        # permissions and the signal relay are all platform-shaped.
+        # Windows is deliberately absent: execve does not exist there, the
+        # POSIX mode bits the config store asserts are meaningless, and nobody
+        # has verified the suite on it. Claiming coverage we do not have would
+        # be worse than the gap.
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+
+    steps:
+      # SHA-pinned, matching publish.yml. A moved tag is a supply-chain edge
+      # even on a read-only job, and consistency across the two workflows means
+      # Dependabot bumps them together in one reviewable PR.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm test` is the whole gate on purpose: tsc --noEmit (which is what
+      # runs test/ports.conformance.ts), then the two-stage build, then
+      # node --test over the suite. Splitting it into separate steps would let
+      # the three UI suites run against a stale dist/.
+      - name: Test
+        run: npm test

@@ -1,0 +1,20 @@
+# Blank issues stay enabled: not every report fits a form, and a form that
+# turns someone away costs more than the triage it saves.
+blank_issues_enabled: true
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/jellologic/swisscode/security/advisories/new
+    about: >-
+      Report privately, never as a public issue. swisscode handles API keys and
+      builds the environment your agent runs in — see docs/SECURITY.md.
+
+  - name: How do I contribute?
+    url: https://github.com/jellologic/swisscode/blob/main/docs/CONTRIBUTING.md
+    about: Setup, the inner loop, the invariants, and how PRs are reviewed.
+
+  - name: Contributing with a coding agent
+    url: https://github.com/jellologic/swisscode/blob/main/AGENTS.md
+    about: >-
+      Agent-written PRs are welcome here. AGENTS.md is the machine-readable
+      brief — point your agent at it.
