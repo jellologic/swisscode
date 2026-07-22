@@ -137,6 +137,15 @@ export type ProviderDescriptor = {
   extendedContext?: ExtendedContext
   /** id of a ModelCatalogPort, or null when this provider publishes no catalog */
   catalogId?: string | null
+  /**
+   * id of a ProviderUsagePort, or absent when this provider publishes no
+   * remaining-capacity endpoint — which is most of them.
+   *
+   * Absent means UNKNOWN, never zero. Only wire this for a provider whose
+   * endpoint has been verified against the live service; a speculative entry
+   * would route real money by a number nobody checked.
+   */
+  usageId?: string | null
   subagentFollowsOpus?: boolean
   hints?: ProviderHints
 }

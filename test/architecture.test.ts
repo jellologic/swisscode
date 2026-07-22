@@ -104,12 +104,17 @@ test('the published bin shim is dependency-free and runs compiled output', () =>
   )
 })
 
-test('the launch path never statically reaches adapters/ui or adapters/catalog', () => {
+test('the launch path never statically reaches adapters/ui, catalog or usage', () => {
   const { files } = launchClosure()
   for (const f of files) {
     const rel = relative(ROOT, f)
     assert.ok(!rel.startsWith('src/adapters/ui'), `${rel} is a UI adapter`)
     assert.ok(!rel.startsWith('src/adapters/catalog'), `${rel} is a catalog adapter`)
+    // Usage endpoints are CONFIGURATION-TIME only. The `usage` selection
+    // strategy reads a cached snapshot precisely because the launch path may
+    // not reach the network, and an adapter that crept onto it would quietly
+    // turn every launch into an HTTP request to a billing endpoint.
+    assert.ok(!rel.startsWith('src/adapters/usage'), `${rel} is a usage adapter`)
   }
 })
 
