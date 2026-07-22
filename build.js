@@ -44,6 +44,11 @@ await esbuild.build({
   format: 'esm',
   target: 'node22',
   jsx: 'automatic',
+  // Minified, unlike stage 1's output. This one is already a single opaque
+  // blob that nothing on the launch path may reach and no human reads module by
+  // module, so the auditability argument that keeps `dist/` unbundled does not
+  // apply to it — and it halves, 74.5 kB to 38.2 kB.
+  minify: true,
   external: ['ink', 'react', 'react/jsx-runtime', 'ink-select-input', 'ink-text-input'],
 })
 

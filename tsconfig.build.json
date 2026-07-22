@@ -16,7 +16,21 @@
     // No source maps either. They would reference .ts files that the tarball
     // deliberately does not ship, leaving dangling links in the artifact.
     // Dev debugging reads the real sources, because dev runs the real sources.
-    "sourceMap": false
+    "sourceMap": false,
+
+    // Comments are stripped from the EMITTED artifact only.
+    //
+    // This codebase carries an unusually heavy comment load on purpose — it is
+    // most of how the reasoning is preserved — and shipping every one of them
+    // compiled cost 128 kB of the 508 kB `dist/` tree, a quarter of it, for
+    // prose nobody reads in that form. The source is what carries the doctrine,
+    // and the source is a `git clone` away.
+    //
+    // What this does NOT give up is the property build.js actually claims: the
+    // launch path stays a tree of individual modules with no bundler in the
+    // way, each one still mapping 1:1 to a file in `src/`. Auditing structure
+    // is unaffected; only the prose is gone.
+    "removeComments": true
   },
 
   // The Ink UI is NOT emitted by tsc. esbuild bundles it straight from source

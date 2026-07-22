@@ -14,12 +14,18 @@ import { execFileSync } from 'node:child_process'
 /**
  * Packed (gzipped) tarball ceiling, in kilobytes.
  *
- * Set with headroom over the size at the time the SPA landed (~188 kB), not
- * flush against it: a budget that fails on the next honest change trains people
- * to raise it reflexively, which is the same as not having one. Raising it
- * should be a visible line in a diff with a reason attached.
+ * Set with headroom over the current artifact, not flush against it: a budget
+ * that fails on the next honest change trains people to raise it reflexively,
+ * which is the same as not having one. Raising it should be a visible line in a
+ * diff with a reason attached.
+ *
+ * LOWERED from 260 when the artifact fell to ~118 kB — stripping comments from
+ * the emitted JS, minifying dist/ui.js, and swapping react-dom for preact/compat
+ * in the browser bundle. A ceiling with more slack beneath it than artifact
+ * above it is not a budget; it is a number. 150 keeps ~27% headroom, which is
+ * room for an honest feature and not room for a silent regression.
  */
-const BUDGET_KB = 260
+const BUDGET_KB = 150
 
 // `--ignore-scripts` because `prepare` runs the whole build, and this script is
 // meant to MEASURE the artifact, not rebuild it — in CI the build has already
