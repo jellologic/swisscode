@@ -31,6 +31,8 @@ import { resolveProfileRefs } from '../core/resolve.ts'
 import { TIERS } from '../core/tiers.ts'
 import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
+import { describeIdentity, readSessionIdentity } from '../adapters/claude-session/identity.ts'
+import { accountLogin } from '../adapters/claude-session/onboard.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import type { LoadResult, Profile, State } from '../ports/config-store.ts'
 import type { ProcessPort } from '../ports/process.ts'
@@ -81,6 +83,8 @@ const USAGE = `swisscode config — manage profiles and directory bindings
   swisscode config rm <name>          delete a profile and any bindings to it
 
   swisscode config accounts           provider accounts, and which profiles use each
+  swisscode config accounts login <name>   adopt a Claude subscription: makes a session
+                 [--dir <path>]             directory and runs the agent so you can /login
   swisscode config agents             agent profiles, and which profiles use each
 
   swisscode config agent              list agents and which profile uses each
@@ -167,7 +171,7 @@ export async function runConfigCommand({
     case 'web':
       return webCommand({ deps, args: rest, out, err })
     case 'accounts':
-      return listAccounts({ deps, out })
+      return accountsCommand({ deps, args: rest, out, err })
     case 'agents':
       return listAgentProfiles({ deps, out })
     default:
@@ -800,6 +804,55 @@ async function webCommand({
 }
 
 /**
+ * `swisscode config accounts [login …]`.
+ *
+ * Dispatch only. The login flow lives in `adapters/claude-session/onboard.ts`
+ * because it is Claude-Code-shaped — it knows about session directories and
+ * about `/login` — and this file is a composition root, not a home for
+ * agent-specific behaviour.
+ */
+function accountsCommand({
+  deps,
+  args,
+  out,
+  err,
+}: {
+  deps: LaunchDeps
+  args: string[]
+  out: Emit
+  err: Emit
+}): number {
+  const [sub, ...rest] = args
+  if (sub === undefined) return listAccounts({ deps, out })
+  if (sub !== 'login') {
+    err(`swisscode: unknown accounts subcommand "${sub}". Try \`swisscode config accounts\`.`)
+    return 2
+  }
+
+  const flag = (name: string): string | undefined => {
+    const i = rest.indexOf(name)
+    return i >= 0 ? rest[i + 1] : undefined
+  }
+  const positional = rest.filter((a, i) => !a.startsWith('--') && !rest[i - 1]?.startsWith('--'))
+
+  const options = {
+    name: positional[0],
+    store: deps.store,
+    agents: deps.agents,
+    proc: deps.proc,
+    out,
+    err,
+  }
+  const dir = flag('--dir')
+  const provider = flag('--provider')
+  return accountLogin({
+    ...options,
+    ...(dir !== undefined ? { dir } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+  })
+}
+
+/**
  * `swisscode config accounts` — who pays, and who uses them.
  *
  * The reverse index is the point. A profile lists its accounts; nothing else
@@ -825,9 +878,23 @@ function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
     out(`  ${name}${a.label ? `  (${a.label})` : ''}`)
     out(`    provider   ${a.provider}${provider ? '' : '  — not in this build'}`)
     if (a.baseUrl) out(`    baseUrl    ${a.baseUrl}`)
-    // Presence and ORIGIN only, exactly as `config list` does: a masked key is
-    // still a fingerprint and this output gets pasted into bug reports.
-    out(`    key        ${credentialOrigin(a)}`)
+    if (a.configDir) {
+      // A session account has no key to describe, so describe the LOGIN
+      // instead. The email is the thing the user recognises — "which of my
+      // three accounts is this?" is the question, and a path does not answer it.
+      // Reads `.claude.json` only; no credential, no prompt, no network.
+      // Read ONCE — `.claude.json` is a 200 kB file on a well-used account.
+      const identity = readSessionIdentity(a.configDir)
+      out(`    login      ${describeIdentity(identity)}`)
+      out(`    session    ${a.configDir}`)
+      if (!identity) {
+        out(`               run \`swisscode config accounts login ${name}\` and \`/login\` inside`)
+      }
+    } else {
+      // Presence and ORIGIN only, exactly as `config list` does: a masked key is
+      // still a fingerprint and this output gets pasted into bug reports.
+      out(`    key        ${credentialOrigin(a)}`)
+    }
     out(`    used by    ${usedBy.length > 0 ? usedBy.join(', ') : '— nothing'}`)
   }
   return 0

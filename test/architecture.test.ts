@@ -104,7 +104,7 @@ test('the published bin shim is dependency-free and runs compiled output', () =>
   )
 })
 
-test('the launch path never statically reaches adapters/ui, catalog or usage', () => {
+test('the launch path never statically reaches adapters/ui, catalog, usage or claude-session', () => {
   const { files } = launchClosure()
   for (const f of files) {
     const rel = relative(ROOT, f)
@@ -115,6 +115,12 @@ test('the launch path never statically reaches adapters/ui, catalog or usage', (
     // not reach the network, and an adapter that crept onto it would quietly
     // turn every launch into an HTTP request to a billing endpoint.
     assert.ok(!rel.startsWith('src/adapters/usage'), `${rel} is a usage adapter`)
+    // Session inspection is configuration-time for the same reason, with a
+    // sharper edge: `.claude.json` is a ~200 kB file on a well-used account and
+    // reading a credential can raise a Keychain prompt. A launch resolves a
+    // session directory and lowers it to an env var WITHOUT OPENING IT — the
+    // agent is the one that reads it, milliseconds later, as it already does.
+    assert.ok(!rel.startsWith('src/adapters/claude-session'), `${rel} inspects a session`)
   }
 })
 
