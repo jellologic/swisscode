@@ -1,9 +1,38 @@
-# swisscode
+<p align="center">
+  <a href="https://www.npmjs.com/package/swisscode">
+    <img src="https://raw.githubusercontent.com/jellologic/swisscode/main/assets/hero.png" width="850" alt="swisscode — a drop-in Claude Code launcher that runs Claude Code, Kilo or OpenCode against OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen and more">
+  </a>
+</p>
 
-A drop-in launcher for [Claude Code](https://claude.com/claude-code). Pick a
-provider, models and permission flags once; after that `swisscode` behaves
-exactly like `claude`. It can also launch other coding CLIs — [Kilo and
-OpenCode](#agents) — against the same providers.
+<p align="center">
+  <a href="https://www.npmjs.com/package/swisscode"><img src="https://img.shields.io/npm/v/swisscode?logo=npm&label=npm&color=cb3837" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/swisscode"><img src="https://img.shields.io/npm/dm/swisscode?color=cb3837" alt="npm downloads"></a>
+  <img src="https://img.shields.io/node/v/swisscode?logo=node.js&logoColor=white&color=5fa04e" alt="node current">
+  <img src="https://img.shields.io/npm/l/swisscode?color=3da639" alt="MIT license">
+  <img src="https://img.shields.io/badge/no%20proxy-no%20daemon-8957e5" alt="no proxy, no daemon">
+</p>
+
+# swisscode — drop-in launcher for Claude Code, Kilo &amp; OpenCode
+
+**swisscode** is a drop-in launcher for [Claude Code](https://claude.com/claude-code)
+and other coding CLIs ([Kilo](https://kilo.ai), [OpenCode](https://opencode.ai)).
+Pick a provider, models and permission flags once — then `swisscode` behaves
+exactly like `claude`, only pointed at [OpenRouter](https://openrouter.ai),
+[z.ai / GLM](https://z.ai), Kimi, DeepSeek, Qwen, ModelScope, SiliconFlow, or any
+other Anthropic-compatible endpoint.
+
+Unlike a router/proxy or a desktop GUI, swisscode is a **launcher**: it sets the
+right environment and `exec`s the real CLI, so there is **no proxy, no daemon, no
+background process** — and it fixes third-party correctness bugs (like the
+[silent 200K → 1M context downgrade](#extended-context-1m)) that a log-reader or
+proxy structurally cannot.
+
+- **Any provider** — OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen, ModelScope, SiliconFlow, or a custom Anthropic-compatible endpoint.
+- **Any agent** — Claude Code (default), [Kilo](https://kilo.ai) or [OpenCode](https://opencode.ai), selectable per profile or per run.
+- **Named profiles &amp; per-directory bindings** — the right backend per repo, automatically.
+- **Correctness fixes** — real 1M context (`[1m]`), catalog-driven auto-compaction, gateway compatibility flags.
+- **A preflight `doctor`** — check binary, endpoint, credential, models and tool support before you launch.
+- **No proxy, no daemon, no GUI** — a single binary that `exec`s the real CLI, so nothing sits between you and your agent.
 
 It replaces shell aliases like this:
 

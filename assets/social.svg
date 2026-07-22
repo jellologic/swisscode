@@ -1,0 +1,46 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="640" cy="150" r="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#da291c" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#da291c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+
+  <!-- Logo + wordmark, centered -->
+  <g transform="translate(410,120)">
+    <rect x="0" y="0" width="120" height="120" rx="27" fill="#da291c"/>
+    <rect x="50" y="28" width="20" height="64" rx="5" fill="#ffffff"/>
+    <rect x="28" y="50" width="64" height="20" rx="5" fill="#ffffff"/>
+    <text x="150" y="90" font-size="96" font-weight="800" letter-spacing="-3">
+      <tspan fill="#f0f6fc">swiss</tspan><tspan fill="#ff5a4d">code</tspan>
+    </text>
+  </g>
+
+  <text x="640" y="330" font-size="30" font-weight="600" fill="#e6edf3" text-anchor="middle">Drop-in launcher for Claude Code, Kilo &amp; OpenCode</text>
+  <text x="640" y="374" font-size="20" fill="#7d8590" text-anchor="middle">any Anthropic-compatible provider &#183; correctness fixes &#183; no proxy, no daemon</text>
+
+  <!-- Provider chip row, centered -->
+  <g font-family="Menlo, 'DejaVu Sans Mono', monospace" font-size="17" transform="translate(322,430)">
+    <rect x="0" y="0" width="112" height="40" rx="20" fill="#161b22" stroke="#30363d"/>
+    <text x="56" y="26" fill="#adbac7" text-anchor="middle">anthropic</text>
+    <rect x="124" y="0" width="122" height="40" rx="20" fill="#161b22" stroke="#30363d"/>
+    <text x="185" y="26" fill="#adbac7" text-anchor="middle">openrouter</text>
+    <rect x="258" y="0" width="112" height="40" rx="20" fill="#161b22" stroke="#30363d"/>
+    <text x="314" y="26" fill="#adbac7" text-anchor="middle">z.ai/glm</text>
+    <rect x="382" y="0" width="78" height="40" rx="20" fill="#161b22" stroke="#30363d"/>
+    <text x="421" y="26" fill="#adbac7" text-anchor="middle">kimi</text>
+    <rect x="472" y="0" width="112" height="40" rx="20" fill="#161b22" stroke="#30363d"/>
+    <text x="528" y="26" fill="#adbac7" text-anchor="middle">deepseek</text>
+    <rect x="596" y="0" width="40" height="40" rx="20" fill="#161b22" stroke="#30363d"/>
+    <text x="616" y="26" fill="#adbac7" text-anchor="middle">+3</text>
+  </g>
+
+  <text x="640" y="560" font-size="18" fill="#6e7681" text-anchor="middle" font-family="Menlo, monospace">npm i -g swisscode   &#183;   github.com/jellologic/swisscode</text>
+</svg>

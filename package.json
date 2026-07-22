@@ -1,7 +1,7 @@
 {
   "name": "swisscode",
   "version": "0.2.0",
-  "description": "Drop-in Claude Code launcher. Swap providers, models and permission flags without touching your shell config.",
+  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode against OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen & more — named profiles, per-directory bindings and real 1M-context fixes, with no proxy or daemon.",
   "type": "module",
   "bin": {
     "swisscode": "./bin/swisscode.js"
@@ -25,10 +25,28 @@
   "keywords": [
     "claude",
     "claude-code",
+    "anthropic",
+    "anthropic-api",
     "cli",
     "launcher",
+    "ai",
+    "llm",
+    "coding-agent",
+    "ai-agent",
+    "agentic",
+    "provider-switcher",
+    "claude-code-router",
     "openrouter",
-    "glm"
+    "opencode",
+    "kilo",
+    "glm",
+    "zai",
+    "kimi",
+    "deepseek",
+    "qwen",
+    "modelscope",
+    "siliconflow",
+    "developer-tools"
   ],
   "license": "MIT",
   "repository": {
