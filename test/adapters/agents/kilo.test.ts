@@ -29,7 +29,14 @@ test('kilo lowers the intent into an inline config via KILO_CONFIG_CONTENT', () 
   assert.equal(p.options.apiKey, 'KEY')
   assert.equal(config.model, 'swisscode/glm-5.2')
   assert.ok('glm-5.2' in p.models)
-  assert.deepEqual(t.plan.unset, [])
+})
+
+test('a third-party baseURL clears inherited ANTHROPIC_* creds (no fallback leak)', () => {
+  assert.deepEqual(
+    [...run(intent()).t.plan.unset].sort(),
+    ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'],
+  )
+  assert.deepEqual(run(intent({ baseUrl: null })).t.plan.unset, [])
 })
 
 test('permissions are auto-approved through the config, not a flag', () => {

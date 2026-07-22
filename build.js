@@ -21,6 +21,12 @@ rmSync('dist', { recursive: true, force: true })
 // specifiers to "./x.js" on the way out.
 execFileSync(process.execPath, [TSC, '-p', 'tsconfig.build.json'], { stdio: 'inherit' })
 
+// The type-only ports erase to `export {}` and are imported only with
+// `import type`, so no compiled module ever loads dist/ports/*.js. tsc still
+// emits them (an import type re-adds a file to the program even when `exclude`d),
+// so drop them here rather than ship nine inert stubs in the tarball.
+rmSync('dist/ports', { recursive: true, force: true })
+
 // Stage 2. ink/react stay external so we never have to bundle yoga's wasm.
 // esbuild reads the TSX sources and strips types; type CHECKING is
 // `pnpm typecheck`'s job, not the bundler's.

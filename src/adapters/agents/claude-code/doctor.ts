@@ -21,6 +21,7 @@ import { TIER_ENV } from './tiers.ts'
 import { SUFFIX, bareModelId } from './context.ts'
 import { staleStoredModels } from './hygiene.ts'
 import { SOFT_RESERVED } from '../../../core/migrate.ts'
+import { isInsecureRemoteBaseUrl, sanitizeUrlForDisplay } from '../../../core/url-safety.ts'
 import type { EnvPlan } from './env.ts'
 import type { ProfileSelection } from '../../../core/profile.ts'
 import type { ConfigModes, LoadResult, Profile } from '../../../ports/config-store.ts'
@@ -245,10 +246,21 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
 
   // endpoint
   const baseUrl = plan?.set?.ANTHROPIC_BASE_URL ?? null
+  const endpointCredEnv = provider?.credentialEnv ?? 'ANTHROPIC_AUTH_TOKEN'
+  const endpointHasCred = Boolean(plan?.set?.[endpointCredEnv])
+  const endpointDisplay = sanitizeUrlForDisplay(baseUrl)
   checks.push(
-    baseUrl
-      ? makeCheck('endpoint', 'endpoint', OK, baseUrl)
-      : makeCheck('endpoint', 'endpoint', OK, 'api.anthropic.com (first-party default)'),
+    !baseUrl
+      ? makeCheck('endpoint', 'endpoint', OK, 'api.anthropic.com (first-party default)')
+      : isInsecureRemoteBaseUrl(baseUrl) && endpointHasCred
+        ? makeCheck(
+            'endpoint',
+            'endpoint',
+            WARN,
+            `${endpointDisplay} — the credential would be sent over cleartext http:// to a ` +
+              'non-loopback host; use https:// (loopback is exempt)',
+          )
+        : makeCheck('endpoint', 'endpoint', OK, endpointDisplay ?? baseUrl),
   )
 
   // credential

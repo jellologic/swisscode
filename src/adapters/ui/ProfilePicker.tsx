@@ -99,7 +99,13 @@ export type ProfileActionsProps = {
 /** What you can do to the profile you just selected. */
 export function ProfileActions({ name, state, cwd, onAction }: ProfileActionsProps) {
   const isDefault = state.defaultProfile === name
-  const boundHere = cwd ? state.bindings?.[cwd] === name : false
+  // A BindingValue is `string | { profile; overrides? }`, so a raw `=== name`
+  // is always false for the object form — which would offer "bind" and silently
+  // overwrite an object binding, discarding its overrides. Extract the name the
+  // same union-aware way `summarize` and `toEntry` do.
+  const bound = cwd ? state.bindings?.[cwd] : undefined
+  const boundName = typeof bound === 'string' ? bound : bound?.profile
+  const boundHere = boundName === name
 
   // `satisfies` checks every entry's SHAPE (a typo'd action value fails here);
   // the assertion afterwards discharges only the nullability. filter(Boolean)

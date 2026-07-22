@@ -6,6 +6,7 @@
 // walks the import graph from bin/swisscode.js and fails if it does.
 
 import { buildIntent } from '../core/intent.ts'
+import { isInsecureRemoteBaseUrl } from '../core/url-safety.ts'
 import { materializeEnv } from '../core/env-plan.ts'
 import { applyOverrides, retargetProvider } from '../core/overrides.ts'
 import { resolveProfile } from '../core/profile.ts'
@@ -248,6 +249,19 @@ export function planLaunch({
   const intent = buildIntent(profile, provider, ambient, { skipOverride })
   const translation = agent.translate({ intent, profile, provider, passthrough: args, ambient })
   warnings.push(...translation.warnings)
+
+  // Cleartext transport guard — neutral, so every agent is covered. A credential
+  // POSTed to an http:// remote host is readable on the wire; loopback is exempt.
+  if (intent.credential && isInsecureRemoteBaseUrl(intent.baseUrl)) {
+    warnings.push({
+      severity: 'high',
+      code: 'cleartext-endpoint',
+      message:
+        `the credential for profile "${sel.name}" would be sent to ${intent.baseUrl} over cleartext ` +
+        'http:// to a non-loopback host, where anyone on the network path can read it. Use an ' +
+        'https:// endpoint (loopback addresses are exempt).',
+    })
+  }
 
   return {
     needsSetup: false,

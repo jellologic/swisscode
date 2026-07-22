@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import {
   ANTHROPIC_SDK_NPM,
   PROVIDER_KEY,
+  ambientUnset,
   anthropicOptions,
   collapsedTierWarning,
   extendedContextWarning,
@@ -76,6 +77,6 @@ export const kilo = {
     const ext = extendedContextWarning(intent, primary, 'Kilo')
     if (ext) warnings.push(ext)
 
-    return { plan: { set, unset: [] }, args: [...passthrough], warnings }
+    return { plan: { set, unset: ambientUnset(intent) }, args: [...passthrough], warnings }
   },
 } satisfies AgentCliPort

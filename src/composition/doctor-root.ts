@@ -13,10 +13,14 @@ import { buildEnvPlan } from '../adapters/agents/claude-code/env.ts'
 import { claudeCode } from '../adapters/agents/claude-code/index.ts'
 import { applyOverrides } from '../core/overrides.ts'
 import { resolveProfile } from '../core/profile.ts'
+import { buildIntent } from '../core/intent.ts'
+import { sanitizeUrlForDisplay, urlCredentials } from '../core/url-safety.ts'
 import {
   DEFAULT_PROBE_TIMEOUT_MS,
   DEFAULT_TOTAL_TIMEOUT_MS,
+  OK,
   SKIP,
+  WARN,
   interpretMessagesProbe,
   interpretToolProbe,
   makeCheck,
@@ -88,6 +92,23 @@ export async function runDoctor({
   // is shared (every agent reaches the same Anthropic-compatible endpoint).
   const agent = agents.byId(profile?.agent ?? claudeCode.id) ?? claudeCode
 
+  // Agent-aware diagnosis: surface what a NON-Claude-Code agent's translate()
+  // would warn about (tier-collapse, extended-context) so a Kilo/OpenCode profile
+  // is not handed a purely Claude-Code-shaped bill of health. The Claude Code
+  // path is skipped here because its translate warnings are the hygiene warnings
+  // staticChecks already reports. The shared endpoint probe below is unchanged
+  // (baseUrl/credential are provider-level, common to every agent).
+  const agentWarnings =
+    profile && agent.id !== claudeCode.id
+      ? agent.translate({
+          intent: buildIntent(profile, provider, ambient),
+          profile,
+          provider,
+          passthrough: [],
+          ambient,
+        }).warnings
+      : []
+
   let binary: { path: string | null; error: string | null | undefined } = {
     path: null,
     error: null,
@@ -121,9 +142,18 @@ export async function runDoctor({
     deadBindingPaths,
   })
 
+  // Agent capability warnings become doctor checks (info -> ok, else warn).
+  for (const w of agentWarnings) {
+    checks.push(
+      makeCheck(`agent-${w.code}`, `agent (${agent.label})`, w.severity === 'info' ? OK : WARN, w.message),
+    )
+  }
+
   // live probes
   const spec = plan ? probeSpec(profile, provider, plan) : null
-  const secrets = spec?.credential ? [spec.credential] : []
+  // Redaction also covers a credential carried as https://user:pass@host userinfo,
+  // which is distinct from the header credential above.
+  const secrets = [...(spec?.credential ? [spec.credential] : []), ...urlCredentials(spec?.baseUrl)]
 
   if (offline) {
     checks.push(makeCheck('probe', 'endpoint probe', SKIP, 'skipped (--offline)'))
@@ -193,9 +223,10 @@ export async function runDoctor({
       )
     }
 
-    if (spec.models.some((m) => m.suffixed)) {
+    if (agent.capabilities.extendedContextSuffix && spec.models.some((m) => m.suffixed)) {
       // Say what was NOT tested. A probe that quietly tests a different string
-      // than the launch sends is worse than no probe.
+      // than the launch sends is worse than no probe. Only for agents that
+      // actually append [1m] — Kilo/OpenCode launch with bare ids.
       notes.push(
         'models were probed without the [1m] suffix the launch appends. The suffix is a ' +
           'Claude Code client-side signal and whether it reaches the endpoint in the model ' +
@@ -237,7 +268,7 @@ export async function runDoctor({
       profile: selection.name,
       source: selection.source,
       provider: provider?.id ?? profile?.provider ?? null,
-      endpoint: spec?.baseUrl ?? null,
+      endpoint: sanitizeUrlForDisplay(spec?.baseUrl),
       checks,
       repairs,
       notes,

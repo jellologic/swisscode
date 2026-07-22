@@ -97,20 +97,34 @@ export function probeBody(model: string, { tools = false }: { tools?: boolean } 
   return body
 }
 
+/** Remove each secret (>= 4 chars) from a string, whole occurrences only. */
+function redactSecrets(s: string, secrets: string[]): string {
+  let out = s
+  for (const secret of secrets) {
+    if (secret && secret.length >= 4) out = out.split(secret).join('<redacted>')
+  }
+  return out
+}
+
 /**
  * Pull a human-readable error out of whatever shape the gateway returned.
  *
  * `unknown` in, `string | null` out — the parse happens HERE and the RESULT is
  * what gets a type. Nothing downstream is handed a payload that has been
  * asserted into a shape nobody checked.
+ *
+ * Redaction happens BEFORE the 300-char truncation: a gateway that echoes the
+ * full credential in a long body could otherwise have the secret straddle the
+ * cut, leaving a prefix fragment that the outer whole-string redactDeep can no
+ * longer match. Removing the secret in full first makes that unreachable.
  */
-export function errorMessage(payload: unknown): string | null {
-  if (typeof payload === 'string') return payload.slice(0, 300)
+export function errorMessage(payload: unknown, secrets: string[] = []): string | null {
+  if (typeof payload === 'string') return redactSecrets(payload, secrets).slice(0, 300)
   if (!isObjectLike(payload)) return null
   const e = payload.error ?? payload
   if (!isObjectLike(e)) return null
   const msg = e.message ?? e.msg ?? e.detail ?? null
-  return typeof msg === 'string' ? msg.slice(0, 300) : null
+  return typeof msg === 'string' ? redactSecrets(msg, secrets).slice(0, 300) : null
 }
 
 /** Did the model actually emit a tool_use block? */
@@ -194,7 +208,7 @@ export function createProbe({
 
       return {
         status: res.status,
-        message: errorMessage(payload),
+        message: errorMessage(payload, credential ? [credential] : []),
         usedTool: tools ? usedTool(payload) : false,
         timedOut: false,
         networkError: null,

@@ -181,10 +181,7 @@ async function openWizard({
   const loaded = deps.store.load()
   for (const w of loaded.warnings ?? []) err(`swisscode: ${w}`)
 
-  if (loaded.readOnly) {
-    err('swisscode: config.json is newer than this swisscode understands; refusing to edit it.')
-    return 2
-  }
+  if (loaded.readOnly) return refuseWrite(err)
 
   if (name !== null) {
     const exists = Object.prototype.hasOwnProperty.call(loaded.state.profiles ?? {}, name)
@@ -264,10 +261,7 @@ function agentCommand({
     )
     return 2
   }
-  if (loaded.readOnly) {
-    err('swisscode: config.json is newer than this swisscode understands; refusing to edit it.')
-    return 2
-  }
+  if (loaded.readOnly) return refuseWrite(err)
   const next: State = {
     ...state,
     profiles: { ...state.profiles, [profileName]: { ...profile, agent: agentId } },

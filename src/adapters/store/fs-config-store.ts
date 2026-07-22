@@ -95,11 +95,23 @@ export function createFsConfigStore({
   function quarantine() {
     if (!sawCorrupt || !existsSync(CONFIG_PATH)) return
     const dest = join(CONFIG_DIR, `config.corrupt-${Date.now()}.json`)
+    // If we cannot move it aside we must NOT overwrite it — throw so save()
+    // aborts before writeAtomic() runs, preserving the unparseable (possibly
+    // key-bearing) file rather than silently destroying it.
     try {
       renameSync(CONFIG_PATH, dest)
+    } catch (err) {
+      throw new Error(
+        'refusing to overwrite an unparseable config.json: could not move it aside ' +
+          `(${(err as { message?: string }).message}). Resolve it by hand or fix the directory permissions.`,
+      )
+    }
+    // The corrupt file is safely aside now; tightening its mode is a nicety, so
+    // a chmod failure must not turn a successful quarantine into a thrown save.
+    try {
       chmodSync(dest, 0o600)
     } catch {
-      /* if we cannot move it we still must not overwrite it silently */
+      /* best effort */
     }
     sawCorrupt = false
   }

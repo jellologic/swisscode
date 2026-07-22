@@ -23,6 +23,23 @@
   // into dist/ui.js (see build.js); emitting it here as well would ship two
   // copies of the same component tree and put React-importing modules inside
   // the package next to a launch path that promises never to touch them.
+  //
+  // The exclude also follows the wizard's NON-.tsx imports — the catalog / net /
+  // clock / cache leaf cluster and the two core helpers (catalog, format) it
+  // pulls in. Those are reached ONLY by the UI (verified: no launch/config/doctor
+  // runtime module imports them), and esbuild already inlines them into dist/ui.js,
+  // so emitting them here would ship that cluster twice. fs-config-store stays
+  // emitted — it is the CONFIG store the launch/config paths need, distinct from
+  // the UI-only fs-cache-store.
   "include": ["src"],
-  "exclude": ["src/adapters/ui", "src/composition/ui-root.ts"]
+  "exclude": [
+    "src/adapters/ui",
+    "src/composition/ui-root.ts",
+    "src/core/catalog.ts",
+    "src/core/format.ts",
+    "src/adapters/net",
+    "src/adapters/clock",
+    "src/adapters/store/fs-cache-store.ts",
+    "src/adapters/catalog"
+  ]
 }

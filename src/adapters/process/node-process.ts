@@ -118,15 +118,6 @@ export function findBinary({
   return { bin: null, skippedSelf }
 }
 
-export function defaultFallbacks(home: string): string[] {
-  return [
-    join(home, '.local', 'bin', 'claude'),
-    join(home, '.claude', 'local', 'claude'),
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-  ]
-}
-
 export type NodeProcessOptions = {
   env?: ReadableEnv
   platform?: string

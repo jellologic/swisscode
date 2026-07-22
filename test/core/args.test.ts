@@ -85,6 +85,14 @@ test('--cc-* flags never reach claude', () => {
   assert.ok(!buildArgs(false, r.passthrough).some((a) => a.startsWith('--cc-')))
 })
 
+test('an explicitly empty --cc-* value is rejected, not silently swallowed', () => {
+  // An empty id is an explicit unknown id, not "unset" — the documented contract
+  // is that an explicit unknown agent/provider is fatal.
+  for (const argv of [['--cc-agent', ''], ['--cc-agent='], ['--cc-provider', ''], ['--cc-provider=']]) {
+    assert.match(parseArgv(argv).error!, /needs a value/, argv.join(' '))
+  }
+})
+
 test('an unknown --cc-* option is a hard error, not a passthrough token', () => {
   // Forwarding it would put a typo into the prompt while the launch silently
   // used the wrong settings.
