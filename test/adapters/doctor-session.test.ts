@@ -14,7 +14,8 @@ import { runDoctor } from '../../src/composition/doctor-root.ts'
 import { measureAccounts, remainingMap } from '../../src/adapters/usage/measure.ts'
 import { registry } from '../../src/adapters/providers/registry.ts'
 import { registry as agents } from '../../src/adapters/agents/registry.ts'
-import type { State } from '../../src/ports/config-store.ts'
+import { makeAccount, makeAgentProfile, makeProfileRefs, makeState } from '../support/fixtures.ts'
+import type { SelectionStrategy, State } from '../../src/ports/config-store.ts'
 import type { DoctorCheck } from '../../src/ports/doctor.ts'
 import type { UsageSnapshot } from '../../src/core/resolve.ts'
 import type { SubscriptionUsage } from '../../src/adapters/usage/anthropic-subscription.ts'
@@ -58,15 +59,15 @@ type DepsOver = {
 function deps(over: DepsOver = {}) {
   const state =
     over.state ??
-    ({
+    makeState({
       version: 3,
-      providerAccounts: { z: { provider: 'zai', apiKey: 'k' } },
-      agentProfiles: { z: { models: { opus: 'glm-5.2' } } },
-      profiles: { z: { agentProfile: 'z', accounts: ['z'] } },
+      providerAccounts: { z: makeAccount({ provider: 'zai', apiKey: 'k' }) },
+      agentProfiles: { z: makeAgentProfile({ models: { opus: 'glm-5.2' } }) },
+      profiles: { z: makeProfileRefs({ agentProfile: 'z', accounts: ['z'] }) },
       defaultProfile: 'z',
       bindings: {},
       settings: {},
-    } as unknown as State)
+    })
   return {
     store: {
       load: () => ({ state, corrupt: false, readOnly: false, migrated: false, warnings: [] }),
@@ -85,26 +86,26 @@ function deps(over: DepsOver = {}) {
       },
     },
     ...(over.usageStore ? { usage: over.usageStore } : {}),
-  } as unknown as Parameters<typeof runDoctor>[0]['deps']
+  }
 }
 
 /** A state whose default profile is a session-mode Anthropic account. */
-const sessionState = (configDir: string, over: { strategy?: string } = {}): State =>
-  ({
+const sessionState = (configDir: string, over: { strategy?: SelectionStrategy } = {}): State =>
+  makeState({
     version: 3,
-    providerAccounts: { personal: { provider: 'anthropic', configDir } },
-    agentProfiles: { a: { models: { opus: 'claude-opus-4-8' } } },
+    providerAccounts: { personal: makeAccount({ provider: 'anthropic', configDir }) },
+    agentProfiles: { a: makeAgentProfile({ models: { opus: 'claude-opus-4-8' } }) },
     profiles: {
-      a: {
+      a: makeProfileRefs({
         agentProfile: 'a',
         accounts: ['personal'],
         ...(over.strategy ? { strategy: over.strategy } : {}),
-      },
+      }),
     },
     defaultProfile: 'a',
     bindings: {},
     settings: {},
-  }) as unknown as State
+  })
 
 const byId = (checks: readonly DoctorCheck[], id: string) => checks.find((c) => c.id === id)
 
@@ -212,21 +213,21 @@ test('only the accounts a usage profile NAMES are measured', async () => {
   // to answer a question about one profile is a cost with no answer attached.
   const dir = loginAt(join(fresh(), 'personal'), 'a@b.c')
   const other = loginAt(join(fresh(), 'other'), 'x@y.z')
-  const state = {
+  const state = makeState({
     version: 3,
     providerAccounts: {
-      personal: { provider: 'anthropic', configDir: dir },
-      unused: { provider: 'anthropic', configDir: other },
+      personal: makeAccount({ provider: 'anthropic', configDir: dir }),
+      unused: makeAccount({ provider: 'anthropic', configDir: other }),
     },
-    agentProfiles: { a: { models: { opus: 'claude-opus-4-8' } } },
+    agentProfiles: { a: makeAgentProfile({ models: { opus: 'claude-opus-4-8' } }) },
     profiles: {
-      a: { agentProfile: 'a', accounts: ['personal'], strategy: 'usage' },
-      b: { agentProfile: 'a', accounts: ['unused'] },
+      a: makeProfileRefs({ agentProfile: 'a', accounts: ['personal'], strategy: 'usage' }),
+      b: makeProfileRefs({ agentProfile: 'a', accounts: ['unused'] }),
     },
     defaultProfile: 'a',
     bindings: {},
     settings: {},
-  } as unknown as State
+  })
 
   const asked: (string | null | undefined)[] = []
   await runDoctor({
@@ -263,18 +264,20 @@ test('a partly-measured set writes what it has and NAMES what it missed', async 
   // answered — so an account missing from it silently stops being a candidate.
   const a = loginAt(join(fresh(), 'a'), 'a@b.c')
   const b = loginAt(join(fresh(), 'b'), 'x@y.z')
-  const state = {
+  const state = makeState({
     version: 3,
     providerAccounts: {
-      one: { provider: 'anthropic', configDir: a },
-      two: { provider: 'anthropic', configDir: b },
+      one: makeAccount({ provider: 'anthropic', configDir: a }),
+      two: makeAccount({ provider: 'anthropic', configDir: b }),
     },
-    agentProfiles: { p: { models: { opus: 'claude-opus-4-8' } } },
-    profiles: { p: { agentProfile: 'p', accounts: ['one', 'two'], strategy: 'usage' } },
+    agentProfiles: { p: makeAgentProfile({ models: { opus: 'claude-opus-4-8' } }) },
+    profiles: {
+      p: makeProfileRefs({ agentProfile: 'p', accounts: ['one', 'two'], strategy: 'usage' }),
+    },
     defaultProfile: 'p',
     bindings: {},
     settings: {},
-  } as unknown as State
+  })
 
   const written: UsageSnapshot[] = []
   const { report } = await runDoctor({
