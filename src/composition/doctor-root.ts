@@ -1,4 +1,4 @@
-// Composition root for `cuckoocode config doctor`.
+// Composition root for `swisscode config doctor`.
 //
 // LAZY. Reached only through a dynamic import in src/cli.ts, exactly like the
 // UI bundle, so the launch path's static closure never grows to carry a

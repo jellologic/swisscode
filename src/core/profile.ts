@@ -101,7 +101,7 @@ export function resolveProfile(
           `--cc-profile "${profileFlag}" is not a profile. ` +
           (names.length > 0
             ? `Known profiles: ${names.join(', ')}.`
-            : 'No profiles exist yet — run `cuckoocode config` first.'),
+            : 'No profiles exist yet — run `swisscode config` first.'),
       }
     }
     // R-CONFLICT: both selectors present and disagreeing. Do not guess.

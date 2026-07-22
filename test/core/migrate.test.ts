@@ -10,7 +10,7 @@ import {
   validateProfileName,
 } from '../../src/core/migrate.ts'
 
-/** Exactly the shape cuckoocode 0.1.0 writes. */
+/** Exactly the shape swisscode 0.1.0 writes. */
 const V1_FULL = {
   provider: 'zai',
   apiKey: 'zai-secret',
@@ -188,7 +188,7 @@ test('profile names: grammar, reserved words and the common-word guard', () => {
   assert.ok(!validateProfileName('config').ok, 'reserved for subcommands')
   assert.ok(!validateProfileName('doctor').ok, 'soft-reserved for future subcommands')
 
-  // `cuckoocode fix the login bug` must not silently select a profile.
+  // `swisscode fix the login bug` must not silently select a profile.
   assert.ok(!validateProfileName('fix').ok)
   assert.ok(validateProfileName('fix', { force: true }).ok)
 })

@@ -41,7 +41,7 @@ function Frame({ children }: { children: ReactNode }) {
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1}>
       <Box marginBottom={1}>
         <Text color="cyan" bold>
-          cuckoocode
+          swisscode
         </Text>
         <Text dimColor>  ·  esc to cancel</Text>
       </Box>
@@ -509,7 +509,7 @@ export function App({
       <Frame>
         <Text>Name for the new profile:</Text>
         <Text dimColor>
-          `cuckoocode {newName.trim() || '<name>'}` in any directory will use it.
+          `swisscode {newName.trim() || '<name>'}` in any directory will use it.
         </Text>
         <Box marginTop={1}>
           <Text color="cyan">› </Text>
@@ -590,7 +590,7 @@ export function App({
           />
         </Box>
         <Box marginTop={1}>
-          <Text dimColor>stored at ~/.config/cuckoocode/config.json (chmod 600)</Text>
+          <Text dimColor>stored at ~/.config/swisscode/config.json (chmod 600)</Text>
         </Box>
       </Frame>
     )

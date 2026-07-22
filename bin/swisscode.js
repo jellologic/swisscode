@@ -7,6 +7,6 @@
 import { runCli } from '../dist/cli.js'
 
 runCli(process.argv.slice(2)).catch((err) => {
-  console.error(`cuckoocode: ${err.message}`)
+  console.error(`swisscode: ${err.message}`)
   process.exit(1)
 })

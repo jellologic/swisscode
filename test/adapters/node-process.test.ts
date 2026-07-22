@@ -26,7 +26,7 @@ test('PATH order wins, and the first executable match is used', () => {
   assert.equal(bin, '/a/claude')
 })
 
-test('cuckoocode never resolves to itself', () => {
+test('swisscode never resolves to itself', () => {
   const r = findBinary({
     pathEnv: '/self:/real',
     isExecutable: () => true,
@@ -82,7 +82,7 @@ test('PATHEXT defaults are used when the variable is unset', () => {
 test('the execute-bit check is skipped on Windows', () => {
   // NTFS has no execute bit; Node reports 0o666/0o444, so mode & 0o111 is
   // always 0 there and every candidate would be rejected.
-  const dir = mkdtempSync(join(tmpdir(), 'cuckoocode-exec-'))
+  const dir = mkdtempSync(join(tmpdir(), 'swisscode-exec-'))
   const file = join(dir, 'claude')
   writeFileSync(file, '#!/bin/sh\n')
   chmodSync(file, 0o644)
@@ -97,9 +97,9 @@ test('the execute-bit check is skipped on Windows', () => {
 })
 
 test('the recursion guard reads the marker the child env always carried', () => {
-  // A shell shim running `exec cuckoocode "$@"` defeats a realpath check, and
+  // A shell shim running `exec swisscode "$@"` defeats a realpath check, and
   // the result is an infinite chain of execve calls that presents as a hang.
-  assert.equal(detectRecursion({ CUCKOOCODE: '1' }), true)
+  assert.equal(detectRecursion({ SWISSCODE: '1' }), true)
   assert.equal(detectRecursion({}), false)
   assert.equal(detectRecursion(undefined), false)
 })

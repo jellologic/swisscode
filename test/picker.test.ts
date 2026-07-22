@@ -20,9 +20,9 @@ import type { Profile } from '../src/ports/config-store.ts'
  */
 type UiModule = typeof import('../src/composition/ui-root.ts')
 
-const home = mkdtempSync(join(tmpdir(), 'cuckoocode-picker-'))
+const home = mkdtempSync(join(tmpdir(), 'swisscode-picker-'))
 process.env.XDG_CONFIG_HOME = home
-mkdirSync(join(home, 'cuckoocode'), { recursive: true })
+mkdirSync(join(home, 'swisscode'), { recursive: true })
 
 const { CACHE_VERSION } = await import('../src/core/catalog.ts')
 
@@ -41,7 +41,7 @@ const model = (id: string, over: Partial<NormalizedModel> = {}): NormalizedModel
 
 const seed = (catalogId: string, models: NormalizedModel[]) =>
   writeFileSync(
-    join(home, 'cuckoocode', `models-${catalogId}.json`),
+    join(home, 'swisscode', `models-${catalogId}.json`),
     JSON.stringify({ version: CACHE_VERSION, fetchedAt: Date.now(), models }),
   )
 

@@ -4,7 +4,7 @@
 // These maps ARE the contract. A later phase that changes one must change it
 // here too, in a diff a human reads on purpose.
 //
-// Diff against cuckoocode 0.1.0, all of it intentional (A#1 / A#2 / four tiers):
+// Diff against swisscode 0.1.0, all of it intentional (A#1 / A#2 / four tiers):
 //
 //   every third-party provider  ANTHROPIC_API_KEY now UNSET, not inherited.
 //                               0.1.0 did this for openrouter only, so a stale

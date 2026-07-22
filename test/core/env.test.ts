@@ -194,7 +194,7 @@ test('materializeEnv applies the plan and marks the child', () => {
   assert.equal(env.PATH, '/usr/bin')
   assert.equal(env.ANTHROPIC_BASE_URL, 'https://gw.example/api')
   assert.ok(!('ANTHROPIC_API_KEY' in env))
-  assert.equal(env.CUCKOOCODE, '1')
+  assert.equal(env.SWISSCODE, '1')
   // The ambient env passed in must not be mutated.
   assert.equal(POLLUTED.ANTHROPIC_API_KEY, 'sk-ant-STALE')
 })

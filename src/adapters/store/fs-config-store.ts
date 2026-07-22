@@ -33,7 +33,7 @@ type ReadableEnv = Record<string, string | undefined>
 const errMessage = (err: unknown): string | undefined => (err as { message?: string }).message
 
 export function configDir(env: ReadableEnv = process.env): string {
-  return join(env.XDG_CONFIG_HOME || join(env.HOME || homedir(), '.config'), 'cuckoocode')
+  return join(env.XDG_CONFIG_HOME || join(env.HOME || homedir(), '.config'), 'swisscode')
 }
 
 export type FsConfigStoreOptions = {
@@ -138,9 +138,9 @@ export function createFsConfigStore({
     const warnings = [...(result.warnings ?? [])]
     if (readOnly) {
       warnings.push(
-        `config.json is version ${result.state.version}; this cuckoocode understands ` +
+        `config.json is version ${result.state.version}; this swisscode understands ` +
           `up to ${SUPPORTED_VERSION}. Reading what it can, and refusing to write. ` +
-          'Upgrade cuckoocode.',
+          'Upgrade swisscode.',
       )
     }
 
@@ -175,8 +175,8 @@ export function createFsConfigStore({
   function save(state: State): string {
     if (readOnly) {
       throw new Error(
-        `config.json is a newer schema version than this cuckoocode understands ` +
-          `(<= ${SUPPORTED_VERSION}); refusing to overwrite it. Upgrade cuckoocode.`,
+        `config.json is a newer schema version than this swisscode understands ` +
+          `(<= ${SUPPORTED_VERSION}); refusing to overwrite it. Upgrade swisscode.`,
       )
     }
     quarantine()

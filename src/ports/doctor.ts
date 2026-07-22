@@ -1,4 +1,4 @@
-// Port: `cuckoocode config doctor` — the live endpoint probe, and the shapes
+// Port: `swisscode config doctor` — the live endpoint probe, and the shapes
 // the diagnosis is reported in.
 //
 // There was no port file for this before; adapters/doctor/probe.js implemented
@@ -123,7 +123,7 @@ export type ProbeResult = {
 
 /**
  * NON-STREAMING, ALWAYS, FOR EVERY PROVIDER. Not a stylistic choice: at least
- * one endpoint cuckoocode ships a preset for answers a bad token with HTTP 200
+ * one endpoint swisscode ships a preset for answers a bad token with HTTP 200
  * followed by an SSE stream that dies silently. A streaming probe there cannot
  * tell a rejected credential from a slow model — it looks like a hang either
  * way. With `stream: false` the same bad token has to produce a status code.

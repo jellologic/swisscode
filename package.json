@@ -1,10 +1,10 @@
 {
-  "name": "cuckoocode",
+  "name": "swisscode",
   "version": "0.1.0",
   "description": "Drop-in Claude Code launcher. Swap providers, models and permission flags without touching your shell config.",
   "type": "module",
   "bin": {
-    "cuckoocode": "./bin/cuckoocode.js"
+    "swisscode": "./bin/swisscode.js"
   },
   "engines": {
     "node": ">=22"
@@ -33,11 +33,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jellologic/cuckoocode.git"
+    "url": "git+https://github.com/jellologic/swisscode.git"
   },
-  "homepage": "https://github.com/jellologic/cuckoocode#readme",
+  "homepage": "https://github.com/jellologic/swisscode#readme",
   "bugs": {
-    "url": "https://github.com/jellologic/cuckoocode/issues"
+    "url": "https://github.com/jellologic/swisscode/issues"
   },
   "dependencies": {
     "ink": "^7.1.1",

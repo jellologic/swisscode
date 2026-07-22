@@ -1,4 +1,4 @@
-// Port: persistence for ~/.config/cuckoocode/config.json.
+// Port: persistence for ~/.config/swisscode/config.json.
 //
 // SYNCHRONOUS on purpose. It is one small local file, and the launch path
 // should not pay for an await + microtask turn to read it.
@@ -93,7 +93,7 @@ export type State = {
  *
  * The index signature is not slop — it is rule M1. Unrecognized v1 keys ride
  * along onto the migrated profile VERBATIM rather than being dropped, so a key
- * written by a newer cuckoocode survives a round-trip through an older one.
+ * written by a newer swisscode survives a round-trip through an older one.
  */
 export type ConfigV1 = {
   provider: string

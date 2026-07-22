@@ -3,7 +3,7 @@
 // Everything imported transitively from here must stay dependency-free: this is
 // the module that runs on every launch, and it must never reach React, Ink, or
 // anything under adapters/ui or adapters/catalog. test/architecture.test.ts
-// walks the import graph from bin/cuckoocode.js and fails if it does.
+// walks the import graph from bin/swisscode.js and fails if it does.
 
 import { buildArgs } from '../core/args.ts'
 import { buildEnvPlan, materializeEnv } from '../core/env.ts'
@@ -141,9 +141,9 @@ export function planLaunch({
 
   if (detectRecursion(ambient)) {
     throw new LaunchError(
-      'refusing to launch: CUCKOOCODE=1 is already set, which means cuckoocode ' +
+      'refusing to launch: SWISSCODE=1 is already set, which means swisscode ' +
         'resolved to itself (an alias or a shim on PATH). Point ' +
-        'CUCKOOCODE_CLAUDE_BIN at the real claude binary.',
+        'SWISSCODE_CLAUDE_BIN at the real claude binary.',
       1,
     )
   }
@@ -197,8 +197,8 @@ export function planLaunch({
     // api.anthropic.com and bill the wrong account.
     throw new LaunchError(
       `profile "${sel.name}" uses provider "${profile.provider}", which this ` +
-        'version of cuckoocode does not know, and it has no baseUrl of its own. ' +
-        'Run `cuckoocode config` to repair it.',
+        'version of swisscode does not know, and it has no baseUrl of its own. ' +
+        'Run `swisscode config` to repair it.',
     )
   }
 
@@ -238,7 +238,7 @@ export function bannerFor(planned: LaunchPlan): string | null {
   // ' · ' rather than '/': model ids contain slashes, and "openrouter/openrouter/fusion"
   // reads like a typo.
   return (
-    `cuckoocode: profile "${selection.name ?? '—'}"${where} → ` +
+    `swisscode: profile "${selection.name ?? '—'}"${where} → ` +
     `${provider?.id ?? profile?.provider} · ${model}${borrowed}${overridden}`
   )
 }
@@ -282,17 +282,17 @@ export function main({
   //
   // There is no --quiet FLAG: the reserved namespace is config|setup|--safe|
   // --yolo and grows exactly once, by the --cc- prefix, in the UX phase.
-  // Suppression is `settings.quiet` in config.json or CUCKOOCODE_QUIET=1.
-  const quiet = Boolean(planned.loaded.state?.settings?.quiet) || proc.env().CUCKOOCODE_QUIET === '1'
+  // Suppression is `settings.quiet` in config.json or SWISSCODE_QUIET=1.
+  const quiet = Boolean(planned.loaded.state?.settings?.quiet) || proc.env().SWISSCODE_QUIET === '1'
 
   if (!quiet) {
-    for (const warning of planned.loaded.warnings ?? []) report(`cuckoocode: ${warning}`)
-    for (const warning of planned.selection.warnings ?? []) report(`cuckoocode: ${warning}`)
+    for (const warning of planned.loaded.warnings ?? []) report(`swisscode: ${warning}`)
+    for (const warning of planned.selection.warnings ?? []) report(`swisscode: ${warning}`)
     // `info` describes something working as intended, so it stays off unless
     // someone is deliberately looking. Everything else describes a conflict
     // between the user's shell and their profile, which they cannot see.
     for (const w of planned.plan.warnings ?? []) {
-      if (w.severity !== 'info') report(`cuckoocode: ${w.message}`)
+      if (w.severity !== 'info') report(`swisscode: ${w.message}`)
     }
 
     const banner = bannerFor(planned)

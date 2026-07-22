@@ -1,4 +1,4 @@
-// Composition root for everything under `cuckoocode config`.
+// Composition root for everything under `swisscode config`.
 //
 // LAZY, like the UI bundle and the doctor: reached only through a dynamic
 // import in src/cli.ts, so none of this is in the launch path's static closure.
@@ -7,7 +7,7 @@
 //
 // The reserved namespace is `config | setup | --safe | --yolo | --` plus, as of
 // this phase, the `--cc-` flag prefix. That is the whole list and it does not
-// grow again. `cuckoocode use …` and `cuckoocode doctor` would each claim a
+// grow again. `swisscode use …` and `swisscode doctor` would each claim a
 // bare English word from Claude Code's prompt space forever — and `use` is a
 // word people type at the start of a prompt. Nesting them under `config` costs
 // six characters and reserves nothing, because `config` is already reserved and
@@ -67,21 +67,21 @@ const SUBCOMMANDS = Object.freeze([
   'list', 'default', 'rm', 'use', 'bind', 'unbind', 'bindings', 'doctor', 'help',
 ])
 
-const USAGE = `cuckoocode config — manage profiles and directory bindings
+const USAGE = `swisscode config — manage profiles and directory bindings
 
-  cuckoocode config                    edit the active profile, or pick one
-  cuckoocode config <name>             create or edit a named profile
-  cuckoocode config list               every profile, with its provider and models
-  cuckoocode config default <name>     set the profile used when nothing else applies
-  cuckoocode config rm <name>          delete a profile and any bindings to it
+  swisscode config                    edit the active profile, or pick one
+  swisscode config <name>             create or edit a named profile
+  swisscode config list               every profile, with its provider and models
+  swisscode config default <name>     set the profile used when nothing else applies
+  swisscode config rm <name>          delete a profile and any bindings to it
 
-  cuckoocode config use <name>         bind the current directory to <name>
-  cuckoocode config use --show         explain which profile applies here, and why
-  cuckoocode config use --clear        remove this directory's binding
-  cuckoocode config bind|unbind        aliases for use / use --clear
-  cuckoocode config bindings [--prune] list bindings; --prune drops dead ones
+  swisscode config use <name>         bind the current directory to <name>
+  swisscode config use --show         explain which profile applies here, and why
+  swisscode config use --clear        remove this directory's binding
+  swisscode config bind|unbind        aliases for use / use --clear
+  swisscode config bindings [--prune] list bindings; --prune drops dead ones
 
-  cuckoocode config doctor [--json]    check binary, endpoint, credential, models,
+  swisscode config doctor [--json]    check binary, endpoint, credential, models,
                                        tool calling, env conflicts, permissions
                  [--offline]           skip every network probe
                  [--fix]               apply the unambiguous repairs
@@ -107,8 +107,8 @@ export async function runConfigCommand({
   if (command === 'setup') {
     if (args.length > 0) {
       err(
-        `cuckoocode: \`setup\` takes no arguments; got ${args.map((a) => `"${a}"`).join(' ')}. ` +
-          'Use `cuckoocode config <name>` to edit a specific profile.',
+        `swisscode: \`setup\` takes no arguments; got ${args.map((a) => `"${a}"`).join(' ')}. ` +
+          'Use `swisscode config <name>` to edit a specific profile.',
       )
       return 2
     }
@@ -143,13 +143,13 @@ export async function runConfigCommand({
 
   // Not a subcommand, so it names a profile to create or edit.
   if (head.startsWith('-')) {
-    err(`cuckoocode: unknown option "${head}". Try \`cuckoocode config help\`.`)
+    err(`swisscode: unknown option "${head}". Try \`swisscode config help\`.`)
     return 2
   }
   if (rest.length > 0) {
     err(
-      `cuckoocode: \`config ${head}\` takes no further arguments; ` +
-        `got ${rest.map((a) => `"${a}"`).join(' ')}. Try \`cuckoocode config help\`.`,
+      `swisscode: \`config ${head}\` takes no further arguments; ` +
+        `got ${rest.map((a) => `"${a}"`).join(' ')}. Try \`swisscode config help\`.`,
     )
     return 2
   }
@@ -172,10 +172,10 @@ async function openWizard({
   out: Emit
 }): Promise<number> {
   const loaded = deps.store.load()
-  for (const w of loaded.warnings ?? []) err(`cuckoocode: ${w}`)
+  for (const w of loaded.warnings ?? []) err(`swisscode: ${w}`)
 
   if (loaded.readOnly) {
-    err('cuckoocode: config.json is newer than this cuckoocode understands; refusing to edit it.')
+    err('swisscode: config.json is newer than this swisscode understands; refusing to edit it.')
     return 2
   }
 
@@ -185,7 +185,7 @@ async function openWizard({
       // Validation applies at CREATION only. A hand-edited file keeps working.
       const verdict = validateProfileName(name)
       if (!verdict.ok) {
-        err(`cuckoocode: ${verdict.reason}`)
+        err(`swisscode: ${verdict.reason}`)
         return 2
       }
     }
@@ -200,7 +200,7 @@ function listProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
   const { state } = deps.store.load()
   const names = Object.keys(state.profiles ?? {})
   if (names.length === 0) {
-    out('No profiles yet. Run `cuckoocode config` to make one.')
+    out('No profiles yet. Run `swisscode config` to make one.')
     return 0
   }
 
@@ -256,7 +256,7 @@ function listProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
 
   if (!state.defaultProfile && names.length > 1) {
     out('')
-    out('No default profile. Set one with `cuckoocode config default <name>`.')
+    out('No default profile. Set one with `swisscode config default <name>`.')
   }
   return 0
 }
@@ -279,11 +279,11 @@ function setDefault({ deps, name, out, err }: NamedProfileOptions): number {
   const { state, readOnly } = deps.store.load()
   if (readOnly) return refuseWrite(err)
   if (!name) {
-    err('cuckoocode: `config default` needs a profile name.')
+    err('swisscode: `config default` needs a profile name.')
     return 2
   }
   if (!Object.prototype.hasOwnProperty.call(state.profiles ?? {}, name)) {
-    err(`cuckoocode: "${name}" is not a profile. Known: ${Object.keys(state.profiles ?? {}).join(', ') || 'none'}.`)
+    err(`swisscode: "${name}" is not a profile. Known: ${Object.keys(state.profiles ?? {}).join(', ') || 'none'}.`)
     return 2
   }
   deps.store.save({ ...state, defaultProfile: name })
@@ -295,11 +295,11 @@ function removeProfile({ deps, name, out, err }: NamedProfileOptions): number {
   const { state, readOnly } = deps.store.load()
   if (readOnly) return refuseWrite(err)
   if (!name) {
-    err('cuckoocode: `config rm` needs a profile name.')
+    err('swisscode: `config rm` needs a profile name.')
     return 2
   }
   if (!Object.prototype.hasOwnProperty.call(state.profiles ?? {}, name)) {
-    err(`cuckoocode: "${name}" is not a profile.`)
+    err(`swisscode: "${name}" is not a profile.`)
     return 2
   }
 
@@ -320,7 +320,7 @@ function removeProfile({ deps, name, out, err }: NamedProfileOptions): number {
   out(`removed profile "${name}"`)
   for (const key of pruned.removed) out(`  also removed the binding for ${key}`)
   if (!next.defaultProfile && Object.keys(profiles).length > 1) {
-    out('  no default profile now — set one with `cuckoocode config default <name>`')
+    out('  no default profile now — set one with `swisscode config default <name>`')
   }
   return 0
 }
@@ -351,14 +351,14 @@ function useCommand({
 
   const name = args.find((a) => !a.startsWith('-'))
   if (!name) {
-    err(`cuckoocode: \`config ${head}\` needs a profile name, or --show / --clear.`)
+    err(`swisscode: \`config ${head}\` needs a profile name, or --show / --clear.`)
     return 2
   }
   if (loaded.readOnly) return refuseWrite(err)
 
   const result = bindPath(loaded.state, cwd, name)
   if (!result.ok) {
-    err(`cuckoocode: ${result.reason}`)
+    err(`swisscode: ${result.reason}`)
     return 2
   }
   deps.store.save(result.state)
@@ -441,7 +441,7 @@ function unbindCommand({
 
   const result = unbindPath(loaded.state, target)
   if (result.key === null) {
-    err(`cuckoocode: "${target}" is not an absolute path.`)
+    err(`swisscode: "${target}" is not an absolute path.`)
     return 2
   }
   if (result.removed === null) {
@@ -475,7 +475,7 @@ function listBindings({
   const loaded = deps.store.load()
   const entries = bindingEntries(loaded.state)
   if (entries.length === 0) {
-    out('No directory bindings. Create one with `cuckoocode config use <profile>`.')
+    out('No directory bindings. Create one with `swisscode config use <profile>`.')
     return 0
   }
 
@@ -527,7 +527,7 @@ async function doctorCommand({
   if (timeoutIdx !== -1) {
     const raw = Number(args[timeoutIdx + 1])
     if (!Number.isFinite(raw) || raw <= 0) {
-      err('cuckoocode: --timeout needs a positive number of milliseconds.')
+      err('swisscode: --timeout needs a positive number of milliseconds.')
       return 2
     }
     totalTimeoutMs = raw
@@ -543,7 +543,7 @@ async function doctorCommand({
     return a.startsWith('-') && !known.includes(a)
   })
   if (unknown.length > 0) {
-    err(`cuckoocode: unknown option(s) for \`config doctor\`: ${unknown.join(', ')}.`)
+    err(`swisscode: unknown option(s) for \`config doctor\`: ${unknown.join(', ')}.`)
     return 2
   }
 
@@ -563,15 +563,15 @@ function safeCwd(proc: ProcessPort, err: Emit): string | null {
   try {
     return proc.cwd()
   } catch {
-    err('cuckoocode: the current directory no longer exists.')
+    err('swisscode: the current directory no longer exists.')
     return null
   }
 }
 
 function refuseWrite(err: Emit): number {
   err(
-    'cuckoocode: config.json was written by a newer cuckoocode than this one; ' +
-      'refusing to overwrite it. Upgrade cuckoocode.',
+    'swisscode: config.json was written by a newer swisscode than this one; ' +
+      'refusing to overwrite it. Upgrade swisscode.',
   )
   return 2
 }

@@ -132,7 +132,7 @@ export function parseArgv(argv: string[] = []): ParsedArgv {
       return {
         ...base,
         error:
-          `unknown option "${name}". The --cc- prefix is reserved by cuckoocode; ` +
+          `unknown option "${name}". The --cc- prefix is reserved by swisscode; ` +
           `valid options are ${CC_FLAGS.join(', ')}. To send this token to claude ` +
           'anyway, put it after a bare --.',
       }
@@ -225,7 +225,7 @@ export function parseArgv(argv: string[] = []): ParsedArgv {
  * An unknown name still falls through to claude — it was probably the first
  * word of a prompt, and that asymmetry with --cc-profile is deliberate.
  *
- * argv[0] ONLY. `cuckoocode --yolo z` sends "z" to claude, because widening
+ * argv[0] ONLY. `swisscode --yolo z` sends "z" to claude, because widening
  * this to "the first non-flag token" would make an ordinary prompt word start
  * selecting accounts.
  *

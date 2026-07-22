@@ -36,7 +36,7 @@ export type ProfilePickerProps = {
 
 /**
  * The profile list. Opens only when more than one profile exists — with exactly
- * one, `cuckoocode config` goes straight into editing it, which is the
+ * one, `swisscode config` goes straight into editing it, which is the
  * behaviour people had before profiles existed and there is no reason to make
  * them pay a keystroke for a choice of one.
  */

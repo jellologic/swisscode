@@ -154,7 +154,7 @@ test('a clean setup produces no warnings and no errors', () => {
 test('a missing binary is an error with an actionable fix', () => {
   const c = byId(run({ binary: { path: null, error: 'not on PATH' } }), 'binary')
   assert.equal(c!.status, 'error')
-  assert.match(c!.fix!, /CUCKOOCODE_CLAUDE_BIN/)
+  assert.match(c!.fix!, /SWISSCODE_CLAUDE_BIN/)
 })
 
 test('loose file permissions are an error, tighter ones are not', () => {

@@ -80,7 +80,7 @@ export function inspectAmbient(
       w(
         'high',
         'stale-anthropic-key',
-        `a stale ${BILLING_KEY} was set in your environment. cuckoocode removed ` +
+        `a stale ${BILLING_KEY} was set in your environment. swisscode removed ` +
           'it for this launch so these requests are not billed to your Anthropic ' +
           `account. Unset it in your shell to silence this: unset ${BILLING_KEY}`,
       ),
@@ -171,7 +171,7 @@ export function inspectAmbient(
 
   // 4b. The one variable worth looking up that we do not set.
   // CLAUDE_CODE_DISABLE_1M_CONTEXT turns the extended-context window off
-  // wholesale. Because cuckoocode never sets it, the plan-walk above cannot see
+  // wholesale. Because swisscode never sets it, the plan-walk above cannot see
   // it — and a user who has it exported gets every [1m] this tool carefully
   // derived silently ignored, with a config that still reads as correct.
   //

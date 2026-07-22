@@ -47,7 +47,7 @@ export type UiModule = {
 }
 
 /**
- * The Ink UI is imported lazily and only from here. bin/cuckoocode.js and
+ * The Ink UI is imported lazily and only from here. bin/swisscode.js and
  * everything the launch path reaches stays plain dependency-free JS, so a
  * normal launch never pays for loading React.
  *
@@ -69,7 +69,7 @@ async function openUi(
     ui = await import('../dist/ui.js')
   } catch (err) {
     if ((err as { code?: string }).code === 'ERR_MODULE_NOT_FOUND') {
-      throw new Error('UI bundle is missing. Run `npm run build` in the cuckoocode checkout.')
+      throw new Error('UI bundle is missing. Run `npm run build` in the swisscode checkout.')
     }
     throw err
   }
@@ -84,7 +84,7 @@ async function openUi(
  */
 function fail(err: unknown): never {
   if (err instanceof LaunchError) {
-    console.error(`cuckoocode: ${err.message}`)
+    console.error(`swisscode: ${err.message}`)
     process.exit(err.exitCode)
   }
   throw err
@@ -98,7 +98,7 @@ export async function runCli(argv: string[]): Promise<void> {
   // claude, where it would read as prompt text while the launch silently used
   // the wrong settings.
   if (parsed.error) {
-    console.error(`cuckoocode: ${parsed.error}`)
+    console.error(`swisscode: ${parsed.error}`)
     process.exit(2)
   }
 
@@ -134,15 +134,15 @@ export async function runCli(argv: string[]): Promise<void> {
   if (planned.selection.ambiguous) {
     const names = Object.keys(planned.loaded.state.profiles).join(', ')
     console.error(
-      'cuckoocode: several profiles exist and none is set as the default. ' +
-        `Run \`cuckoocode config default <name>\` to choose one. Profiles: ${names}`,
+      'swisscode: several profiles exist and none is set as the default. ' +
+        `Run \`swisscode config default <name>\` to choose one. Profiles: ${names}`,
     )
     process.exit(2)
   }
 
   const saved = await openUi('setup', { state: planned.loaded.state })
   if (!saved) {
-    console.error('cuckoocode: setup cancelled, nothing launched.')
+    console.error('swisscode: setup cancelled, nothing launched.')
     process.exit(1)
   }
 

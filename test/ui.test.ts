@@ -15,7 +15,7 @@ import type { Profile } from '../src/ports/config-store.ts'
  */
 type UiModule = typeof import('../src/composition/ui-root.ts')
 
-const home = mkdtempSync(join(tmpdir(), 'cuckoocode-test-'))
+const home = mkdtempSync(join(tmpdir(), 'swisscode-test-'))
 process.env.XDG_CONFIG_HOME = home
 
 const React = (await import('react')).default
@@ -82,12 +82,12 @@ assert.deepEqual(result.models, {
   fable: 'glm-5.2',
 })
 
-const path = join(home, 'cuckoocode', 'config.json')
+const path = join(home, 'swisscode', 'config.json')
 const saved = JSON.parse(readFileSync(path, 'utf8'))
 assert.equal(saved.version, 2, 'wizard must write the v2 profile schema')
 assert.equal(saved.defaultProfile, 'zai')
 assert.deepEqual(saved.profiles.zai, result, 'the profile must persist verbatim')
 assert.equal(statSync(path).mode & 0o777, 0o600, 'the file holds an API key')
-assert.equal(statSync(join(home, 'cuckoocode')).mode & 0o777, 0o700)
+assert.equal(statSync(join(home, 'swisscode')).mode & 0o777, 0o700)
 
 console.log('ui wizard: all assertions passed')

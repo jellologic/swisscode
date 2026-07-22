@@ -150,7 +150,7 @@ export function createNodeProcess({
 
   const isExecutable = makeIsExecutable(platform)
 
-  // Guards `alias claude=cuckoocode` and a global shim pointing back at us,
+  // Guards `alias claude=swisscode` and a global shim pointing back at us,
   // which would otherwise recurse until the machine gives up. sep, not '/',
   // or the prefix never matches on Windows.
   function isSelf(p: string): boolean {
@@ -164,18 +164,18 @@ export function createNodeProcess({
   }
 
   function resolveBinary(): string {
-    const override = env.CUCKOOCODE_CLAUDE_BIN
+    const override = env.SWISSCODE_CLAUDE_BIN
     if (override) {
       if (!isExecutable(override)) {
         throw new Error(
-          `CUCKOOCODE_CLAUDE_BIN is set to "${override}", which is not an executable file.`,
+          `SWISSCODE_CLAUDE_BIN is set to "${override}", which is not an executable file.`,
         )
       }
-      // The override was unguarded, so pointing it at cuckoocode produced an
+      // The override was unguarded, so pointing it at swisscode produced an
       // infinite chain of execve calls that presents as a hang, not an error.
       if (isSelf(override)) {
         throw new Error(
-          `CUCKOOCODE_CLAUDE_BIN points at cuckoocode itself ("${override}"). ` +
+          `SWISSCODE_CLAUDE_BIN points at swisscode itself ("${override}"). ` +
             'Point it at the real claude binary.',
         )
       }
@@ -195,8 +195,8 @@ export function createNodeProcess({
 
     throw new Error(
       skippedSelf
-        ? 'the only `claude` on your PATH is cuckoocode itself. Point CUCKOOCODE_CLAUDE_BIN at the real binary.'
-        : 'could not find the `claude` binary on your PATH. Install Claude Code, or set CUCKOOCODE_CLAUDE_BIN.',
+        ? 'the only `claude` on your PATH is swisscode itself. Point SWISSCODE_CLAUDE_BIN at the real binary.'
+        : 'could not find the `claude` binary on your PATH. Install Claude Code, or set SWISSCODE_CLAUDE_BIN.',
     )
   }
 
@@ -206,7 +206,7 @@ export function createNodeProcess({
    */
   function replace(bin: string, args: string[], childEnv: EnvMap): void {
     // Preferred path: replace this process image outright. Claude Code inherits
-    // our pid, tty, process group and signal handling, and cuckoocode leaves
+    // our pid, tty, process group and signal handling, and swisscode leaves
     // nothing behind — no wrapper process, no exit-code relay, no extra idle
     // Node sitting in the process list for the whole session.
     //
@@ -221,9 +221,9 @@ export function createNodeProcess({
         // execve existing is not the same as execve working: EACCES, a TOCTOU
         // ENOENT, ETXTBSY and ERR_FEATURE_UNAVAILABLE_ON_PLATFORM all throw
         // here. Falling through to spawn beats dying.
-        if (process.env.CUCKOOCODE_DEBUG) {
+        if (process.env.SWISSCODE_DEBUG) {
           const message = (err as { message?: string }).message
-          console.error(`cuckoocode: execve failed (${message}); falling back to spawn.`)
+          console.error(`swisscode: execve failed (${message}); falling back to spawn.`)
         }
       }
     }
@@ -276,7 +276,7 @@ export function spawnFallback(
   host.on('SIGTERM', onSignal)
 
   child.on('error', (err) => {
-    console.error(`cuckoocode: failed to start ${bin}: ${err.message}`)
+    console.error(`swisscode: failed to start ${bin}: ${err.message}`)
     host.exit(127)
   })
 
@@ -297,10 +297,10 @@ export function spawnFallback(
 }
 
 /**
- * Path-independent recursion guard. buildEnv has always written CUCKOOCODE=1
+ * Path-independent recursion guard. buildEnv has always written SWISSCODE=1
  * into the child environment and nothing ever read it; reading it catches the
- * cases realpath cannot, such as a shell shim that runs `exec cuckoocode "$@"`.
+ * cases realpath cannot, such as a shell shim that runs `exec swisscode "$@"`.
  */
 export function detectRecursion(ambientEnv: ReadableEnv | null | undefined): boolean {
-  return ambientEnv?.CUCKOOCODE === '1'
+  return ambientEnv?.SWISSCODE === '1'
 }

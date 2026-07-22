@@ -1,7 +1,7 @@
-# cuckoocode
+# swisscode
 
 A drop-in launcher for [Claude Code](https://claude.com/claude-code). Pick a
-provider, models and permission flags once; after that `cuckoocode` behaves
+provider, models and permission flags once; after that `swisscode` behaves
 exactly like `claude`.
 
 It replaces shell aliases like this:
@@ -14,33 +14,33 @@ alias claudeor='ANTHROPIC_AUTH_TOKEN=sk-or-... ANTHROPIC_BASE_URL=https://openro
 ## Usage
 
 ```sh
-npx cuckoocode          # first run opens setup, then launches
-npx cuckoocode          # every run after: launches straight into Claude Code
+npx swisscode          # first run opens setup, then launches
+npx swisscode          # every run after: launches straight into Claude Code
 ```
 
 For daily use install it globally — `npx` re-checks the registry on every
 invocation, which you'll feel on a tool you launch dozens of times a day:
 
 ```sh
-npm install -g cuckoocode
+npm install -g swisscode
 ```
 
 Every argument that isn't listed below is forwarded to `claude` untouched:
 
 ```sh
-cuckoocode "fix the failing test"
-cuckoocode --resume --model opus
-cuckoocode -p "summarise this diff" < diff.txt
+swisscode "fix the failing test"
+swisscode --resume --model opus
+swisscode -p "summarise this diff" < diff.txt
 ```
 
 | Command / flag | Effect |
 | --- | --- |
-| `cuckoocode config` | Reopen the settings UI |
-| `cuckoocode <profile>` | Use that profile for this run (see [Profiles](#profiles)) |
-| `cuckoocode --safe` | Force permission prompts **on** for this run |
-| `cuckoocode --yolo` | Force `--dangerously-skip-permissions` **on** for this run |
-| `cuckoocode --cc-…` | Per-run overrides (see [Per-run overrides](#per-run-overrides)) |
-| `cuckoocode -- …` | Everything after `--` goes to `claude` verbatim |
+| `swisscode config` | Reopen the settings UI |
+| `swisscode <profile>` | Use that profile for this run (see [Profiles](#profiles)) |
+| `swisscode --safe` | Force permission prompts **on** for this run |
+| `swisscode --yolo` | Force `--dangerously-skip-permissions` **on** for this run |
+| `swisscode --cc-…` | Per-run overrides (see [Per-run overrides](#per-run-overrides)) |
+| `swisscode -- …` | Everything after `--` goes to `claude` verbatim |
 
 `config`, `setup`, `--safe`, `--yolo` and the `--cc-` **prefix** are the only
 reserved things. Everything else — including every subcommand below — lives
@@ -48,7 +48,7 @@ under `config`, so no ordinary English word is ever taken away from you. If you
 need to pass a reserved token through literally, put it after `--`:
 
 ```sh
-cuckoocode -- --cc-profile   # claude receives "--cc-profile"
+swisscode -- --cc-profile   # claude receives "--cc-profile"
 ```
 
 ## Profiles
@@ -57,20 +57,20 @@ A profile is a named provider + key + models. Name one after each account,
 client or experiment.
 
 ```sh
-cuckoocode config work           # create or edit the "work" profile
-cuckoocode config list           # every profile (keys are never printed)
-cuckoocode config default work   # used when nothing else applies
-cuckoocode config rm old         # deletes it, and any bindings to it
+swisscode config work           # create or edit the "work" profile
+swisscode config list           # every profile (keys are never printed)
+swisscode config default work   # used when nothing else applies
+swisscode config rm old         # deletes it, and any bindings to it
 ```
 
 Once a profile exists, its name is usable in `argv[0]`:
 
 ```sh
-cuckoocode work --resume
+swisscode work --resume
 ```
 
 If the first word isn't a profile name it's passed straight to `claude`, so
-`cuckoocode fix the login bug` still works. To be explicit either way, use
+`swisscode fix the login bug` still works. To be explicit either way, use
 `--cc-profile work` — an unknown name there is an error rather than a prompt.
 
 Profile names must start with a letter or digit and contain only letters,
@@ -85,18 +85,18 @@ underneath it — uses that profile.
 
 ```sh
 cd ~/clients/acme
-cuckoocode config use acme       # bind this directory
-cuckoocode config use --show     # which profile applies here, and why
-cuckoocode config use --clear    # remove this directory's binding
-cuckoocode config bindings       # list all of them
-cuckoocode config bindings --prune   # drop ones whose dir or profile is gone
+swisscode config use acme       # bind this directory
+swisscode config use --show     # which profile applies here, and why
+swisscode config use --clear    # remove this directory's binding
+swisscode config bindings       # list all of them
+swisscode config bindings --prune   # drop ones whose dir or profile is gone
 ```
 
 The nearest ancestor wins, so a binding deeper in the tree overrides a shallower
 one. `--show` prints the exact path the binding came from, which is the thing
 you need when a directory picks a profile you didn't expect.
 
-Bindings live in `~/.config/cuckoocode/config.json`, keyed by absolute path.
+Bindings live in `~/.config/swisscode/config.json`, keyed by absolute path.
 Nothing is written into your project, so nothing leaks into a commit — the
 tradeoff is that bindings don't travel with a clone. They're keyed by the
 physical path (`process.cwd()`), so a symlinked route to the same directory is
@@ -122,8 +122,8 @@ disk. All of them are stripped before `claude` is executed.
 | `--cc-env KEY=VALUE` | Set an env var. `KEY=` **unsets** it |
 
 ```sh
-cuckoocode --cc-model kimi-k3 --cc-model haiku=glm-4.6 -p "..."
-cuckoocode --cc-base-url http://localhost:8080 --cc-env API_TIMEOUT_MS=600000
+swisscode --cc-model kimi-k3 --cc-model haiku=glm-4.6 -p "..."
+swisscode --cc-base-url http://localhost:8080 --cc-env API_TIMEOUT_MS=600000
 ```
 
 A bare `--cc-model` sets all four tiers on purpose. `[1m]` is read per
@@ -145,10 +145,10 @@ the launch quietly used the wrong account.
 ## Checking a setup
 
 ```sh
-cuckoocode config doctor              # check everything
-cuckoocode config doctor --offline    # skip the network probes
-cuckoocode config doctor --json       # for scripts and CI
-cuckoocode config doctor --fix        # apply the unambiguous repairs
+swisscode config doctor              # check everything
+swisscode config doctor --offline    # skip the network probes
+swisscode config doctor --json       # for scripts and CI
+swisscode config doctor --fix        # apply the unambiguous repairs
 ```
 
 Doctor verifies binary resolution, which profile is active and why, endpoint
@@ -190,7 +190,7 @@ Note the ModelScope and SiliconFlow endpoints are **bare hosts**. The `/v1` that
 appears alongside them in the vendors' docs is the OpenAI-compatible route;
 adding it here produces `/v1/v1/messages` and a 404.
 
-Whichever provider you pick, cuckoocode removes `ANTHROPIC_API_KEY` from the
+Whichever provider you pick, swisscode removes `ANTHROPIC_API_KEY` from the
 child environment unless that provider is the one that uses it. A stale key left
 in your shell would otherwise make Claude Code fall back to Anthropic and bill
 the wrong account.
@@ -239,7 +239,7 @@ than left to fail at runtime. `^T` reveals them, with a warning on the model.
 
 Models are sorted best-coding-first using Artificial Analysis benchmark scores
 where available. The catalog is cached for 24h at
-`~/.config/cuckoocode/models-<catalog>.json`; if the fetch fails, a stale
+`~/.config/swisscode/models-<catalog>.json`; if the fetch fails, a stale
 cache is used and the header says so.
 
 > **Note:** tokens/sec is not shown. OpenRouter's public API exposes
@@ -249,7 +249,7 @@ cache is used and the header says so.
 
 ## Configuration
 
-Settings live in `~/.config/cuckoocode/config.json` (honours
+Settings live in `~/.config/swisscode/config.json` (honours
 `XDG_CONFIG_HOME`), written `0600` inside a `0700` directory because the file
 holds an API key in plaintext.
 
@@ -282,7 +282,7 @@ holds an API key in plaintext.
 That's new non-credential information in this file — worth remembering before
 pasting it into a bug report.
 
-A config written by cuckoocode 0.1.0 — a single flat object with a top-level
+A config written by swisscode 0.1.0 — a single flat object with a top-level
 `provider` — is migrated to this shape automatically the first time a newer
 version reads it. The original is kept beside it as `config.v1.bak.json`, and a
 migration that cannot be written to disk is used in memory rather than blocking
@@ -311,10 +311,10 @@ suffixing three tiers and forgetting the fourth leaves that tier at 200K
 silently.
 
 You never type the suffix. A provider declares which of its models genuinely
-support the wider window, and cuckoocode derives the suffix for every tier from
-that one list. Pin a tier to a model that is not on the list and cuckoocode
+support the wider window, and swisscode derives the suffix for every tier from
+that one list. Pin a tier to a model that is not on the list and swisscode
 tells you that tier is running narrow; write a suffix by hand for a provider
-that does not support it and cuckoocode strips it, because sending an id the
+that does not support it and swisscode strips it, because sending an id the
 endpoint does not recognise fails hard while a narrower window merely
 disappoints.
 
@@ -324,14 +324,14 @@ anything on disk being rewritten.
 
 ### Auto-compact window
 
-When cuckoocode knows a model's real context length it sets
+When swisscode knows a model's real context length it sets
 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, which is where Claude Code starts summarising
 the conversation. This is **in addition to** `[1m]`, not a substitute: the
 suffix is what widens the window, this says where to compact inside it.
 
 The number comes from measured data only — a catalog's published context length,
 recorded when you pick a model, or a window the provider documents. If any tier
-is running a model with no such data, cuckoocode sets nothing at all rather than
+is running a model with no such data, swisscode sets nothing at all rather than
 guessing; a guessed window that is too large means the conversation overflows
 instead of compacting. It is skipped entirely for first-party Anthropic, which
 knows its own models better than we do.
@@ -366,7 +366,7 @@ compatibility switch is asking for.
 
 Variables you exported once and forgot outrank nothing — the profile always
 wins. But winning silently looks identical to never having conflicted, so
-cuckoocode prints a line to **stderr** (never stdout, which belongs to Claude
+swisscode prints a line to **stderr** (never stdout, which belongs to Claude
 Code) when your environment and your profile disagree about something this
 launch touches.
 
@@ -375,7 +375,7 @@ here that costs money: left in place it makes Claude Code fall back to Anthropic
 and bill that account for traffic you meant to send to a gateway.
 
 A clean environment produces no output. Set `"quiet": true` under `settings`, or
-`CUCKOOCODE_QUIET=1`, to suppress the lot.
+`SWISSCODE_QUIET=1`, to suppress the lot.
 
 ### Which profile am I using?
 
@@ -384,23 +384,23 @@ a directory binding applied, or a `--cc-` flag changed something — one line go
 to stderr saying so:
 
 ```
-cuckoocode: profile "acme" (binding: /Users/me/clients/acme) → openrouter · openrouter/fusion
+swisscode: profile "acme" (binding: /Users/me/clients/acme) → openrouter · openrouter/fusion
 ```
 
 The ordinary default-profile launch stays silent, which is what keeps that line
-worth reading. `cuckoocode config use --show` answers the same question without
+worth reading. `swisscode config use --show` answers the same question without
 launching anything.
 
 | Env var | Effect |
 | --- | --- |
-| `CUCKOOCODE_CLAUDE_BIN` | Use a specific `claude` binary |
-| `CUCKOOCODE=1` | Set by us in the child, so hooks can detect the wrapper |
-| `CUCKOOCODE_QUIET=1` | Suppress warnings and the profile banner |
+| `SWISSCODE_CLAUDE_BIN` | Use a specific `claude` binary |
+| `SWISSCODE=1` | Set by us in the child, so hooks can detect the wrapper |
+| `SWISSCODE_QUIET=1` | Suppress warnings and the profile banner |
 
 ## How it launches
 
-`cuckoocode` resolves the real `claude` binary from `PATH` (skipping itself, so
-`alias claude=cuckoocode` can't recurse), builds the environment, then calls
+`swisscode` resolves the real `claude` binary from `PATH` (skipping itself, so
+`alias claude=swisscode` can't recurse), builds the environment, then calls
 `process.execve` to **replace its own process image**. Claude Code inherits the
 same pid, tty and process group, and no wrapper process is left behind — nothing
 to relay exit codes through, no idle Node process for the length of your
@@ -416,7 +416,7 @@ The Ink UI is loaded lazily, so the normal launch path never imports React.
 
 ## Development
 
-cuckoocode is written in TypeScript and **published as compiled JavaScript**.
+swisscode is written in TypeScript and **published as compiled JavaScript**.
 Nothing in the tarball relies on Node's native type stripping, which is not
 reliably enabled across the whole `>=22` engines range.
 
@@ -444,7 +444,7 @@ first. `npm test` always builds, so it is the safe default.
 
 | path | what it is | shipped? |
 |---|---|---|
-| `bin/cuckoocode.js` | the published entry point. Plain JS on purpose, never compiled — it runs before anything is known about the environment, so it carries no dependencies and no syntax needing a build. Imports `../dist/cli.js`. | yes |
+| `bin/swisscode.js` | the published entry point. Plain JS on purpose, never compiled — it runs before anything is known about the environment, so it carries no dependencies and no syntax needing a build. Imports `../dist/cli.js`. | yes |
 | `src/core/**` | pure domain logic. No I/O, no state, imports nothing outside `core/` and `node:` builtins. | as `dist/core/**` |
 | `src/ports/**` | interfaces only. Every one of these files erases to `export {}`. | as `dist/ports/**` |
 | `src/adapters/**` | the implementations — providers, catalogs, fs, process, net, clock, doctor probe, and the Ink UI. | all but `adapters/ui` |

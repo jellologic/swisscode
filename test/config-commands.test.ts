@@ -284,7 +284,7 @@ test('config bindings lists everything and flags what is dead', async () => {
 })
 
 test('config bindings --prune removes dead entries and keeps live ones', async () => {
-  const live = mkdtempSync(join(tmpdir(), 'cuckoocode-bind-'))
+  const live = mkdtempSync(join(tmpdir(), 'swisscode-bind-'))
   try {
     const state = STATE()
     state.bindings = { [live]: 'z', '/definitely/not/real': 'z' }
@@ -304,12 +304,12 @@ test('a binding walk is bounded even in a very deep directory', async () => {
 
 // Refusals
 
-test('every writing subcommand refuses a config from a newer cuckoocode', async () => {
+test('every writing subcommand refuses a config from a newer swisscode', async () => {
   for (const args of [['default', 'or'], ['rm', 'or'], ['use', 'or'], ['unbind'], ['bindings', '--prune']]) {
     const h = harness({ readOnly: true, state: { ...STATE(), bindings: { '/work/proj': 'or' } } })
     assert.equal(await h.run(args), 2, args.join(' '))
     assert.equal(h.saves.length, 0, args.join(' '))
-    assert.match(h.errText(), /Upgrade cuckoocode/)
+    assert.match(h.errText(), /Upgrade swisscode/)
   }
 })
 
@@ -359,9 +359,9 @@ test('config help documents the override flags without inventing new words', asy
   for (const flag of ['--cc-profile', '--cc-provider', '--cc-model', '--cc-base-url', '--cc-env']) {
     assert.match(text, new RegExp(flag.replace(/-/g, '\\-')))
   }
-  // Every documented command is spelled `cuckoocode config …`.
-  for (const line of text.split('\n').filter((l) => l.trim().startsWith('cuckoocode'))) {
-    assert.match(line, /^\s*cuckoocode config\b/, line)
+  // Every documented command is spelled `swisscode config …`.
+  for (const line of text.split('\n').filter((l) => l.trim().startsWith('swisscode'))) {
+    assert.match(line, /^\s*swisscode config\b/, line)
   }
 })
 

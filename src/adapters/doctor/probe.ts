@@ -39,7 +39,7 @@ function isObjectLike(v: unknown): v is Record<string, unknown> {
  * than whether tool calling works at all.
  */
 export const PROBE_TOOL = Object.freeze({
-  name: 'cuckoocode_ping',
+  name: 'swisscode_ping',
   description: 'Reply by calling this tool with ok=true.',
   input_schema: {
     type: 'object',

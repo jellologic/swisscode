@@ -30,7 +30,7 @@ function onDisk(p: string): string | null {
 
 /**
  * The launch path is a property of the SOURCE graph, so the closure is rooted
- * at the real launch module rather than at bin/. bin/cuckoocode.js is a
+ * at the real launch module rather than at bin/. bin/swisscode.js is a
  * deliberately trivial shim over the compiled output; it is pinned by its own
  * test below, which is strictly more specific than walking through it.
  */
@@ -86,11 +86,11 @@ test('the launch path never statically reaches React, Ink, or node_modules', () 
 })
 
 test('the published bin shim is dependency-free and runs compiled output', () => {
-  // bin/ is what npm installs as `cuckoocode`. It must stay plain JS with no
+  // bin/ is what npm installs as `swisscode`. It must stay plain JS with no
   // imports of its own beyond the compiled entry, so the published package
   // never depends on Node's native type stripping (engines is ">=22", where
   // stripping is not reliably enabled).
-  const shim = join(ROOT, 'bin', 'cuckoocode.js')
+  const shim = join(ROOT, 'bin', 'swisscode.js')
   const src = readFileSync(shim, 'utf8')
   const specs = [
     ...matchAll(src, STATIC_IMPORT),
@@ -100,7 +100,7 @@ test('the published bin shim is dependency-free and runs compiled output', () =>
   assert.deepEqual(
     specs,
     ['../dist/cli.js'],
-    'bin/cuckoocode.js must import exactly the compiled CLI entry and nothing else',
+    'bin/swisscode.js must import exactly the compiled CLI entry and nothing else',
   )
 })
 

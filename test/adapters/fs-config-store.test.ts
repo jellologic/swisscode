@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFsConfigStore } from '../../src/adapters/store/fs-config-store.ts'
 
-/** Byte-for-byte what cuckoocode 0.1.0's saveConfig writes. */
+/** Byte-for-byte what swisscode 0.1.0's saveConfig writes. */
 const V1_ON_DISK = `${JSON.stringify(
   {
     provider: 'zai',
@@ -27,8 +27,8 @@ const V1_ON_DISK = `${JSON.stringify(
 )}\n`
 
 function freshHome(contents: string | null = null, mode = 0o600) {
-  const home = mkdtempSync(join(tmpdir(), 'cuckoocode-store-'))
-  const dir = join(home, 'cuckoocode')
+  const home = mkdtempSync(join(tmpdir(), 'swisscode-store-'))
+  const dir = join(home, 'swisscode')
   if (contents !== null) {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     writeFileSync(join(dir, 'config.json'), contents, { mode })

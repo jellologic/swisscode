@@ -134,7 +134,7 @@ function harness(
   // catalog response is untrusted JSON and every row is re-validated.
   { payload = OPENROUTER_PAYLOAD as unknown, now = 1_000_000_000_000 }: { payload?: unknown; now?: number } = {},
 ) {
-  const dir = mkdtempSync(join(tmpdir(), 'cuckoocode-cat-'))
+  const dir = mkdtempSync(join(tmpdir(), 'swisscode-cat-'))
   const clock = { now: () => now }
   const calls: string[] = []
   const net = {

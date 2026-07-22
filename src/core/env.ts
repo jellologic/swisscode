@@ -241,6 +241,6 @@ export function materializeEnv(ambientEnv: EnvMap, plan: EnvPlan): EnvMap {
   const env: EnvMap = { ...ambientEnv, ...plan.set }
   for (const key of plan.unset) delete env[key]
   // Read back by the recursion guard in adapters/process/node-process.js.
-  env.CUCKOOCODE = '1'
+  env.SWISSCODE = '1'
   return env
 }

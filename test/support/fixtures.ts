@@ -53,7 +53,7 @@ export const makeState = (s: Partial<State>): State => s as State
 /**
  * A ProviderDescriptor fixture that omits fields the code under test does not
  * read — e.g. a deliberately "invented" provider that no registry knows about,
- * standing in for a config written by a newer cuckoocode.
+ * standing in for a config written by a newer swisscode.
  */
 export const makeDescriptor = (d: Partial<ProviderDescriptor>): ProviderDescriptor =>
   d as ProviderDescriptor

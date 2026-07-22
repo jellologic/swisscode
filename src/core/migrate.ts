@@ -28,7 +28,7 @@ export const SOFT_RESERVED = Object.freeze([
 ])
 
 /**
- * `cuckoocode fix the login bug` silently eating a profile named `fix` is the
+ * `swisscode fix the login bug` silently eating a profile named `fix` is the
  * worst thing this feature can do, so these need --force at creation time.
  */
 export const COMMON_WORD_GUARD = Object.freeze([
@@ -286,14 +286,14 @@ export function validateProfileName(
     }
   }
   if (SOFT_RESERVED.includes(name)) {
-    return { ok: false, reason: `"${name}" is reserved for cuckoocode subcommands.` }
+    return { ok: false, reason: `"${name}" is reserved for swisscode subcommands.` }
   }
   if (!force && COMMON_WORD_GUARD.includes(name)) {
     return {
       ok: false,
       reason:
         `"${name}" is a word you are likely to type as a prompt — ` +
-        `\`cuckoocode ${name} ...\` would select the profile instead. ` +
+        `\`swisscode ${name} ...\` would select the profile instead. ` +
         'Re-run with --force if you really want it.',
     }
   }

@@ -19,7 +19,7 @@ import type { Profile, State } from '../src/ports/config-store.ts'
 type UiModule = typeof import('../src/composition/ui-root.ts')
 type AppProps = Parameters<UiModule['App']>[0]
 
-const home = mkdtempSync(join(tmpdir(), 'cuckoocode-profiles-'))
+const home = mkdtempSync(join(tmpdir(), 'swisscode-profiles-'))
 process.env.XDG_CONFIG_HOME = home
 
 const React = (await import('react')).default
@@ -62,9 +62,9 @@ function fakeStore(state: State) {
       load: () => ({ state, corrupt: false, readOnly: false, migrated: false, warnings: [] }),
       save: (s: State) => {
         saves.push(structuredClone(s))
-        return join(home, 'cuckoocode', 'config.json')
+        return join(home, 'swisscode', 'config.json')
       },
-      path: () => join(home, 'cuckoocode', 'config.json'),
+      path: () => join(home, 'swisscode', 'config.json'),
     },
   }
 }
@@ -349,13 +349,13 @@ function mount(props: Partial<AppProps>) {
   ui.stdin.write(ENTER) // permissions
   await tick()
 
-  const path = join(home, 'cuckoocode', 'config.json')
+  const path = join(home, 'swisscode', 'config.json')
   const saved = JSON.parse(readFileSync(path, 'utf8'))
   assert.equal(saved.version, 2)
   assert.ok(saved.profiles.personal)
   assert.ok(saved.profiles.work, 'the untouched profile round-tripped')
   assert.equal(statSync(path).mode & 0o777, 0o600, 'the file holds API keys')
-  assert.equal(statSync(join(home, 'cuckoocode')).mode & 0o777, 0o700)
+  assert.equal(statSync(join(home, 'swisscode')).mode & 0o777, 0o700)
   ui.unmount()
   console.log('profiles ui: multi-profile state round-trips at 0600 in a 0700 dir')
 }

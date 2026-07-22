@@ -1,4 +1,4 @@
-// `cuckoocode config doctor` — the diagnosis, with no I/O in it.
+// `swisscode config doctor` — the diagnosis, with no I/O in it.
 //
 // Everything here is (facts in) -> (checks out). The adapter resolves the
 // binary, stats the config file, and makes the network calls; this module
@@ -162,7 +162,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
     binary.path
       ? makeCheck('binary', 'claude binary', OK, binary.path)
       : makeCheck('binary', 'claude binary', ERROR, binary.error ?? 'not found', {
-          fix: 'Install Claude Code, or point CUCKOOCODE_CLAUDE_BIN at the real binary.',
+          fix: 'Install Claude Code, or point SWISSCODE_CLAUDE_BIN at the real binary.',
         }),
   )
 
@@ -179,8 +179,8 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
         'config-version',
         'config.json',
         ERROR,
-        `written by a newer cuckoocode (version ${state.version}); writes are refused`,
-        { fix: 'Upgrade cuckoocode.' },
+        `written by a newer swisscode (version ${state.version}); writes are refused`,
+        { fix: 'Upgrade swisscode.' },
       ),
     )
   } else {
@@ -203,10 +203,10 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
             ERROR,
             `several profiles exist (${Object.keys(state.profiles ?? {}).join(', ')}) and none is ` +
               'the default',
-            { fix: 'Run `cuckoocode config default <name>`.' },
+            { fix: 'Run `swisscode config default <name>`.' },
           )
         : makeCheck('profile', 'active profile', ERROR, 'no profile configured', {
-            fix: 'Run `cuckoocode config`.',
+            fix: 'Run `swisscode config`.',
           }),
     )
   } else {
@@ -239,7 +239,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
             'provider',
             ERROR,
             `"${profile.provider}" is not a known provider and the profile has no baseUrl`,
-            { fix: 'Run `cuckoocode config <name>` and pick a provider.' },
+            { fix: 'Run `swisscode config <name>` and pick a provider.' },
           ),
     )
   } else {
@@ -278,7 +278,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
   } else {
     checks.push(
       makeCheck('credential', 'credential', ERROR, `no ${credentialEnv} for this profile`, {
-        fix: `Run \`cuckoocode config ${selection.name}\` and paste the key.`,
+        fix: `Run \`swisscode config ${selection.name}\` and paste the key.`,
       }),
     )
   }
@@ -304,7 +304,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
         `${missing.join(', ')} not set, so ${missing
           .map((t) => TIER_ENV[t])
           .join(', ')} is cleared and Claude Code falls back for those tiers`,
-        { fix: `Run \`cuckoocode config ${selection.name}\` and fill every tier.` },
+        { fix: `Run \`swisscode config ${selection.name}\` and fill every tier.` },
       ),
     )
   }
@@ -372,7 +372,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
         WARN,
         `${danglingProfiles.length} binding(s) point at a profile that no longer exists: ` +
           danglingProfiles.map(([k]) => k).join(', '),
-        { fix: 'Run `cuckoocode config bindings --prune`.', repair: { kind: 'prune' } },
+        { fix: 'Run `swisscode config bindings --prune`.', repair: { kind: 'prune' } },
       ),
     )
   }
@@ -384,7 +384,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
         WARN,
         `${deadBindingPaths.length} binding(s) point at a directory that no longer exists: ` +
           deadBindingPaths.join(', '),
-        { fix: 'Run `cuckoocode config bindings --prune`.', repair: { kind: 'prune' } },
+        { fix: 'Run `swisscode config bindings --prune`.', repair: { kind: 'prune' } },
       ),
     )
   }
@@ -417,7 +417,7 @@ function modeCheck(id: string, title: string, mode: number | null, want: number)
     title,
     tooOpen ? ERROR : WARN,
     `${actual}, expected 0${want.toString(8)}`,
-    { fix: 'cuckoocode re-asserts this on its next write, or `chmod` it yourself.' },
+    { fix: 'swisscode re-asserts this on its next write, or `chmod` it yourself.' },
   )
 }
 
@@ -519,7 +519,7 @@ export function interpretMessagesProbe({
       fix:
         provider?.id === 'modelscope'
           ? 'Keep the ms- prefix on the token exactly as issued — stripping it breaks auth.'
-          : 'Re-enter the key with `cuckoocode config <name>`.',
+          : 'Re-enter the key with `swisscode config <name>`.',
     })
   }
   if (status === 404) {

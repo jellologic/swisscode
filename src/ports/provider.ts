@@ -196,7 +196,7 @@ export type ResolvedModels = TierRecord<string | undefined>
  * Lookup over the shipped presets.
  *
  * `byId` returns null rather than throwing: an unknown provider id is a normal
- * state (a config file written by a newer cuckoocode, or a hand-edited one) and
+ * state (a config file written by a newer swisscode, or a hand-edited one) and
  * the caller decides whether it is fatal. See launch-root.ts, which only refuses
  * the launch when the profile ALSO has no baseUrl of its own.
  *
