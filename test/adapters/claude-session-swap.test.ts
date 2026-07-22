@@ -7,7 +7,7 @@
 // the command that caused it.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readRawCredential, swapCredential } from '../../src/adapters/claude-session/swap.ts'
@@ -169,20 +169,29 @@ test('a source with no login is refused, and nothing is written', async () => {
 })
 
 test('an unwritable target is refused, and says nothing changed', async () => {
+  // A read-only PARENT, so the target cannot be created inside it. Not
+  // `/proc/nonexistent/...`: that path throws ENOENT on macOS but makes
+  // `mkdirSync(recursive)` HANG on Linux, which wedged the whole suite in CI
+  // the first time this branch met a Linux runner.
   const from = fresh()
   const fake = fakeSecurity({ [keychainService(from, env)]: BLOB })
-  // A path whose parent cannot be created.
-  const result = swapCredential(from, '/proc/nonexistent/swisscode-target', {
-    env,
-    platform: 'darwin',
-    exec: fake.exec,
-  })
-  assert.equal(result.ok, false)
-  assert.equal(
-    fake.calls.filter((c) => c.args[0] === 'delete-generic-password').length,
-    0,
-    'a failed write must never drop the target\'s existing login',
-  )
+  const parent = fresh()
+  chmodSync(parent, 0o500)
+  try {
+    const result = swapCredential(from, join(parent, 'target'), {
+      env,
+      platform: 'darwin',
+      exec: fake.exec,
+    })
+    assert.equal(result.ok, false)
+    assert.equal(
+      fake.calls.filter((c) => c.args[0] === 'delete-generic-password').length,
+      0,
+      "a failed write must never drop the target's existing login",
+    )
+  } finally {
+    chmodSync(parent, 0o700)
+  }
 })
 
 test('the identity block is COPIED, or the swap is only half done', async () => {
