@@ -9,12 +9,10 @@ export const CACHE_VERSION = 1
 /**
  * Narrows `unknown` to something indexable, and nothing more.
  *
- * Exactly `!!v && typeof v === 'object'` — the same test the checks below
- * already made inline, INCLUDING the fact that it lets arrays through. That
- * matters: `isNormalizedModel` rejects a top-level array explicitly, but a
+ * Exactly `!!v && typeof v === 'object'` — including letting arrays through.
+ * `isNormalizedModel` rejects a top-level array explicitly, but a
  * `pricing: []` was always allowed past the object check and then failed on
- * `Number.isFinite(undefined)`. Preserving that path rather than tightening it
- * on the way past is what keeps this a types-only change.
+ * `Number.isFinite(undefined)`. That path is preserved deliberately.
  */
 function isObjectLike(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object'
@@ -131,10 +129,7 @@ export function filterModels(
   return models.filter((m) => {
     // Only a CONFIRMED absence hides a row; unknown stays visible.
     if (toolsFilterActive && m.tools === false) return false
-    // `m.pricing &&` is not defensive style. `pricing` is `Pricing | null`, and
-    // UNKNOWN pricing must never count as free — without the null check this
-    // line does not compile, which is precisely what the port typing it
-    // nullable is for.
+    // UNKNOWN pricing must never count as free (`pricing` is `Pricing | null`).
     if (freeFilterActive && !(m.pricing && m.pricing.prompt === 0)) return false
     if (terms.length === 0) return true
     const hay = `${m.id} ${m.name}`.toLowerCase()

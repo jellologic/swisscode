@@ -1,8 +1,8 @@
 // Composition root for `cuckoocode config doctor`.
 //
-// LAZY. Reached only through a dynamic import in src/cli.js, exactly like the
+// LAZY. Reached only through a dynamic import in src/cli.ts, exactly like the
 // UI bundle, so the launch path's static closure never grows to carry a
-// diagnostic tool. test/architecture.test.js asserts that.
+// diagnostic tool. test/architecture.test.ts asserts that.
 //
 // Doctor NEVER runs automatically. It makes real inference requests, and a
 // launcher that quietly bills you a token every time you start it would be a
@@ -117,7 +117,7 @@ export async function runDoctor({
     deadBindingPaths,
   })
 
-  // ---- live probes ---------------------------------------------------------
+  // live probes
   const spec = plan ? probeSpec(profile, provider, plan) : null
   const secrets = spec?.credential ? [spec.credential] : []
 
@@ -205,7 +205,7 @@ export async function runDoctor({
     )
   }
 
-  // ---- repairs -------------------------------------------------------------
+  // repairs
   const repairs = []
   if (fix && !loaded.readOnly) {
     const pruned = pruneBindings(loaded.state, (key) => existsSync(key))

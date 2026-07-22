@@ -89,7 +89,7 @@ const CTRL_T = '\u0014' // ^T
 const BACKSPACE = '\u007F'
 const tick = () => new Promise((r) => setTimeout(r, 70))
 
-// ---------------------------------------------------- OpenRouter: rich catalog
+// OpenRouter: rich catalog
 
 let result: Profile | null | undefined
 const { lastFrame, stdin } = render(
@@ -191,7 +191,7 @@ assert.equal((result as Profile).models!.opus, 'anthropic/claude-opus-4.8', 'pic
 assert.equal((result as Profile).models!.sonnet, 'openrouter/fusion', 'untouched tiers keep defaults')
 assert.equal((result as Profile).models!.fable, 'openrouter/fusion', 'the fable tier must not be left unset')
 
-// ------------------------------------------- ModelScope: no prices, no benchmarks
+// ModelScope: no prices, no benchmarks
 
 const second = render(h(App, { initial: null, onResult: () => {} }))
 

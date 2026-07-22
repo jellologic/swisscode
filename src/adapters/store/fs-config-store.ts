@@ -25,17 +25,10 @@ type ReadableEnv = Record<string, string | undefined>
 /**
  * Read `.message` off a caught value.
  *
- * `useUnknownInCatchVariables` (part of `strict`) types a caught value as
- * `unknown`, so the bare `err.message` this replaces no longer compiles.
- *
- * Deliberately NOT `err instanceof Error ? err.message : String(err)`. That is
- * the idiomatic fix and it is a BEHAVIOUR CHANGE: a non-Error throw yields
- * `undefined` here today, and `String(err)` would put a different string into a
- * warning the user reads. A types-only slice does not get to change that, so
- * the property read stays the property read and the return type says exactly
- * what such a read yields. The `as` claims only that a property MIGHT be there,
- * which is the weakest statement that compiles, and it is not applied to
- * external data — see the catalog adapters for that boundary.
+ * Deliberately NOT `err instanceof Error ? err.message : String(err)`. A
+ * non-Error throw yields `undefined` here today; `String(err)` would put a
+ * different string into a warning the user reads. The `as` claims only that a
+ * property MIGHT be there — not applied to external data (see catalog adapters).
  */
 const errMessage = (err: unknown): string | undefined => (err as { message?: string }).message
 
@@ -51,11 +44,9 @@ export type FsConfigStoreOptions = {
 /**
  * The file config store, plus one method the port does not declare.
  *
- * `dir()` is implemented here and called by NOBODY — dead surface, confirmed by
- * the ports slice. It is left in place (this is a types-only migration, not a
- * cleanup) but it stays OUT of `ConfigStorePort`, so the contract does not
- * acquire a requirement no consumer has. Spelling the intersection here is what
- * keeps both facts true and visible at once.
+ * `dir()` is implemented here and called by NOBODY — dead surface. It stays OUT
+ * of `ConfigStorePort`, so the contract does not acquire a requirement no
+ * consumer has.
  */
 export type FsConfigStore = ConfigStorePort & { dir: () => string }
 

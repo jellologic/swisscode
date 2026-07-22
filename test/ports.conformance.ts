@@ -2,7 +2,7 @@
 //
 // This file has no runtime tests and is never executed. It is deliberately not
 // named `*.test.ts`, so `node --test` skips it — the assertions here are made by
-// `tsc`, and `npm run typecheck` is what runs them.
+// `tsc`, and `pnpm typecheck` is what runs them.
 //
 // It exists because "ports-and-adapters in a language without interfaces is the
 // weakest form of the pattern": before this, a port could only DESCRIBE a
@@ -15,25 +15,10 @@
 // must not ship in the published artifact. tsconfig.json includes `test`, so it
 // is typechecked and never emitted.
 //
-// THE ADAPTERS ARE NOW TYPESCRIPT, AND THAT CHANGED WHAT THIS FILE PROVES.
-//
-// While they were .js, `checkJs: false` meant tsc TRUSTED a file's `@type`
-// annotation instead of verifying the implementation against it — so a binding
-// here against an already-annotated adapter was partly circular. The ports
-// slice measured exactly that: a deliberately bogus `credentialEnv` in zai.js
-// was NOT caught, because the `/** @type {ProviderDescriptor} */` above it was
-// believed.
-//
-// That circularity is gone. Every adapter now states its port at its own
-// definition — `satisfies ProviderDescriptor` on the descriptors, an explicit
-// return type on each factory — so the contract is checked where the code is
-// written, against the real implementation. Re-running the ports slice's
-// experiment now fails in three places at once, the first being zai.ts itself.
-//
-// This file therefore no longer carries the conformance on its own. What it
-// still does, and why it stays: it is the ONE place the whole adapter surface
-// is listed against the whole port surface, so a port that acquires a member no
-// adapter implements fails here even if every adapter individually compiles.
+// Adapters also state their ports at definition sites (`satisfies`, explicit
+// return types). This file is the ONE place the whole adapter surface is listed
+// against the whole port surface, so a port that acquires a member no adapter
+// implements fails here even if every adapter individually compiles.
 // `_tierEnv` below is not reachable from any adapter at all.
 
 import type {
@@ -77,9 +62,7 @@ import {
 import { createCatalogRegistry } from '../src/adapters/catalog/registry.ts'
 import { createProbe } from '../src/adapters/doctor/probe.ts'
 
-// ---------------------------------------------------------------------------
 // provider
-// ---------------------------------------------------------------------------
 
 // Every shipped descriptor. A misspelled compat flag, a credentialEnv that is
 // not one of the two Anthropic spellings, or a `defaultModels` key that is not
@@ -104,23 +87,17 @@ export const _providerRegistry: ProviderRegistryPort = providerRegistry
  */
 export const _tierEnv: TierRecord<string> = TIER_ENV
 
-// ---------------------------------------------------------------------------
 // clock / net / process
-// ---------------------------------------------------------------------------
 
 export const _clock: ClockPort = systemClock
 export const _net: NetPort = fetchNet
 export const _proc: ProcessPort = createNodeProcess()
 
-// ---------------------------------------------------------------------------
 // config store
-// ---------------------------------------------------------------------------
 
 export const _store: ConfigStorePort = createFsConfigStore()
 
-// ---------------------------------------------------------------------------
 // catalog
-// ---------------------------------------------------------------------------
 
 export const _openrouterCaps: CatalogCapabilities = OPENROUTER_CAPABILITIES
 export const _modelscopeCaps: CatalogCapabilities = MODELSCOPE_CAPABILITIES
@@ -136,15 +113,11 @@ export const _openrouterCatalog: ModelCatalogPort = createOpenRouterCatalog(cata
 export const _modelscopeCatalog: ModelCatalogPort = createModelScopeCatalog(catalogDeps)
 export const _catalogRegistry: CatalogRegistryPort = createCatalogRegistry(catalogDeps)
 
-// ---------------------------------------------------------------------------
 // doctor probe
-// ---------------------------------------------------------------------------
 
 export const _probe: AnthropicMessagesProbePort = createProbe()
 
-// ---------------------------------------------------------------------------
 // the lazy UI boundary
-// ---------------------------------------------------------------------------
 //
 // src/cli.ts declares `UiModule` STRUCTURALLY rather than as
 // `typeof import('../src/composition/ui-root.ts')`. It has to: anything under

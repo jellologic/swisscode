@@ -19,7 +19,7 @@ import { createCatalogRegistry } from '../../src/adapters/catalog/registry.ts'
 import { createFsCacheStore } from '../../src/adapters/store/fs-cache-store.ts'
 import { CACHE_TTL_MS, CACHE_VERSION } from '../../src/core/catalog.ts'
 
-// ---------------------------------------------------------------- OpenRouter
+// OpenRouter
 
 const OPENROUTER_PAYLOAD = {
   data: [
@@ -77,7 +77,7 @@ test('an unexpected OpenRouter response is an error, not a silent empty list', (
   assert.throws(() => normalizeOpenRouter({}), /unexpected response shape/)
 })
 
-// ---------------------------------------------------------------- ModelScope
+// ModelScope
 
 const MODELSCOPE_PAYLOAD = {
   object: 'list',
@@ -125,7 +125,7 @@ test('the ModelScope catalog endpoint is the /v1 OpenAI route, unlike the base U
   assert.equal(modelscope.baseUrl, 'https://api-inference.modelscope.cn')
 })
 
-// ------------------------------------------------------------ caching / TTL
+// caching / TTL
 
 function harness(
   // `payload` is `unknown` because two tests pass an Error deliberately, to

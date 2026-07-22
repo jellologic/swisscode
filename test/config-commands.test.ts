@@ -92,11 +92,9 @@ function harness(
   }
 }
 
-// ---------------------------------------------------------------------------
 // The namespace argument: none of these are reserved WORDS. `config` is
 // already reserved, and the profile-name grammar forbids creating a profile
 // called `list`/`doctor`/`use`, so the second token is never ambiguous.
-// ---------------------------------------------------------------------------
 
 test('every subcommand lives under `config`, claiming no new bare word', async () => {
   const h = harness()
@@ -140,9 +138,7 @@ test('an existing profile with an awkward name still opens', async () => {
   assert.equal(h.uiCalls[0]!.profileName, 'fix')
 })
 
-// ---------------------------------------------------------------------------
 // list
-// ---------------------------------------------------------------------------
 
 test('config list never prints any part of a key', async () => {
   const h = harness()
@@ -173,9 +169,7 @@ test('config list flags a profile whose provider this build does not know', asyn
   assert.match(h.text(), /unknown provider/)
 })
 
-// ---------------------------------------------------------------------------
 // default / rm
-// ---------------------------------------------------------------------------
 
 test('config default switches the default profile', async () => {
   const h = harness()
@@ -213,9 +207,7 @@ test('deleting the default profile promotes the survivor only when there is one'
   assert.equal(h2.saves.at(-1)!.defaultProfile, null)
 })
 
-// ---------------------------------------------------------------------------
 // use / bind / unbind / bindings
-// ---------------------------------------------------------------------------
 
 test('config use binds the current directory', async () => {
   const h = harness({ cwd: '/work/proj' })
@@ -310,9 +302,7 @@ test('a binding walk is bounded even in a very deep directory', async () => {
   assert.equal(await h.run(['use', '--show']), 0, 'deep paths degrade, never error')
 })
 
-// ---------------------------------------------------------------------------
 // Refusals
-// ---------------------------------------------------------------------------
 
 test('every writing subcommand refuses a config from a newer cuckoocode', async () => {
   for (const args of [['default', 'or'], ['rm', 'or'], ['use', 'or'], ['unbind'], ['bindings', '--prune']]) {

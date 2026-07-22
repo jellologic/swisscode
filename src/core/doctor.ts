@@ -128,23 +128,16 @@ export type StaticChecksInput = {
   modes?: ConfigModes
   /**
    * `error` admits undefined because the adapter stores a raw `err.message`,
-   * which is undefined for a throw that carries none. This function already
-   * reads it as `binary.error ?? 'not found'`, so the two are indistinguishable
-   * downstream — the type records that rather than forcing the caller into a
-   * `?? null` that would change the emitted program for no observable gain.
+   * which is undefined for a throw that carries none. Read as
+   * `binary.error ?? 'not found'`, so undefined and null are indistinguishable.
    */
   binary?: { path: string | null; error: string | null | undefined }
   /** supplied by the adapter; [] if unchecked */
   deadBindingPaths?: string[]
   /**
-   * ACCEPTED AND NEVER READ — the same situation as `probeSpec`'s `profile`
-   * parameter, and recorded here for the same reason.
-   *
-   * composition/doctor-root.ts passes `cwd` into this call, and nothing in this
-   * function looks at it (the cwd it computes IS used, but by `resolveProfile`,
-   * not here). Declaring it keeps the caller compiling without deleting a
-   * caller argument, which would be a change to the program rather than to its
-   * types. Reported in the migration notes, deliberately not removed.
+   * Accepted and never read here — same situation as `probeSpec`'s `profile`.
+   * composition/doctor-root.ts passes `cwd`; resolveProfile uses the cwd it
+   * computes, not this field. Kept so the caller signature stays stable.
    */
   cwd?: string | null
 }
@@ -164,7 +157,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
   const state = loaded?.state ?? {}
   const checks: DoctorCheck[] = []
 
-  // ---- the binary we are going to exec -----------------------------------
+  // the binary we are going to exec
   checks.push(
     binary.path
       ? makeCheck('binary', 'claude binary', OK, binary.path)
@@ -173,7 +166,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
         }),
   )
 
-  // ---- config file state --------------------------------------------------
+  // config file state
   if (loaded?.corrupt) {
     checks.push(
       makeCheck('config-parse', 'config.json', ERROR, 'exists but could not be parsed', {
@@ -194,11 +187,11 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
     checks.push(makeCheck('config-parse', 'config.json', OK, `version ${state.version ?? '?'}`))
   }
 
-  // ---- permissions. The file holds an API key. ----------------------------
+  // permissions. The file holds an API key.
   checks.push(modeCheck('perms-dir', 'config dir mode', modes.dir, 0o700))
   checks.push(modeCheck('perms-file', 'config file mode', modes.file, 0o600))
 
-  // ---- which profile is active, and why -----------------------------------
+  // which profile is active, and why
   if (selection?.error) {
     checks.push(makeCheck('profile', 'active profile', ERROR, selection.error))
   } else if (!profile) {
@@ -230,7 +223,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
 
   if (!profile) return checks
 
-  // ---- provider ------------------------------------------------------------
+  // provider
   if (!provider) {
     checks.push(
       profile.baseUrl
@@ -253,7 +246,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
     checks.push(makeCheck('provider', 'provider', OK, `${provider.label} (${provider.id})`))
   }
 
-  // ---- endpoint ------------------------------------------------------------
+  // endpoint
   const baseUrl = plan?.set?.ANTHROPIC_BASE_URL ?? null
   checks.push(
     baseUrl
@@ -261,7 +254,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
       : makeCheck('endpoint', 'endpoint', OK, 'api.anthropic.com (first-party default)'),
   )
 
-  // ---- credential ----------------------------------------------------------
+  // credential
   const credentialEnv = provider?.credentialEnv ?? 'ANTHROPIC_AUTH_TOKEN'
   const credential = plan?.set?.[credentialEnv] ?? null
   if (credential) {
@@ -290,7 +283,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
     )
   }
 
-  // ---- models --------------------------------------------------------------
+  // models
   const resolved: Partial<ResolvedModels> = plan?.resolvedModels ?? {}
   const missing = TIERS.filter((t) => !resolved[t])
   if (missing.length === 0) {
@@ -316,7 +309,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
     )
   }
 
-  // ---- stored [1m] drift ---------------------------------------------------
+  // stored [1m] drift
   // Advice, not a correctness problem: buildEnvPlan already derives the suffix
   // at launch. This is about the file matching what actually happens.
   const stale = staleStoredModels(profile, provider)
@@ -353,7 +346,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
     }
   }
 
-  // ---- inherited environment ----------------------------------------------
+  // inherited environment
   for (const w of plan?.warnings ?? []) {
     if (w.severity === 'info') {
       checks.push(makeCheck(`env-${w.code}`, 'environment', OK, w.message))
@@ -365,7 +358,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
     checks.push(makeCheck('env-clean', 'environment', OK, 'no conflicting ANTHROPIC_*/CLAUDE_CODE_* variables'))
   }
 
-  // ---- bindings ------------------------------------------------------------
+  // bindings
   const bindings = Object.entries(state.bindings ?? {})
   const danglingProfiles = bindings.filter(([, v]) => {
     const name = typeof v === 'string' ? v : v?.profile
@@ -396,7 +389,7 @@ export function staticChecks(input: StaticChecksInput): DoctorCheck[] {
     )
   }
 
-  // ---- names shadowed by a reserved word ----------------------------------
+  // names shadowed by a reserved word
   const shadowed = Object.keys(state.profiles ?? {}).filter((n) => SOFT_RESERVED.includes(n))
   if (shadowed.length > 0) {
     checks.push(
@@ -454,9 +447,8 @@ export type ProbeSpec = {
  * the suffixed id could report a false 404 for a model that works fine. The
  * report says so rather than quietly testing something else than it claims.
  *
- * NOTE: `profile` is accepted and never read — see the migration report.
- * Retained rather than removed, because dropping a parameter is an API change
- * and this slice is types only.
+ * NOTE: `profile` is accepted and never read. Retained so the call-site
+ * signature stays stable.
  */
 export function probeSpec(
   profile: Profile | null | undefined,

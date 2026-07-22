@@ -33,11 +33,9 @@ import type { EnvMap } from '../../src/ports/process.ts'
  */
 const probeRequest = (r: Partial<ProbeRequest>): ProbeRequest => r as ProbeRequest
 
-// ---------------------------------------------------------------------------
 // The non-streaming rule. This is the whole reason the probe exists in this
 // shape: ModelScope answers a bad token with HTTP 200 and an SSE stream that
 // dies silently, so a streaming probe cannot tell auth failure from success.
-// ---------------------------------------------------------------------------
 
 test('every probe body sets stream:false explicitly', () => {
   assert.equal(probeBody('m').stream, false)
@@ -90,9 +88,7 @@ test('usedTool requires an actual tool_use block', () => {
   assert.equal(usedTool({}), false)
 })
 
-// ---------------------------------------------------------------------------
 // The probe against a stub fetch.
-// ---------------------------------------------------------------------------
 
 type StubOpts = Parameters<ProbeFetch>[1]
 type StubCall = { url: string; opts: StubOpts; body: Record<string, unknown> }
@@ -159,9 +155,7 @@ test('a connection failure is reported as a network error, not a timeout', async
   assert.match(r.networkError!, /ECONNREFUSED/)
 })
 
-// ---------------------------------------------------------------------------
 // The whole doctor, wired.
-// ---------------------------------------------------------------------------
 
 const SECRET = 'ms-super-secret-token'
 

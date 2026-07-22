@@ -76,7 +76,6 @@ export type DoctorRun = {
   render: () => string
 }
 
-// ===========================================================================
 // AGENT-CLI SEAM (issue #19)
 //
 // Everything below speaks the ANTHROPIC MESSAGES API specifically: the
@@ -89,7 +88,6 @@ export type DoctorRun = {
 // A different agent CLI brings a different wire protocol and a different probe;
 // the neutral half is `DoctorCheck`/`DoctorReport` above, which say nothing
 // about HTTP.
-// ===========================================================================
 
 import type { ClaudeCodeCredentialEnv } from './provider.ts'
 

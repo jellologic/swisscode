@@ -7,7 +7,7 @@
 //
 // Zero RUNTIME imports on purpose: this is the launch path, and dirname on an
 // already normalized absolute path is a lastIndexOf. The type imports below are
-// erased entirely — test/architecture.test.js checks core's purity against the
+// erased entirely — test/architecture.test.ts checks core's purity against the
 // post-erasure graph, so this file still imports nothing at runtime.
 
 import type { BindingValue, ProfileOverrides, Settings, State } from '../ports/config-store.ts'
@@ -25,7 +25,7 @@ const WIN_DRIVE = /^[A-Za-z]:$/
 export type ResolvedBinding = {
   name: string
   key: string
-  overrides?: ProfileOverrides
+  overrides?: ProfileOverrides | undefined
 }
 
 /** One stored binding, flattened and flagged, as `config bindings` lists them. */
@@ -218,14 +218,12 @@ function toEntry(value: BindingValue | undefined, key: string): ResolvedBinding 
   return null
 }
 
-// ---------------------------------------------------------------------------
 // Everything below is for `config use` / `bind` / `unbind` / `bindings`, not
 // for the launch path. Still pure: state in, new state out. The adapter owns
 // stat() and printing.
 //
 // Nothing here is reachable from a launch, so it costs a launch nothing — the
 // module is already loaded for resolveBinding either way.
-// ---------------------------------------------------------------------------
 
 /**
  * The exact list of keys the walk would probe, deepest first. This is what

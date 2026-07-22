@@ -104,9 +104,7 @@ export function ProfileActions({ name, state, cwd, onAction }: ProfileActionsPro
   // `satisfies` checks every entry's SHAPE (a typo'd action value fails here);
   // the assertion afterwards discharges only the nullability. filter(Boolean)
   // provably drops the nulls, but BooleanConstructor carries no type predicate,
-  // so tsc cannot see it. Written this way rather than changing the predicate
-  // to `(i) => i !== null` because that would edit the emitted program, and this
-  // migration is types only.
+  // so tsc cannot see it.
   const items = (
     [
       { label: `edit "${name}"`, value: 'edit' },

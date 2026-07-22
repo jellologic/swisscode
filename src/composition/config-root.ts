@@ -1,7 +1,7 @@
 // Composition root for everything under `cuckoocode config`.
 //
 // LAZY, like the UI bundle and the doctor: reached only through a dynamic
-// import in src/cli.js, so none of this is in the launch path's static closure.
+// import in src/cli.ts, so none of this is in the launch path's static closure.
 //
 // WHY EVERY SUBCOMMAND LIVES UNDER `config`
 //
@@ -41,7 +41,7 @@ export type WizardMode = 'config' | 'setup'
 /**
  * How this module reaches the Ink wizard.
  *
- * A CALLBACK, injected by src/cli.js, rather than an import — and the type is
+ * A CALLBACK, injected by src/cli.ts, rather than an import — and the type is
  * spelled here rather than imported from adapters/ui so that nothing in this
  * file, not even in type space, names the UI module. That keeps the lazy
  * boundary a property of the source graph and not merely of the emit.
@@ -155,8 +155,6 @@ export async function runConfigCommand({
   }
   return openWizard({ deps, openUi, name: head, err, out })
 }
-
-// ---------------------------------------------------------------------------
 
 async function openWizard({
   deps,

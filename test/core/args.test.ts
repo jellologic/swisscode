@@ -60,12 +60,10 @@ test('buildArgs copies rather than aliasing the passthrough array', () => {
   assert.deepEqual(passthrough, ['-p'])
 })
 
-// ---------------------------------------------------------------------------
 // --cc-* per-run overrides. The reserved namespace grew by exactly one PREFIX
 // in this phase, and these tests pin both halves of that: the prefix is fully
 // reserved (an unknown --cc-* is an error, never passthrough), and nothing
 // outside it became reserved.
-// ---------------------------------------------------------------------------
 
 import { CC_FLAGS } from '../../src/core/args.ts'
 import { TIERS } from '../../src/core/tiers.ts'

@@ -1,13 +1,9 @@
 // Port: what a provider preset has to tell the launcher.
 //
-// This file is TYPES ONLY. Its single runtime statement is `export {}` — ports
-// describe shapes, they do not participate at runtime. No classes, no base
-// classes, no `implements`. Descriptors are plain data (see adapters/providers),
-// and conformance is checked structurally at compile time rather than by
-// inheritance. test/architecture.test.js erases the types and asserts the
-// residue is exactly `export {}`.
+// Ports are type-only modules (`export {}` at runtime). Descriptors are plain
+// data; conformance is structural at compile time. test/architecture.test.ts
+// asserts the residue is exactly `export {}`.
 
-// ===========================================================================
 // AGENT-CLI SEAM (issue #19)
 //
 // Everything in THIS BLOCK is Claude-Code-shaped and only Claude-Code-shaped.
@@ -21,7 +17,6 @@
 // says "this gateway needs the adaptive-thinking workaround"; it never says
 // "set CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1". The mapping from the former to
 // the latter lives in core/env.ts and stays a single table.
-// ===========================================================================
 
 /**
  * Claude Code's four model tiers.
@@ -101,7 +96,7 @@ export type ClaudeCodeCompatFlag =
  */
 export type ClaudeCodeCompatFlags = Partial<Record<ClaudeCodeCompatFlag, boolean>>
 
-// ============================ end AGENT-CLI SEAM ===========================
+// end AGENT-CLI SEAM
 
 /**
  * A model family that genuinely supports an extended context window.
@@ -119,7 +114,7 @@ export type ClaudeCodeCompatFlags = Partial<Record<ClaudeCodeCompatFlag, boolean
  * the suffix by being named here, which is why "apply [1m] only where the model
  * genuinely supports 1M" is enforceable rather than aspirational: adding a
  * model to `models` is a deliberate act a reviewer sees, and
- * test/registry.test.js cross-checks the claim against `defaultModels`.
+ * test/registry.test.ts cross-checks the claim against `defaultModels`.
  *
  * Verified against vendor documentation. Do NOT add a model on the strength of
  * a blog post — an id carrying [1m] that the endpoint does not recognise is a
@@ -150,7 +145,7 @@ export type ProviderHints = {
  * A provider preset, as plain data.
  *
  * Descriptors use the explicit env / unsetEnv split and may NEVER use '' to
- * mean unset — registry.test.js fails any descriptor that does. The
+ * mean unset — registry.test.ts fails any descriptor that does. The
  * ''-means-unset convention is a user-facing contract (profile.env,
  * profile.models) and stays exactly as documented in the README.
  */

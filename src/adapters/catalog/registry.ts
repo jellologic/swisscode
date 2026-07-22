@@ -13,13 +13,7 @@ export type CatalogId = keyof typeof FACTORIES
 
 export const CATALOG_IDS: readonly string[] = Object.freeze(Object.keys(FACTORIES))
 
-/**
- * The same `hasOwnProperty` test as before, said so the compiler can use it.
- *
- * Without the predicate, `FACTORIES[id]` on a plain `string` is an unchecked
- * index — exactly what `noUncheckedIndexedAccess` exists to catch. With it, the
- * lookup below is proven present and no assertion is needed.
- */
+/** Narrows so `FACTORIES[id]` is a checked index under noUncheckedIndexedAccess. */
 function isCatalogId(id: string): id is CatalogId {
   return Object.prototype.hasOwnProperty.call(FACTORIES, id)
 }
@@ -36,10 +30,7 @@ export function createCatalogRegistry(deps: CatalogDeps): CatalogRegistryPort {
     byId(id: string | null | undefined): ModelCatalogPort | null {
       if (!id || !isCatalogId(id)) return null
       if (!built.has(id)) built.set(id, FACTORIES[id](deps))
-      // Provably present — set on the line above when absent. The `?? null`
-      // bridges what `Map.get` cannot express, and lands on the value the port
-      // already uses for "no such catalog". Same pattern as core/profile.ts
-      // `hit()`.
+      // Present after the set above; `?? null` matches the port's "absent" value.
       return built.get(id) ?? null
     },
   }

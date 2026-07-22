@@ -119,11 +119,9 @@ test('minBindingDepth bounds the walk', () => {
   assert.equal(minBindingDepth({}), null)
 })
 
-// ---------------------------------------------------------------------------
 // Binding management. Still zero syscalls: `pruneBindings` takes existence as
 // an injected predicate, because resolution must never stat anything and this
 // is the only code allowed to.
-// ---------------------------------------------------------------------------
 
 import {
   ancestorsOf,

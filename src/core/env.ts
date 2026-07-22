@@ -67,16 +67,9 @@ export type EnvPlan = {
   /**
    * Every tier this launch answered for.
    *
-   * `Partial<ResolvedModels>` rather than the port's exhaustive
-   * `ResolvedModels`, and the reason is worth stating: exhaustiveness here is
-   * not a promise this object's TYPE can keep, it is a consequence of the loop
-   * below iterating `TIERS` — and `TIERS` is where the guarantee actually lives
-   * and is actually checked (core/tiers.ts asserts at compile time that it
-   * lists every `Tier`). Claiming `ResolvedModels` on an object accumulated key
-   * by key would take an assertion to bridge TypeScript's inability to see that
-   * a loop filled every field, and that assertion would be a claim the compiler
-   * had verified something it had not. The values carry the real meaning
-   * anyway: `undefined` means "nothing pinned, clear the variable".
+   * `Partial<ResolvedModels>`: exhaustiveness is a consequence of the `TIERS`
+   * loop below (checked in core/tiers.ts), not something an accumulated object's
+   * type can honestly claim. `undefined` means "nothing pinned, clear the variable".
    */
   resolvedModels: Partial<ResolvedModels>
 }
@@ -133,7 +126,7 @@ export function buildEnvPlan(
   write('ANTHROPIC_BASE_URL', profile?.baseUrl ?? provider?.baseUrl ?? '')
 
   // 2. Descriptor env. Descriptors use the explicit set/unset split; '' as a
-  //    sentinel is banned there and enforced by test/registry.test.js.
+  //    sentinel is banned there and enforced by test/registry.test.ts.
   for (const [k, v] of Object.entries(provider?.env ?? {})) write(k, v)
   for (const k of provider?.unsetEnv ?? []) write(k, '')
 

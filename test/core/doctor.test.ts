@@ -80,10 +80,8 @@ function run(over: RunOver = {}) {
 
 const byId = (checks: DoctorCheck[], id: string) => checks.find((c) => c.id === id)
 
-// ---------------------------------------------------------------------------
 // The rule that matters most: the key never appears in output. Not masked, not
 // truncated, not length-hinted.
-// ---------------------------------------------------------------------------
 
 test('the credential never appears in any check, in any form', () => {
   const checks = run({ ambient: { ANTHROPIC_API_KEY: 'sk-ant-stale' } })
@@ -135,9 +133,7 @@ test('a too-short secret is not redacted, so common words survive', () => {
   assert.equal(redact('the model is ok', ['ok']), 'the model is ok')
 })
 
-// ---------------------------------------------------------------------------
 // Exit codes: CI consumes these.
-// ---------------------------------------------------------------------------
 
 test('exit code is 0 clean, 1 on warnings, 2 on errors', () => {
   assert.equal(summarize([{ status: 'ok' }]).exitCode, 0)
@@ -153,9 +149,7 @@ test('a clean setup produces no warnings and no errors', () => {
   assert.equal(exitCode, 0)
 })
 
-// ---------------------------------------------------------------------------
 // Individual checks.
-// ---------------------------------------------------------------------------
 
 test('a missing binary is an error with an actionable fix', () => {
   const c = byId(run({ binary: { path: null, error: 'not on PATH' } }), 'binary')
@@ -188,7 +182,9 @@ test('an unknown provider is fatal only when there is no baseUrl to fall back on
 
 test('a profile that reads its key from an unset variable is an error', () => {
   const c = byId(
-    run({ profile: { provider: 'zai', apiKeyFromEnv: 'ZAI_TOKEN', models: profile.models } }),
+    run({
+      profile: { provider: 'zai', apiKeyFromEnv: 'ZAI_TOKEN', models: profile.models ?? {} },
+    }),
     'credential',
   )
   assert.equal(c!.status, 'error')
@@ -242,9 +238,7 @@ test('a profile shadowed by a subcommand is flagged with the way out', () => {
   assert.match(c!.fix!, /--cc-profile/)
 })
 
-// ---------------------------------------------------------------------------
 // Probe planning.
-// ---------------------------------------------------------------------------
 
 test('probeSpec deduplicates models and strips the [1m] suffix', () => {
   const plan = buildEnvPlan(profile, zai, {})
@@ -272,9 +266,7 @@ test('probeSpec has nothing to probe for a first-party profile', () => {
   assert.equal(probeSpec({ provider: 'anthropic' }, anthropic, plan).baseUrl, null)
 })
 
-// ---------------------------------------------------------------------------
 // Probe interpretation. Status codes carry the finding; bodies are advisory.
-// ---------------------------------------------------------------------------
 
 const res = (over: Partial<ProbeResult>): ProbeResult => ({
   status: null, message: null, usedTool: false, timedOut: false,
@@ -337,9 +329,7 @@ test('tool calling: only an actual tool_use block passes', () => {
   assert.equal(interpretToolProbe({ model: 'm', result: res({ status: 400 }) }).status, 'error')
 })
 
-// ---------------------------------------------------------------------------
 // The hard timeout.
-// ---------------------------------------------------------------------------
 
 test('the total budget is hard and shrinks as probes consume it', () => {
   assert.equal(remainingBudget(0, 0, 20_000, 8_000), 8_000)

@@ -1,6 +1,6 @@
 {
   // Base config: the whole program (src + test), CHECK ONLY.
-  // This is what the LSP loads and what `npm run typecheck` runs.
+  // This is what the LSP loads and what `pnpm typecheck` runs.
   // Emit lives in tsconfig.build.json.
   "compilerOptions": {
     // --- Module system -------------------------------------------------

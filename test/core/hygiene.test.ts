@@ -30,7 +30,7 @@ const planFor = (
   ambient: EnvMap,
 ) => buildEnvPlan(profile, provider, ambient)
 
-// ------------------------------------------------- the clean-environment case
+// the clean-environment case
 
 test('a clean environment produces no warnings at all', () => {
   // The single most important property: this must be invisible unless there is
@@ -57,7 +57,7 @@ test('re-setting a variable to the value it already had is not a conflict', () =
   assert.deepEqual(codesOf(plan.warnings), [])
 })
 
-// -------------------------------------------------------------- billing (high)
+// billing (high)
 
 test('a stale ANTHROPIC_API_KEY produces a high-severity billing warning', () => {
   const plan = planFor(makeProfile({ apiKey: 'k' }), gateway, { ANTHROPIC_API_KEY: 'sk-ant-STALE' })
@@ -98,7 +98,7 @@ test('first-party Anthropic replacing its own key warns differently', () => {
   assert.equal(w.severity, 'high')
 })
 
-// ------------------------------------------------------------- base URL (high)
+// base URL (high)
 
 test('an inherited base URL that gets overridden is reported with both values', () => {
   const plan = planFor(makeProfile({ apiKey: 'k' }), gateway, { ANTHROPIC_BASE_URL: 'https://stale.example' })
@@ -120,7 +120,7 @@ test('an inherited base URL that gets CLEARED is reported too', () => {
   assert.match(w.message, /cleared/i)
 })
 
-// --------------------------------------------------------- tier models (medium)
+// tier models (medium)
 
 test('inherited tier models are reported in one line, not four', () => {
   const plan = planFor(makeProfile({ apiKey: 'k' }), gateway, {
@@ -141,7 +141,7 @@ test('a tier being cleared rather than replaced says so', () => {
   assert.match(find(plan.warnings, 'ambient-tier-model')!.message, /cleared/)
 })
 
-// ----------------------------------------------------- the [1m] tripwire (medium)
+// the [1m] tripwire (medium)
 
 test('a tier pinned to a model without the wider window is flagged', () => {
   // "One unsuffixed tier silently runs at the standard window" made visible.
@@ -182,7 +182,7 @@ test('the 1M kill-switch is irrelevant for a provider without extended context',
   assert.equal(find(plan.warnings, 'extended-context-disabled'), undefined)
 })
 
-// ----------------------------------------------------------- compat flags (info)
+// compat flags (info)
 
 test('active compat flags are reported at info severity only', () => {
   // Nothing is wrong; this is for someone debugging a gateway. It must not
@@ -194,7 +194,7 @@ test('active compat flags are reported at info severity only', () => {
   assert.match(w.message, /CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING/)
 })
 
-// ------------------------------------------------------------------ mechanics
+// mechanics
 
 test('every warning carries a severity, a code and a message', () => {
   const plan = planFor(makeProfile({ apiKey: 'k', compat: { enableToolSearch: true } }), gateway, {
@@ -251,7 +251,7 @@ test('inspectAmbient tolerates a missing plan or environment', () => {
   assert.deepEqual(inspectAmbient({} as PlanFacts, undefined, {}), [])
 })
 
-// -------------------------------------------------- stored-model advice (doctor)
+// stored-model advice (doctor)
 
 test('staleStoredModels reports a stored bare id that should carry the suffix', () => {
   const found = staleStoredModels(makeProfile({ models: { opus: 'glm-5.2' } }), byId('zai'))

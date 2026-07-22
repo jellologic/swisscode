@@ -2,7 +2,7 @@
 //
 // Everything imported transitively from here must stay dependency-free: this is
 // the module that runs on every launch, and it must never reach React, Ink, or
-// anything under adapters/ui or adapters/catalog. test/architecture.test.js
+// anything under adapters/ui or adapters/catalog. test/architecture.test.ts
 // walks the import graph from bin/cuckoocode.js and fails if it does.
 
 import { buildArgs } from '../core/args.ts'
@@ -81,7 +81,7 @@ export class LaunchError extends Error {
  * can decide to open the wizard and so tests can assert the plan.
  *
  * PER-RUN OVERRIDES NEVER PERSIST. Nothing on this path calls store.save, and
- * test/core/overrides.test.js pins that with a counting stub: the only writers
+ * test/core/overrides.test.ts pins that with a counting stub: the only writers
  * in the codebase are the wizard and the `config *` subcommands.
  */
 export type PlanLaunchOptions = LaunchDeps & {

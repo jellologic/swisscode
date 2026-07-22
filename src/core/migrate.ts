@@ -196,7 +196,7 @@ export function normalize(raw: unknown): { state: State; warnings: string[] } {
   }
 
   delete state.provider
-  // ===================== THE ONE TRUST BOUNDARY =========================
+  // THE ONE TRUST BOUNDARY
   // This is where unvalidated JSON is declared to be a `State`, and it is the
   // only assertion in core/. It is placed here, at a single line with a name,
   // because the trust was ALREADY being granted — silently — by every caller
@@ -210,8 +210,8 @@ export function normalize(raw: unknown): { state: State; warnings: string[] } {
   // What is NOT verified, and is the reason this cannot be a type predicate:
   // the INSIDE of a profile. `Profile.provider` may be absent or a number,
   // `apiKey` may be an object, `models.opus` may be a boolean — nothing here
-  // looks. Reported as a finding rather than fixed; adding validation would be
-  // a behaviour change, and this slice is types only.
+  // looks. Adding deep validation would change load behaviour for hand-edited
+  // configs.
   return { state: state as unknown as State, warnings }
 }
 
@@ -253,21 +253,14 @@ export function migrate(raw: unknown): MigrateResult {
   }
 
   if (version === 1) {
-    // ======================= KNOWN BUG, NOT FIXED HERE ======================
-    // `version === 1` IS NOT `isV1(raw)`, and the compiler is the thing that
-    // just said so: `raw` is only a `Record<string, unknown>` here.
-    //
-    // `detectVersion` returns 1 down TWO paths — the implicit v1 shape (no
-    // `version` key, top-level `provider` string), and any file that literally
-    // says `"version": 1`. Only the first is a `ConfigV1`. A file carrying an
-    // explicit `"version": 1` with no top-level `provider` reaches `fromV1`,
-    // where `raw.provider` is undefined, `NAME_RE.test(undefined)` coerces to
-    // the string "undefined" and MATCHES, and rule M1 then nests the entire
-    // file inside a single profile named "undefined".
-    //
-    // Left exactly as it is per the terms of this migration: types only, no
-    // behaviour changes, report don't fix. The assertion below is the marker,
-    // not a repair — see the migration report.
+    // Known bug: `version === 1` is not `isV1(raw)` — `raw` is only a
+    // `Record<string, unknown>` here. `detectVersion` returns 1 down TWO paths:
+    // the implicit v1 shape (no `version` key, top-level `provider` string),
+    // and any file that literally says `"version": 1`. Only the first is a
+    // `ConfigV1`. An explicit `"version": 1` with no top-level `provider`
+    // reaches `fromV1`, where `raw.provider` is undefined, `NAME_RE.test(undefined)`
+    // coerces to the string "undefined" and MATCHES, and rule M1 nests the
+    // entire file inside a single profile named "undefined".
     const { state, warnings } = normalize(fromV1(raw as unknown as ConfigV1))
     return { state, migratedFrom: 1, corrupt: false, readOnly: false, warnings }
   }

@@ -13,18 +13,17 @@ import * as esbuild from 'esbuild'
 
 const TSC = 'node_modules/typescript/bin/tsc'
 
-// Stale output is worse than no output: a module deleted in a migration slice
-// would otherwise linger in dist/ and keep resolving.
+// Stale output is worse than no output: a deleted module would otherwise linger
+// in dist/ and keep resolving.
 rmSync('dist', { recursive: true, force: true })
 
-// Stage 1. Emits .js for both .ts and (while the migration is in flight) .js
-// sources, rewriting "./x.ts" specifiers to "./x.js" on the way out.
+// Stage 1. tsc emits plain JS from TypeScript sources, rewriting "./x.ts"
+// specifiers to "./x.js" on the way out.
 execFileSync(process.execPath, [TSC, '-p', 'tsconfig.build.json'], { stdio: 'inherit' })
 
 // Stage 2. ink/react stay external so we never have to bundle yoga's wasm.
-// esbuild reads the TSX/JSX sources directly and strips types itself — type
-// CHECKING is `npm run typecheck`'s job, not the bundler's, so the UI never
-// waits on a second tsc pass.
+// esbuild reads the TSX sources and strips types; type CHECKING is
+// `pnpm typecheck`'s job, not the bundler's.
 const uiRoot = 'src/composition/ui-root.ts'
 if (!existsSync(uiRoot)) throw new Error(`build: cannot find ${uiRoot}`)
 

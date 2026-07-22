@@ -24,7 +24,7 @@ function Badge({ state, children }: { state: boolean | null; children: ReactNode
     return <Text dimColor>? {children} </Text>
   }
   return (
-    <Text color={state ? 'green' : undefined} dimColor={!state}>
+    <Text {...(state ? { color: 'green' as const } : {})} dimColor={!state}>
       {state ? '✓' : '·'} {children}{' '}
     </Text>
   )
@@ -306,7 +306,11 @@ export function ModelPicker({ tier, current, catalog, onSelect, onCancel }: Mode
               const active = visible[cursor]?.id === m.id
               return (
                 <Box key={m.id}>
-                  <Text color={active ? 'cyan' : undefined} dimColor={!active} wrap="truncate-end">
+                  <Text
+                    {...(active ? { color: 'cyan' as const } : {})}
+                    dimColor={!active}
+                    wrap="truncate-end"
+                  >
                     {active ? '› ' : '  '}
                     {m.id === current ? '● ' : ''}
                     {m.id}

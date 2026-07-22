@@ -140,7 +140,7 @@ export type ProbeResponse = {
  * The HTTP call this probe needs, injected.
  *
  * Minimal and structural for the same reason `SignalHost` is in the process
- * adapter: test/adapters/doctor-probe.test.js substitutes a stand-in that is
+ * adapter: test/adapters/doctor-probe.test.ts substitutes a stand-in that is
  * not a real `Response`, and naming what is genuinely required is what makes
  * that legitimate rather than an unchecked lie.
  */

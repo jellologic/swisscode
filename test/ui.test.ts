@@ -9,7 +9,7 @@ import type { Profile } from '../src/ports/config-store.ts'
 
 /**
  * dist/ui.js is BUILD OUTPUT. Same treatment as src/cli.ts: tsc must not
- * resolve it, or `npm run typecheck` starts depending on build order and ends
+ * resolve it, or `pnpm typecheck` starts depending on build order and ends
  * up typechecking the compiler's own emit. The contract is stated against the
  * real source instead, via a type query that erases to nothing.
  */

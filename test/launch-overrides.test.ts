@@ -80,9 +80,7 @@ function plan(argv: string[], opts: HarnessOptions = {}): LaunchPlan & { saves: 
   return { ...result, saves: h.saves } as LaunchPlan & { saves: State[] }
 }
 
-// ---------------------------------------------------------------------------
 // The invariant.
-// ---------------------------------------------------------------------------
 
 test('NO override invocation ever writes to the config store', () => {
   const matrix = [
@@ -112,9 +110,7 @@ test('overrides do not mutate the stored profile object either', () => {
   assert.equal(JSON.stringify(state), before)
 })
 
-// ---------------------------------------------------------------------------
 // Stripping.
-// ---------------------------------------------------------------------------
 
 test('no --cc-* token ever reaches the child argv', () => {
   const r = plan(['--cc-profile', 'or', '--cc-model', 'x', '--cc-env', 'A=1', '--resume'])
@@ -139,9 +135,7 @@ test('--cc-* after -- reaches claude untouched', () => {
   assert.deepEqual(r.args, ['--dangerously-skip-permissions', '--', '--cc-profile', 'or'])
 })
 
-// ---------------------------------------------------------------------------
 // Overrides reaching the environment.
-// ---------------------------------------------------------------------------
 
 test('a bare --cc-model sets all four tier variables', () => {
   const r = plan(['--cc-model', 'kimi-k3'])
@@ -176,9 +170,7 @@ test('an explicitly named profile beats the binding for that directory', () => {
   assert.equal(r.selection.source, 'positional')
 })
 
-// ---------------------------------------------------------------------------
 // --cc-provider: never send a credential to a host it was not entered for.
-// ---------------------------------------------------------------------------
 
 test('--cc-provider borrows the credential from a profile for that provider', () => {
   const r = plan(['--cc-provider', 'openrouter'])
@@ -228,9 +220,7 @@ test('an unknown --cc-provider lists the valid ids', () => {
   )
 })
 
-// ---------------------------------------------------------------------------
 // Errors and the banner.
-// ---------------------------------------------------------------------------
 
 test('a conflicting positional and flag exits 2 rather than guessing', () => {
   assert.throws(

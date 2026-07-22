@@ -62,7 +62,7 @@ async function openUi(
   let ui: UiModule
   try {
     // @ts-expect-error '../dist/ui.js' is BUILD OUTPUT, not source, and tsc
-    // must never resolve it: that would make `npm run typecheck` depend on
+    // must never resolve it: that would make `pnpm typecheck` depend on
     // build order and would typecheck the compiler's own emit. The contract
     // this import has to honour is `UiModule` above, which is checked against
     // the real source instead.

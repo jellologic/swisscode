@@ -8,14 +8,10 @@ import { makeDescriptor, makeProfile, makeState } from '../support/fixtures.ts'
 /**
  * The success half of retargetProvider's discriminated result.
  *
- * Most tests below need no cast at all: `assert.ok(r.ok)` and
- * `assert.equal(r.ok, false)` are both assertion signatures in @types/node, so
- * they narrow the union on their own and the reads that follow just work. This
- * alias covers only the three sites that read `.profile` without asserting on
- * `.ok` first. It changes nothing at runtime — if the result were the refusal
- * half, the read yields undefined and the assertion fails exactly as it does
- * today. Adding an `assert.ok(r.ok)` at those sites would have been a NEW
- * assertion, which is not this migration's business.
+ * Most tests need no cast: `assert.ok(r.ok)` / `assert.equal(r.ok, false)`
+ * narrow the union. This alias covers the three sites that read `.profile`
+ * without asserting `.ok` first — if the result were the refusal half, the
+ * read yields undefined and the assertion fails the same way.
  */
 type Retargeted = Extract<ReturnType<typeof retargetProvider>, { ok: true }>
 

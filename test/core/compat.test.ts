@@ -3,7 +3,7 @@
 // The point of routing these through a named boolean instead of letting
 // descriptors write env vars directly is that a misspelled variable name is a
 // silent no-op that looks like it works. A misspelled FLAG name is catchable,
-// and test/registry.test.js catches it.
+// and test/registry.test.ts catches it.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildEnvPlan, COMPAT_ENV } from '../../src/core/env.ts'

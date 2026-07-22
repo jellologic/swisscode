@@ -49,8 +49,8 @@ export type PlanFacts = {
 }
 
 export type HygieneContext = {
-  provider?: ProviderDescriptor | null
-  profile?: Profile | null
+  provider?: ProviderDescriptor | null | undefined
+  profile?: Profile | null | undefined
 }
 
 const w = (severity: WarningSeverity, code: string, message: string): EnvWarning => ({
@@ -69,7 +69,7 @@ export function inspectAmbient(
   const unset = plan?.unset ?? []
   const seen = new Set<string>()
 
-  // ---- 1. The billing one. Deliberately first and deliberately loud. -------
+  // 1. The billing one. Deliberately first and deliberately loud.
   // A stale ANTHROPIC_API_KEY makes Claude Code fall back to Anthropic and bill
   // that account for traffic the user believes is going to a gateway they have
   // already paid for. Nothing else in this tool costs money by being quiet.
@@ -98,7 +98,7 @@ export function inspectAmbient(
     )
   }
 
-  // ---- 2. Base URL: the other way traffic goes somewhere unintended. -------
+  // 2. Base URL: the other way traffic goes somewhere unintended.
   const ambientUrl = ambientEnv.ANTHROPIC_BASE_URL
   if (ambientUrl) {
     seen.add('ANTHROPIC_BASE_URL')
@@ -124,7 +124,7 @@ export function inspectAmbient(
     }
   }
 
-  // ---- 3. Tier models. ----------------------------------------------------
+  // 3. Tier models.
   const clobberedTiers: string[] = []
   for (const v of TIER_ENV_VARS) {
     const ambient = ambientEnv[v]
@@ -145,7 +145,7 @@ export function inspectAmbient(
     )
   }
 
-  // ---- 4. Everything else the profile and the shell both touch. -----------
+  // 4. Everything else the profile and the shell both touch.
   // Bounded by the plan, not by the environment.
   const alsoSet: string[] = []
   for (const key of Object.keys(set)) {
@@ -169,7 +169,7 @@ export function inspectAmbient(
     )
   }
 
-  // ---- 4b. The one variable worth looking up that we do not set. ----------
+  // 4b. The one variable worth looking up that we do not set.
   // CLAUDE_CODE_DISABLE_1M_CONTEXT turns the extended-context window off
   // wholesale. Because cuckoocode never sets it, the plan-walk above cannot see
   // it — and a user who has it exported gets every [1m] this tool carefully
@@ -192,7 +192,7 @@ export function inspectAmbient(
     )
   }
 
-  // ---- 5. The tripwire for the bug this whole phase exists to kill. -------
+  // 5. The tripwire for the bug this whole phase exists to kill.
   // [1m] is read PER VARIABLE. Three suffixed tiers and one bare one is not a
   // partial win, it is a tier that silently runs at the assumed window while
   // everything looks configured. Structurally impossible to hit by omission now
@@ -224,7 +224,7 @@ export function inspectAmbient(
     }
   }
 
-  // ---- 6. Informational: what this launch changed about the gateway. ------
+  // 6. Informational: what this launch changed about the gateway.
   const compat = Object.keys(set).filter(isCompatVar)
   if (compat.length > 0) {
     warnings.push(

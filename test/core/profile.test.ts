@@ -81,10 +81,8 @@ test('binding overrides ride along with the selection', () => {
   assert.deepEqual(sel.overrides, { baseUrl: 'https://x' })
 })
 
-// ---------------------------------------------------------------------------
 // Tier 1: an explicitly named profile. The two selectors are the SAME tier,
 // not a precedence chain — see R-CONFLICT.
-// ---------------------------------------------------------------------------
 
 test('a positional name beats a binding and the default', () => {
   const sel = resolveProfile(state, { cwd: '/work/or-project', positional: 'z' })

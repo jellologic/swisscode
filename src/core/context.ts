@@ -30,10 +30,9 @@ function isFiniteNumber(v: unknown): v is number {
 /**
  * Strip the suffix if present. Safe on ids that never had it.
  *
- * The `typeof` guard is now unreachable through the types — every caller holds
- * a `string` by this point — but it is retained verbatim: this is a types-only
- * migration, and the guard is the last line of defence for a hand-edited config
- * whose model id is not a string (see the note on `isV1` in migrate.ts).
+ * The `typeof` guard is unreachable through the types — every caller holds a
+ * `string` by this point — but it is the last line of defence for a hand-edited
+ * config whose model id is not a string (see the note on `isV1` in migrate.ts).
  */
 export function bareModelId(modelId: string): string {
   if (typeof modelId !== 'string') return modelId

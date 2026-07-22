@@ -210,16 +210,9 @@ export function createNodeProcess({
     // nothing behind — no wrapper process, no exit-code relay, no extra idle
     // Node sitting in the process list for the whole session.
     //
-    // TYPING NOTE: `process.execve` needs no declaration of our own.
-    // @types/node ships it as an OPTIONAL method — `execve?(file, args?, env?):
-    // never` — marked @experimental and @since v22.15.0. Optional is exactly
-    // right: it is absent on Windows, on IBM i, and on Node < 23.11, which is
-    // why the `typeof === 'function'` guard below is a real runtime check and
-    // not defensive noise. Because the declaration is optional rather than
-    // missing, that guard also NARROWS it, so the call typechecks with no cast
-    // at all — in particular no `as any` over the whole call, which would have
-    // thrown away the argument checking on the one line in this codebase that
-    // hands a binary, an argv and an environment to the kernel.
+    // `process.execve` is optional in @types/node (absent on Windows, IBM i,
+    // and Node < 23.11). The `typeof === 'function'` guard is a real runtime
+    // check and also narrows so the call typechecks with no cast.
     if (typeof process.execve === 'function' && platform !== 'win32') {
       try {
         process.execve(bin, [bin, ...args], childEnv)
@@ -252,7 +245,7 @@ export function createNodeProcess({
  * The part of `process` the exit relay actually uses.
  *
  * Spelled structurally rather than as `NodeJS.Process` because the fourth
- * argument is INJECTED — test/adapters/node-process.test.js passes an
+ * argument is INJECTED — test/adapters/node-process.test.ts passes an
  * EventEmitter stand-in so the relay can be observed without killing the test
  * runner. Naming the five members that are genuinely required is what makes
  * that stand-in legitimate instead of an unchecked lie, and the real `process`

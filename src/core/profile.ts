@@ -89,7 +89,7 @@ export function resolveProfile(
   // one is almost always the first word of a prompt.
   const positionalHit = positional && has(profiles, positional) ? positional : null
 
-  // ---- tier 1b: the flag. -------------------------------------------------
+  // tier 1b: the flag.
   // R-ASYMMETRY: an unknown --cc-profile is a hard error while an unknown
   // positional falls through. The flag is an unambiguous assertion of intent;
   // quietly ignoring it is how a launch ends up billed to the wrong account.
@@ -116,12 +116,12 @@ export function resolveProfile(
     return hit(profileFlag, 'flag', { consumedPositional: positionalHit !== null })
   }
 
-  // ---- tier 1a: the positional. -------------------------------------------
+  // tier 1a: the positional.
   if (positionalHit) return hit(positionalHit, 'positional', { consumedPositional: true })
 
   if (names.length === 0) return none
 
-  // ---- tier 2: the binding. -----------------------------------------------
+  // tier 2: the binding.
   // Short-circuited entirely when tier 1 produced anything: the walk above
   // returned before reaching here.
   if (cwd) {
@@ -141,7 +141,7 @@ export function resolveProfile(
     }
   }
 
-  // ---- tier 3: the default. -----------------------------------------------
+  // tier 3: the default.
   if (state?.defaultProfile && has(profiles, state.defaultProfile)) {
     return hit(state.defaultProfile, 'default')
   }

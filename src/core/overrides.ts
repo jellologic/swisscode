@@ -2,7 +2,7 @@
 //
 // INVARIANT: this path never writes. Overrides produce a modified copy that
 // lives for exactly one launch; the only writers in the codebase are the wizard
-// and the `config *` subcommands. test/core/overrides.test.js asserts zero
+// and the `config *` subcommands. test/core/overrides.test.ts asserts zero
 // store writes across a matrix of override shapes.
 //
 // The `--cc-*` PARSER that produces these override objects belongs to the UX
@@ -16,12 +16,10 @@ import type { EnvMap } from '../ports/process.ts'
 /**
  * Returns a NEW profile; the input is never mutated.
  *
- * `profile` is a plain `Profile`, not a nullable one: both call sites
- * (launch-root and doctor-root) refuse to proceed when the selection produced
- * no profile, so the `?? {}` below is defence rather than a supported mode. It
- * is kept verbatim — types only — but the signature states what is actually
- * called, because a `Profile | null` here would push a phantom null through
- * every consumer downstream.
+ * `profile` is a plain `Profile`, not nullable: both call sites (launch-root
+ * and doctor-root) refuse to proceed when selection produced no profile, so the
+ * `?? {}` below is defence rather than a supported mode. A `Profile | null`
+ * signature would push a phantom null through every consumer downstream.
  */
 export function applyOverrides(profile: Profile, overrides: ProfileOverrides = {}): Profile {
   const next = structuredClone(profile ?? {})

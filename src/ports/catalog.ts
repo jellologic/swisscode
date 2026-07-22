@@ -12,9 +12,8 @@
 //      rather than sniffing nulls out of the rows.
 //
 // The nullability below is not decoration. `Pricing | null` means a renderer
-// that reaches for `.prompt` without a null check DOES NOT COMPILE, which is
-// the single highest-value thing types buy this codebase: the "$0.00 over data
-// we do not have" bug is now unreachable rather than merely tested for.
+// that reaches for `.prompt` without a null check does not compile — the
+// "$0.00 over data we do not have" bug stays unreachable.
 
 /**
  * Per-token prices in USD. Not per million — core/format.ts scales for display.
@@ -144,8 +143,8 @@ export type CatalogRegistryPort = {
  * VERSION and that `models` is an array, and nothing else. Every row is
  * re-validated by core/catalog.ts `sanitizeModels` before use, and `fetchedAt`
  * is re-validated by `isStale`, which treats anything that is not a sane past
- * timestamp as stale. Typing this as trusted data would erase exactly the
- * checks that make it safe.
+ * timestamp as stale. Treating the cache as trusted data would erase those
+ * checks.
  */
 export type CatalogCacheEntry = {
   models: unknown[]

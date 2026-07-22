@@ -33,7 +33,7 @@ const firstParty: ProviderDescriptor = {
 
 const ec = { supported: true, models: ['big'], window: 1_000_000 }
 
-// ---------------------------------------------------------------- pure layer
+// pure layer
 
 test('contextWindowFor prefers a catalog-measured window over a documented one', () => {
   // The catalog describes the endpoint actually being called; the descriptor
@@ -106,7 +106,7 @@ test('autoCompactWindow returns null when nothing is configured', () => {
   assert.equal(autoCompactWindow({ opus: '', sonnet: '' }, ec, {}), null)
 })
 
-// ------------------------------------------------------------- env-plan layer
+// env-plan layer
 
 test('the window is set alongside [1m], never instead of it', () => {
   // Both mechanisms, together. The suffix widens the window; this says where to

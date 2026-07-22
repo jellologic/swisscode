@@ -1,6 +1,6 @@
 // Drives the profile-management wizard with synthetic keystrokes.
 //
-// Deliberately a separate file from ui.test.js: that one guards the FIRST-RUN
+// Deliberately a separate file from ui.test.ts: that one guards the FIRST-RUN
 // path, which this phase must not change. Multi-profile management is new
 // surface and gets its own script rather than complicating the one test that
 // proves the original flow still works.
@@ -84,8 +84,6 @@ function mount(props: Partial<AppProps>) {
   )
   return { ...app, result: () => result, done: () => resolved }
 }
-
-// ---------------------------------------------------------------------------
 
 {
   // More than one profile and none named: the picker opens.

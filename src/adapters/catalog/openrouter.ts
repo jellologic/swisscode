@@ -41,18 +41,9 @@ function prop(v: unknown, key: string): unknown {
 
 /**
  * A row this adapter produced: SHAPED like a `NormalizedModel`, not yet proven
- * to be one.
- *
- * The fields typed `unknown` are the ones this adapter copies through without
- * checking — OpenRouter's `id` could be a number and nothing here would notice.
- * `sanitizeModels` is what rejects such a row, and typing these as `string` or
- * `number | null` would be a claim this code does not earn.
- *
- * The fields typed concretely are the ones that ARE proven here: `pricing` and
- * `benchmarks` go through `num`/`nullableNum`, and `tools`/`reasoning` are the
- * result of an `Array.prototype.includes`. Spelling both halves keeps the field
- * NAMES checked against the port — a typo'd `pricng` still fails to compile —
- * while leaving the unvalidated half visibly unvalidated.
+ * to be one. Fields typed `unknown` are copied through unchecked —
+ * `sanitizeModels` rejects bad rows. Fields typed concretely (`pricing`,
+ * `benchmarks`, `tools`, `reasoning`) are proven here.
  */
 type CandidateModel = {
   id: unknown
@@ -68,18 +59,16 @@ type CandidateModel = {
 
 /**
  * OpenRouter's /v1/models payload -> candidate rows. Pure, so
- * test/adapters/catalog.test.js can run it over a captured fixture.
+ * test/adapters/catalog.test.ts can run it over a captured fixture.
  */
 export function normalizeOpenRouter(body: unknown): CandidateModel[] {
   const data = prop(body, 'data')
   if (!Array.isArray(data)) throw new Error('unexpected response shape')
   const rows: unknown[] = data
   return rows.map((row): CandidateModel => {
-    // Read straight off the row, as this adapter always has. A null row throws
-    // here exactly as it did before the migration, and the throw is caught by
-    // createCachedCatalog and reported as a catalog error. Guarding instead
-    // would silently keep the rest of a malformed payload, which is a
-    // behaviour change this slice does not get to make.
+    // Read straight off the row. A null row throws; createCachedCatalog catches
+    // and reports a catalog error. Guarding instead would silently keep the
+    // rest of a malformed payload.
     const m = row as Record<string, unknown>
     const aa = prop(m.benchmarks, 'artificial_analysis') ?? null
     const supported = m.supported_parameters

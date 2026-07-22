@@ -31,7 +31,7 @@ export type CatalogNormalizer = (body: unknown) => unknown[]
 /** The ports a network-backed catalog is built from. */
 export type CatalogDeps = {
   net: NetPort
-  cache?: ModelCacheStorePort | null
+  cache?: ModelCacheStorePort | null | undefined
   clock: ClockPort
 }
 
@@ -89,16 +89,9 @@ export function createCachedCatalog({
       cache?.write(id, models)
       return { models, fromCache: false, stale: false, error: null }
     } catch (err) {
-      // See the note on `errMessage` in adapters/store/fs-config-store.ts for
-      // why this stays a property read rather than becoming an
-      // `instanceof Error` narrowing.
-      //
-      // The `?? null` is the one place this slice normalizes a value rather
-      // than only describing it. `CatalogResult.error` is `string | null`, and
-      // a throw carrying no `.message` would have put `undefined` there —
-      // a latent violation of the port. Unreachable in practice: every throw
-      // reaching this catch comes from `net.getJson`, `normalize`, or the
-      // explicit `new Error` above, all of which are Errors.
+      // Property read (not `instanceof Error`); see `errMessage` in
+      // fs-config-store.ts. `?? null` keeps `CatalogResult.error` as
+      // `string | null` when a throw carries no `.message`.
       const message = (err as { message?: string }).message ?? null
       if (cachedUsable) {
         return { models: cachedModels, fromCache: true, stale: true, error: message }

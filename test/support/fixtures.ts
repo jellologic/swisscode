@@ -7,7 +7,7 @@
 // not sloppiness in the tests — it is the point of them. A unit test for
 // buildEnvPlan has no business inventing a `provider` field that buildEnvPlan
 // never reads, and filling those fields in to satisfy the compiler would change
-// the input under test, which is exactly what this migration is forbidden to do.
+// the input under test.
 //
 // So the incompleteness has to survive. The only question is how much checking
 // survives WITH it.

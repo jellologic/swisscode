@@ -23,28 +23,9 @@ process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-/**
- * Resolve a specifier to the file that actually exists on disk.
- *
- * During the TypeScript migration a module can be .js or .ts, and a .jsx can
- * be .tsx. Import specifiers name the real file (tsconfig's
- * rewriteRelativeImportExtensions turns "./x.ts" into "./x.js" on emit), so a
- * plain existsSync is usually enough — but a not-yet-migrated importer may
- * still spell a migrated dependency the old way, and that IS an error worth
- * reporting as "missing file" rather than silently walking past.
- */
+/** Source imports spell `.ts`/`.tsx`; a missing file is reported as such. */
 function onDisk(p: string): string | null {
-  if (existsSync(p)) return p
-  for (const [from, to] of [
-    ['.js', '.ts'],
-    ['.jsx', '.tsx'],
-  ] as const) {
-    if (p.endsWith(from)) {
-      const swapped = p.slice(0, -from.length) + to
-      if (existsSync(swapped)) return swapped
-    }
-  }
-  return null
+  return existsSync(p) ? p : null
 }
 
 /**
@@ -53,7 +34,7 @@ function onDisk(p: string): string | null {
  * deliberately trivial shim over the compiled output; it is pinned by its own
  * test below, which is strictly more specific than walking through it.
  */
-const ENTRY = onDisk(join(ROOT, 'src', 'cli.js'))
+const ENTRY = onDisk(join(ROOT, 'src', 'cli.ts'))
 
 const STATIC_IMPORT = /(?:^|[\s;}])(?:import|export)\s[^'"()]*?from\s*['"]([^'"]+)['"]/g
 const BARE_IMPORT = /(?:^|[\s;}])import\s*['"]([^'"]+)['"]/g
@@ -231,7 +212,7 @@ test('ports/ carry no runtime behaviour at all', () => {
     assert.equal(
       runtimeResidue(file),
       'export {}',
-      `${relative(ROOT, file)} contains runtime statements; ports are types only`,
+      `${relative(ROOT, file)} contains runtime statements; ports must be type-only`,
     )
   }
 })

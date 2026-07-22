@@ -31,8 +31,7 @@ const mask = (s: string): string => (s ? '•'.repeat(Math.min(s.length, 24)) : 
  * assertion is unavoidable — Object.fromEntries is typed to lose the key union
  * — but it is not an unchecked claim: core/tiers.ts asserts at compile time
  * that TIERS lists every member of `Tier`, so the keys this produces are
- * exactly the keys the type promises. Written this way rather than as an object
- * literal so the emitted program is unchanged.
+ * exactly the keys the type promises.
  */
 const emptyModels = (): TierRecord<string> =>
   Object.fromEntries(TIERS.map((t) => [t, ''])) as TierRecord<string>
@@ -57,7 +56,7 @@ function Row({ label, value, dim }: { label: string; value: string; dim?: boolea
       <Box width={12}>
         <Text dimColor>{label}</Text>
       </Box>
-      <Text dimColor={dim}>{value}</Text>
+      <Text dimColor={!!dim}>{value}</Text>
     </Box>
   )
 }
@@ -130,23 +129,23 @@ type Step =
   | 'saveError'
 
 export type AppProps = {
-  mode?: AppMode
+  mode?: AppMode | undefined
   /** pre-loaded config document; null means read it from the store */
-  state?: State | null
+  state?: State | null | undefined
   /**
    * The profile to open the form with. `undefined` and `null` are DIFFERENT
    * here: undefined means "nothing was supplied, work it out", null means
    * "explicitly start blank". The component branches on `initial !== undefined`.
    */
-  initial?: Profile | null
-  profileName?: string | null
+  initial?: Profile | null | undefined
+  profileName?: string | null | undefined
   /** called exactly once, with the saved profile or null if cancelled */
   onResult: (profile: Profile | null) => void
-  store?: ConfigStorePort | null
-  registry?: ProviderRegistryPort
-  catalogs?: CatalogRegistryPort | null
+  store?: ConfigStorePort | null | undefined
+  registry?: ProviderRegistryPort | undefined
+  catalogs?: CatalogRegistryPort | null | undefined
   /** bindings key for the cwd; `undefined` means derive it, null means none */
-  cwd?: string | null
+  cwd?: string | null | undefined
 }
 
 export function App({
@@ -199,18 +198,15 @@ export function App({
         ? names[0]!
         : (loadedState.defaultProfile ?? null))
 
-  // `openDirectly as string` is NOT a provable invariant, unlike the assertions
-  // elsewhere in this file — `openDirectly` is genuinely null here whenever
-  // there is no default profile and more than one profile exists. The code
-  // relies on `profiles[null]` returning undefined.
+  // `openDirectly as string` is NOT a provable invariant — `openDirectly` is
+  // genuinely null whenever there is no default profile and more than one
+  // profile exists. The code relies on `profiles[null]` returning undefined.
   //
-  // BUG (reported, deliberately NOT fixed — this migration is types only):
-  // `obj[null]` coerces the key to the STRING "null", and "null" is a legal
-  // profile name — it matches NAME_RE and is in neither SOFT_RESERVED nor
-  // COMMON_WORD_GUARD. So a user with a profile named `null` and no default
-  // profile has that profile silently loaded into the form here, while
-  // `editingName` stays null and finish() then saves it under a DIFFERENT,
-  // derived name. Verified against the real coercion.
+  // Known bug: `obj[null]` coerces the key to the string "null", a legal
+  // profile name (matches NAME_RE; not in SOFT_RESERVED or COMMON_WORD_GUARD).
+  // A user with a profile named `null` and no default has that profile silently
+  // loaded here, while `editingName` stays null and finish() saves under a
+  // DIFFERENT, derived name.
   const startProfile =
     profileName !== null
       ? (loadedState.profiles?.[profileName] ?? null)
@@ -243,9 +239,7 @@ export function App({
   const [tier, setTier] = useState(0)
   const [pickingTier, setPickingTier] = useState<Tier | null>(null)
   // `undefined` is in this type deliberately: a throw carrying no `.message`
-  // stores undefined, which is what the code has always done. Ink renders
-  // undefined and null identically (nothing), so this describes reality rather
-  // than tidying it into a `?? null` that would change the emitted program.
+  // stores undefined. Ink renders undefined and null identically (nothing).
   const [saveError, setSaveError] = useState<string | null | undefined>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -281,11 +275,9 @@ export function App({
     try {
       configStore.save(next)
     } catch (err) {
-      // `err.message`, not `err instanceof Error ? … : String(err)`. The
-      // idiomatic narrowing is a BEHAVIOUR change: a throw carrying no
-      // `.message` puts `undefined` on screen today, and String(err) would put
-      // a different string in front of the user. The property read stays the
-      // property read — which is why `saveError` is typed to admit undefined.
+      // Property read, not `instanceof Error` / `String(err)`: a throw with no
+      // `.message` yields `undefined` on screen; String(err) would show something
+      // else. That is why `saveError` admits undefined.
       setSaveError((err as { message?: string }).message)
       setStep('saveError')
       return false
@@ -308,15 +300,11 @@ export function App({
   }
 
   const profileAction = (action: ProfileAction) => {
-    // STEP-MACHINE INVARIANT, asserted once at the point it enters the function.
-    //
-    // This callback is reachable only from <ProfileActions>, which is rendered
-    // only at step 'profileActions', which is entered only from the picker's
-    // onPick(name) — so `editingName` is set. The types cannot see that
-    // correlation between `step` and `editingName`; expressing it would mean a
-    // discriminated union over the step state, which is a restructure and not
-    // what this migration is. Annotating the binding that already exists costs
-    // no runtime code and covers every use below.
+    // STEP-MACHINE INVARIANT: reachable only from <ProfileActions> at step
+    // 'profileActions', entered only from the picker's onPick(name) — so
+    // `editingName` is set. The types cannot see that step/`editingName`
+    // correlation; the assertion covers every use below without a step-state
+    // discriminated union.
     const name = editingName as string
     if (action === 'back' || action === 'noop') return setStep('profiles')
     if (action === 'edit') return loadProfileIntoForm(name)
@@ -365,9 +353,8 @@ export function App({
       // One left is unambiguous; several is not, and guessing picks an account
       // to bill.
       //
-      // `remaining[0]!` is noUncheckedIndexedAccess meeting a provable
-      // invariant: the branch is guarded on length === 1. A `?? null` would
-      // read as tidier and would edit the emitted program to no effect.
+      // `remaining[0]!` meets noUncheckedIndexedAccess: the branch is guarded
+      // on length === 1.
       next.defaultProfile = remaining.length === 1 ? remaining[0]! : null
     }
     if (!persist(next, `Deleted "${name}".`)) return
@@ -684,7 +671,7 @@ export function App({
           {TIERS.map((t, i) => (
             <Box key={t}>
               <Box width={9}>
-                <Text color={i === tier ? 'cyan' : undefined} dimColor={i !== tier}>
+                <Text {...(i === tier ? { color: 'cyan' as const } : {})} dimColor={i !== tier}>
                   {i === tier ? '› ' : '  '}
                   {t}
                 </Text>
@@ -724,15 +711,15 @@ export function App({
 }
 
 /**
- * What `src/cli.js` may hand the wizard. A strict subset of `AppProps`: the
+ * What `src/cli.ts` may hand the wizard. A strict subset of `AppProps`: the
  * adapters (store, registry, catalogs) are the component's own defaults here,
  * and only tests substitute them.
  */
 export type RunUiOptions = {
-  mode?: AppMode
-  state?: State | null
-  initial?: Profile | null
-  profileName?: string | null
+  mode?: AppMode | undefined
+  state?: State | null | undefined
+  initial?: Profile | null | undefined
+  profileName?: string | null | undefined
 }
 
 export async function runUi({
