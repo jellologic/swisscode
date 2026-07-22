@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { describeIdentity, readSessionIdentity } from './identity.ts'
+import { isDefaultConfigDir } from '../agents/claude-code/env.ts'
 import type { ConfigStorePort, ProviderAccount, State } from '../../ports/config-store.ts'
 import type { AgentRegistryPort } from '../../ports/agent.ts'
 import type { ProcessPort } from '../../ports/process.ts'
@@ -141,9 +142,15 @@ export function accountLogin({
   // An ADOPTED directory keeps whatever permissions it has — narrowing someone
   // else's ~/.claude-work under their feet is not this command's business — but
   // a permissive one earns a warning, since a login is about to live in it.
+  //
+  // NOT for the default directory. Claude Code creates `~/.claude` at 0755
+  // itself, adopting it changes nothing about its exposure, and a warning that
+  // fires on a stock install for something swisscode neither made nor worsened
+  // is noise that teaches people to skip warnings. `config doctor` is where a
+  // pre-existing permissions problem belongs.
   try {
     const mode = statSync(target).mode & 0o777
-    if (mode & 0o077) {
+    if (mode & 0o077 && !isDefaultConfigDir(target, proc.env())) {
       err(
         `swisscode: warning — ${target} is readable by other users (mode ${mode.toString(8)}). ` +
           'It is about to hold a login. `chmod 700` it.',
@@ -165,11 +172,28 @@ export function accountLogin({
     return 2
   }
 
-  const already = readSessionIdentity(target, { env: proc.env() })
+  const env = proc.env()
+  const isDefault = isDefaultConfigDir(target, env)
+  const already = readSessionIdentity(target, { env })
+
+  if (isDefault && already) {
+    // The common first step: adopt the login you already have. Nothing to do,
+    // and nothing to launch — telling someone to `/login` into the account they
+    // are already using would be busywork that risks replacing it.
+    out(`Account "${name}" adopted your existing login: ${describeIdentity(already)}.`)
+    out(`  ${target}  (Claude Code's default directory)`)
+    out('')
+    out('Nothing else to do — this account is ready to use. Add a second one with')
+    out(`  swisscode config accounts login <other-name>`)
+    return 0
+  }
   if (already) {
     out(`Account "${name}" already logged in as ${describeIdentity(already)}.`)
     out(`  ${target}`)
     out('Run `/login` inside the session that starts next to switch it to another account.')
+  } else if (isDefault) {
+    // Naming the default directory when nobody has ever logged in there.
+    out(`Account "${name}" recorded, using Claude Code's default directory.`)
   } else {
     out(`Account "${name}" recorded, using ${target}.`)
   }
@@ -199,8 +223,12 @@ export function accountLogin({
   out('Starting Claude Code in that directory. Run `/login` inside it, then exit.')
   out('')
 
-  const env = proc.env()
-  env.CLAUDE_CONFIG_DIR = target
+  // Setting the variable to the default path would send the agent to a
+  // DIFFERENT credential than the one it uses when the variable is unset, so a
+  // login performed here would not be the login a plain `claude` finds. Same
+  // rule as the launch path; see `isDefaultConfigDir`.
+  if (isDefault) delete env.CLAUDE_CONFIG_DIR
+  else env.CLAUDE_CONFIG_DIR = target
   // The same both-variables rule the launch path enforces, for the same reason:
   // either one present would authenticate the login flow as somebody else and
   // the `/login` would appear to do nothing.

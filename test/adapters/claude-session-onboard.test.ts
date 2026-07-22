@@ -176,6 +176,40 @@ test('an adopted world-readable directory earns a warning rather than a silent c
   assert.equal(h.replaced.length, 1)
 })
 
+test('adopting the DEFAULT directory takes the existing login and launches nothing', () => {
+  // The trap this guards: Claude Code keys its credential on whether
+  // CLAUDE_CONFIG_DIR is SET, not on its value, so `--dir ~/.claude` must not
+  // send the user through a second /login — and must not launch at all, since
+  // logging in again would replace the login being adopted.
+  const root = mkdtempSync(join(tmpdir(), 'swisscode-default-'))
+  const home = join(root, 'home')
+  mkdirSync(join(home, '.claude'), { recursive: true })
+  writeFileSync(
+    join(home, '.claude.json'), // a SIBLING of ~/.claude, not a child
+    JSON.stringify({
+      oauthAccount: { emailAddress: 'me@example.com', organizationRateLimitTier: 'default_claude_max_20x' },
+    }),
+  )
+  const h = harness({}, { HOME: home })
+  const code = h.run({ ...base(h), name: 'default', dir: join(home, '.claude') })
+
+  assert.equal(code, 0)
+  assert.equal(h.replaced.length, 0, 'adopting an existing login must not start a login flow')
+  assert.match(h.out.join('\n'), /adopted your existing login: me@example\.com {2}· {2}Max 20x/)
+  assert.equal(h.saved.at(-1)?.providerAccounts?.default?.configDir, join(home, '.claude'))
+})
+
+test('the default directory earns no permissions warning — swisscode did not create it', () => {
+  // Claude Code makes ~/.claude at 0755. A warning that fires on a stock
+  // install, for something swisscode neither made nor worsened, is noise.
+  const root = mkdtempSync(join(tmpdir(), 'swisscode-defperm-'))
+  const home = join(root, 'home')
+  mkdirSync(join(home, '.claude'), { recursive: true, mode: 0o755 })
+  const h = harness({}, { HOME: home })
+  h.run({ ...base(h), name: 'default', dir: join(home, '.claude') })
+  assert.doesNotMatch(h.err.join('\n'), /readable by other users/)
+})
+
 test('the recorded config is exactly one account and nothing else', () => {
   const h = harness({ profiles: { p: { agentProfile: 'a', accounts: [] } } } as Partial<State>)
   h.run({ ...base(h), name: 'personal' })

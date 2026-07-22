@@ -70,6 +70,52 @@ test('Claude Code lowers it, and clears both overriding variables', () => {
   assert.ok(plan.unset.includes('ANTHROPIC_AUTH_TOKEN'))
 })
 
+test('naming the DEFAULT directory unsets the variable rather than writing the path', () => {
+  // The trap, measured on a real machine:
+  //
+  //   claude config ls                                 -> logged in
+  //   CLAUDE_CONFIG_DIR=$HOME/.claude claude config ls  -> "Not logged in"
+  //
+  // Claude Code picks the Keychain item from whether the variable IS SET, not
+  // from what it holds, so writing the default path here hands the user a
+  // session that reports the right email — identity comes from the shared
+  // .claude.json — while being unable to authenticate.
+  const home = '/home/u'
+  const plan = buildEnvPlan(
+    makeProfile({ provider: 'anthropic', configDir: `${home}/.claude` }),
+    anthropic,
+    { HOME: home, CLAUDE_CONFIG_DIR: '/somewhere/stale' },
+  )
+  assert.equal(plan.set.CLAUDE_CONFIG_DIR, undefined, 'the path must not be written')
+  assert.ok(
+    plan.unset.includes('CLAUDE_CONFIG_DIR'),
+    'a stale ambient CLAUDE_CONFIG_DIR must be actively cleared, not merely left alone',
+  )
+  // …and it is still a session launch, so both credential vars still go.
+  assert.ok(plan.unset.includes('ANTHROPIC_API_KEY'))
+  assert.ok(plan.unset.includes('ANTHROPIC_AUTH_TOKEN'))
+})
+
+test('a trailing slash on the default directory is still the default directory', () => {
+  // A near-miss does not fail loudly — it silently takes the hashed-credential
+  // branch — so the comparison normalises before it compares.
+  const plan = buildEnvPlan(
+    makeProfile({ provider: 'anthropic', configDir: '/home/u/.claude/' }),
+    anthropic,
+    { HOME: '/home/u' },
+  )
+  assert.equal(plan.set.CLAUDE_CONFIG_DIR, undefined)
+})
+
+test('a NON-default directory does write the path', () => {
+  const plan = buildEnvPlan(
+    makeProfile({ provider: 'anthropic', configDir: '/home/u/.claude-work' }),
+    anthropic,
+    { HOME: '/home/u' },
+  )
+  assert.equal(plan.set.CLAUDE_CONFIG_DIR, '/home/u/.claude-work')
+})
+
 test('a key account still sets its credential, and no config dir', () => {
   // The regression guard for the change above: session mode must not have
   // quietly disabled the ordinary path.

@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { isDefaultConfigDir } from '../agents/claude-code/env.ts'
 
 type ReadableEnv = Record<string, string | undefined>
 
@@ -64,12 +65,11 @@ export type SessionIdentity = {
  * feature exists to end.
  */
 export function configFilePath(configDir: string, env: ReadableEnv = process.env): string {
-  const home = env.HOME || homedir()
-  // `resolve` so that `~/.claude`, `~/.claude/`, and a relative path spelling of
-  // it all compare equal; a trailing slash must not turn the default directory
-  // into a custom one.
-  return resolve(configDir) === resolve(join(home, '.claude'))
-    ? join(home, '.claude.json')
+  // Shares `isDefaultConfigDir` with the launch path rather than re-deriving
+  // "is this the default directory?" — the two must agree, and the launch path
+  // owns that question because it is the one that has to unset the variable.
+  return isDefaultConfigDir(configDir, env)
+    ? join(env.HOME || homedir(), '.claude.json')
     : join(resolve(configDir), '.claude.json')
 }
 

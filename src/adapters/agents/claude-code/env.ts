@@ -6,6 +6,8 @@
 // variable this tool emits is chosen here. The generic accumulator it is built
 // on (makeEnvWriter, materializeEnv) is neutral and lives in core/env-plan.ts.
 
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { TIERS } from '../../../core/tiers.ts'
 import { definedEntriesOf, makeEnvWriter, resolveCredential } from '../../../core/env-plan.ts'
 import { TIER_ENV } from './tiers.ts'
@@ -16,6 +18,39 @@ import type { ClaudeCodeCompatEnv, ClaudeCodeCompatFlag } from '../../../ports/c
 import type { ProviderDescriptor, ResolvedModels, Tier } from '../../../ports/provider.ts'
 import type { EnvMap } from '../../../ports/process.ts'
 import type { EnvWarning } from '../../../ports/agent.ts'
+
+/**
+ * Does this session directory mean "the default login"?
+ *
+ * Lives here, in the env lowering, because it is an ENV-LOWERING QUESTION: the
+ * answer decides whether CLAUDE_CONFIG_DIR is written or cleared. It earns no
+ * module of its own — the launch path is held under 40 modules so it stays
+ * auditable in a sitting, and that budget is a real constraint rather than a
+ * decoration.
+ *
+ * MEASURED, and the measurement is the whole reason it exists. Claude Code
+ * chooses which Keychain item holds the credential from WHETHER
+ * `CLAUDE_CONFIG_DIR` IS SET, hashing the path into the service name whenever
+ * it is — so the default directory has two distinct credentials depending on
+ * how you arrive at it. Verified on a real machine:
+ *
+ *     claude config ls                                  ->  logged in
+ *     CLAUDE_CONFIG_DIR=$HOME/.claude claude config ls   ->  "Not logged in"
+ *
+ * Same directory, same `.claude.json`, different login. Identity is shared —
+ * that file really is the same one — so a session lowered the wrong way reports
+ * the correct email while being unable to authenticate, which is about the most
+ * confusing failure on offer.
+ */
+export function isDefaultConfigDir(
+  dir: string,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  // `resolve` so a trailing slash, a doubled separator, or a relative spelling
+  // of the same directory all answer alike. A near-miss does not fail loudly;
+  // it silently takes the hashed-credential branch.
+  return resolve(dir) === resolve(join(env.HOME || homedir(), '.claude'))
+}
 
 /**
  * CompatFlags -> env var. Descriptors never spell a variable name; they set a
@@ -156,9 +191,26 @@ export function buildEnvPlan(
   //     anthropic-direct path cleared only the first, so a stale auth token
   //     survived into the child — a silent wrong-account launch, which is the
   //     exact failure the golden maps exist to catch.
+  //
+  //     SETTING THE VARIABLE TO THE DEFAULT PATH IS NOT THE SAME AS LEAVING IT
+  //     UNSET, and this is not a subtlety we may round off. Claude Code decides
+  //     which Keychain item holds the credential from whether CLAUDE_CONFIG_DIR
+  //     IS SET — not from what it contains — hashing the path into the service
+  //     name whenever it is. So the default directory has two different
+  //     credentials depending on how you arrive at it. Verified on this machine:
+  //
+  //       claude config ls                          -> logged in
+  //       CLAUDE_CONFIG_DIR=$HOME/.claude ... ls    -> "Not logged in"
+  //
+  //     Same directory, same `.claude.json`, different login. An account that
+  //     names the default directory therefore lowers to UNSETTING the variable,
+  //     which is also what makes adopting an existing `~/.claude` work with no
+  //     re-login. Writing the path instead would hand the user a session that
+  //     reports the right email — identity comes from `.claude.json`, which IS
+  //     shared — while being logged out.
   const sessionDir = profile?.configDir
   if (sessionDir) {
-    write('CLAUDE_CONFIG_DIR', sessionDir)
+    write('CLAUDE_CONFIG_DIR', isDefaultConfigDir(sessionDir, ambientEnv) ? '' : sessionDir)
     write('ANTHROPIC_API_KEY', '')
     write('ANTHROPIC_AUTH_TOKEN', '')
   }
