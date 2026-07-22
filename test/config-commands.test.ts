@@ -382,3 +382,54 @@ test('a valid --timeout value is not mistaken for an unknown flag', async () => 
   const h = harness()
   assert.notEqual(await h.run(['doctor', '--timeout', '5000', '--offline']), 2)
 })
+
+test('every surface that names a provider sees the custom ones', async () => {
+  // REGRESSION. The registry was composed in planLaunch and doctor-root but not
+  // here, so `config list` reported "unknown provider — not in this build" for a
+  // provider `config doctor` resolved perfectly well. Three call sites, one
+  // forgotten, and the two commands disagreed about what the config contained.
+  //
+  // Composing once in runConfigCommand is the fix; this asserts the property
+  // rather than the fix, so moving where it happens cannot silently undo it.
+  const h = harness({
+    state: {
+      version: 2,
+      profiles: { rig: { provider: 'vllm' } },
+      defaultProfile: 'rig',
+      bindings: {},
+      settings: {},
+      providers: {
+        vllm: {
+          id: 'vllm',
+          label: 'Local vLLM',
+          baseUrl: 'http://localhost:8000',
+          defaultModels: { opus: 'my-70b' },
+        },
+      },
+    } as unknown as State,
+  })
+
+  await h.run(['list'])
+  const text = h.text()
+  assert.match(text, /vllm/)
+  assert.doesNotMatch(text, /not in this build/, 'a custom provider read as unknown')
+  // Its defaults are inherited exactly as a shipped preset's would be.
+  assert.match(text, /my-70b/)
+})
+
+test('a profile on a genuinely unknown provider still says so', async () => {
+  // The composition must not turn the honest "this build does not know that
+  // provider" report into silence — that warning is what stops a third-party
+  // key being sent to api.anthropic.com.
+  const h = harness({
+    state: {
+      version: 2,
+      profiles: { ghost: { provider: 'nope' } },
+      defaultProfile: 'ghost',
+      bindings: {},
+      settings: {},
+    } as unknown as State,
+  })
+  await h.run(['list'])
+  assert.match(h.text(), /not in this build/)
+})

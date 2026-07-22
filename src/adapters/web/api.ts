@@ -10,10 +10,13 @@
 
 import { bindPath, bindingEntries, unbindPath } from '../../core/binding.ts'
 import { validateProfileName } from '../../core/migrate.ts'
+import { toCustomProvider, validateCustomProvider } from '../../core/provider-def.ts'
 import { TIERS } from '../../core/tiers.ts'
+import { COMPAT_ENV, CREDENTIAL_ENVS } from '../agents/claude-code/env.ts'
 import type { ConfigStorePort, Profile, State } from '../../ports/config-store.ts'
 import type { AgentRegistryPort } from '../../ports/agent.ts'
 import type { ProviderRegistryPort } from '../../ports/provider.ts'
+import { RESERVED_PROVIDER_IDS, withCustomProviders } from '../providers/composite.ts'
 
 export type ApiRequest = {
   method: string
@@ -32,6 +35,27 @@ export type ApiDeps = {
   store: ConfigStorePort
   providers: ProviderRegistryPort
   agents: AgentRegistryPort
+  /**
+   * Which agent binaries exist ON THIS MACHINE. Injected as a thunk rather than
+   * a value because it stats the filesystem, and `bootstrap` is the only caller
+   * that needs it — a profile write should not pay for a PATH walk.
+   *
+   * Optional: a caller with no process port (every unit test) simply gets no
+   * installation facts rather than a fabricated "installed: false", which would
+   * be a claim nobody checked.
+   */
+  installed?: () => InstalledAgent[]
+}
+
+/** One agent CLI, as found (or not) on this machine. */
+export type InstalledAgent = {
+  id: string
+  label: string
+  installed: boolean
+  /** resolved absolute path, or null when it was not found */
+  path: string | null
+  /** why resolution failed, verbatim from the process adapter */
+  error: string | null
 }
 
 const json = (status: number, body: unknown): ApiResponse => ({ status, body })
@@ -183,6 +207,17 @@ export function parseProfile(input: unknown, existing: Profile | undefined): Pro
     profile.env = env
   }
 
+  // Measured windows only. A non-integer or non-positive entry is dropped
+  // rather than stored: this map feeds CLAUDE_CODE_AUTO_COMPACT_WINDOW, and a
+  // window set too large means the conversation overflows instead of compacting.
+  if (isObjectLike(input.contextWindows)) {
+    const windows: Record<string, number> = {}
+    for (const [model, v] of Object.entries(input.contextWindows)) {
+      if (typeof v === 'number' && Number.isInteger(v) && v > 0) windows[model] = v
+    }
+    profile.contextWindows = windows
+  }
+
   return profile
 }
 
@@ -203,7 +238,7 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       corrupt: loaded.corrupt,
       warnings: loaded.warnings,
       configPath: store.path(),
-      providers: providers.all().map((p) => ({
+      providers: withCustomProviders(providers, loaded.state).all().map((p) => ({
         id: p.id,
         label: p.label,
         baseUrl: p.baseUrl,
@@ -217,8 +252,27 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
         id: a.id,
         label: a.label,
         capabilities: a.capabilities,
+        binary: a.binary.name,
+        overrideEnv: a.binary.overrideEnv,
       })),
       tiers: TIERS,
+      // Everything the CLI can express, so the UI never has to hard-code a
+      // vocabulary that would then drift from the adapter's table.
+      compatFlags: Object.entries(COMPAT_ENV).map(([id, e]) => ({
+        id,
+        env: e.env,
+        value: e.value,
+        consequence: e.consequence ?? null,
+      })),
+      credentialEnvs: CREDENTIAL_ENVS,
+      // Which of these are actually on this machine. Absent when the caller
+      // wired no process port; never faked.
+      installedAgents: deps.installed ? deps.installed() : null,
+      // Custom providers are returned SEPARATELY from `providers` even though
+      // the registry already merges them: the UI has to know which ones it may
+      // edit, and a merged list cannot say.
+      customProviders: loaded.state.providers ?? {},
+      reservedProviderIds: providers.all().map((p) => p.id),
     })
   }
 
@@ -267,6 +321,73 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       if (state.defaultProfile === name) state.defaultProfile = null
       return commit(store, state)
     }
+  }
+
+  if (resource === 'providers') {
+    const id = rest[0] ? decodeURIComponent(rest[0]) : null
+
+    if (req.method === 'PUT') {
+      if (!id) return fail(400, 'provider id is required')
+      const conflict = revisionConflict(store, req.body)
+      if (conflict) return conflict
+
+      const loaded = store.load()
+      const submitted = isObjectLike(req.body) ? req.body.provider : null
+      const candidate = isObjectLike(submitted) ? { ...submitted, id } : submitted
+
+      // The runtime twin of registry.test.ts. A shipped descriptor is guarded
+      // by tests; one typed into a browser is guarded by exactly this call, so
+      // the two lists of rules have to stay in step.
+      const verdict = validateCustomProvider(candidate, {
+        // The BASE ids, not the merged list: a custom provider must not shadow
+        // a shipped preset, but it may of course overwrite ITSELF.
+        reservedIds: RESERVED_PROVIDER_IDS,
+        knownCompatFlags: Object.keys(COMPAT_ENV),
+        credentialEnvs: CREDENTIAL_ENVS,
+      })
+      if (!verdict.ok) return json(400, { error: verdict.errors[0], errors: verdict.errors })
+
+      const providersMap = { ...(loaded.state.providers ?? {}) }
+      providersMap[id] = toCustomProvider(candidate as Record<string, unknown>)
+      // Warnings ride along on success: they describe a config that is legal
+      // and probably wrong, which is the user's call to make, not ours.
+      return commit(store, { ...loaded.state, providers: providersMap }, {
+        warnings: verdict.warnings,
+      })
+    }
+
+    if (req.method === 'DELETE') {
+      if (!id) return fail(400, 'provider id is required')
+      const conflict = revisionConflict(store, req.body)
+      if (conflict) return conflict
+      const loaded = store.load()
+      if (!loaded.state.providers?.[id]) return fail(404, `no custom provider named "${id}"`)
+
+      // Profiles pointing at it are reported, not silently repaired. Deleting
+      // the provider out from under a profile leaves it unlaunchable, and the
+      // user is the only one who knows which provider it should point at now.
+      const orphaned = Object.entries(loaded.state.profiles ?? {})
+        .filter(([, p]) => p.provider === id)
+        .map(([name]) => name)
+
+      const providersMap = { ...loaded.state.providers }
+      delete providersMap[id]
+      return commit(store, { ...loaded.state, providers: providersMap }, { orphanedProfiles: orphaned })
+    }
+  }
+
+  if (resource === 'settings' && req.method === 'PUT') {
+    const conflict = revisionConflict(store, req.body)
+    if (conflict) return conflict
+    const loaded = store.load()
+    const input = isObjectLike(req.body) ? req.body.settings : null
+    if (!isObjectLike(input)) return fail(400, 'settings must be an object')
+    const settings = { ...loaded.state.settings }
+    if (typeof input.quiet === 'boolean') settings.quiet = input.quiet
+    if (Number.isInteger(input.bindingWalkDepth)) {
+      settings.bindingWalkDepth = input.bindingWalkDepth as number
+    }
+    return commit(store, { ...loaded.state, settings })
   }
 
   if (resource === 'default' && req.method === 'PUT') {

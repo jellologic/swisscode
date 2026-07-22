@@ -359,3 +359,143 @@ test('the server binds loopback only', async () => {
     await server.close()
   }
 })
+
+// provider CRUD
+
+test('bootstrap exposes the full CLI option surface, not a hard-coded subset', () => {
+  // The UI must never carry its own copy of this vocabulary — it would drift
+  // from the adapter's table and offer flags that do nothing.
+  const s = store(baseState())
+  const body = handleApi({ method: 'GET', path: '/api/bootstrap', body: null }, deps(s))
+    .body as Record<string, unknown>
+
+  const flags = body.compatFlags as { id: string; env: string; consequence: string | null }[]
+  assert.ok(flags.length >= 7, 'every compat flag should be offered')
+  const costly = flags.find((f) => f.id === 'disableNonessentialTraffic')
+  assert.ok(costly?.consequence, 'a flag that trades something away must say so in the UI too')
+  assert.deepEqual(body.credentialEnvs, ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'])
+  assert.ok(Array.isArray(body.tiers))
+  assert.ok(Array.isArray(body.reservedProviderIds))
+})
+
+test('installed agents are reported as unknown rather than faked when unavailable', () => {
+  // A caller with no process port gets null, not `installed: false` — which
+  // would be a claim nobody checked.
+  const s = store(baseState())
+  const withoutProbe = handleApi({ method: 'GET', path: '/api/bootstrap', body: null }, deps(s))
+  assert.equal((withoutProbe.body as Record<string, unknown>).installedAgents, null)
+
+  const withProbe = handleApi({ method: 'GET', path: '/api/bootstrap', body: null }, {
+    ...deps(s),
+    installed: () => [
+      { id: 'claude-code', label: 'Claude Code', installed: true, path: '/usr/bin/claude', error: null },
+      { id: 'kilo', label: 'Kilo CLI', installed: false, path: null, error: 'not found on PATH' },
+    ],
+  })
+  const agentsFound = (withProbe.body as Record<string, unknown>).installedAgents as unknown[]
+  assert.equal(agentsFound.length, 2)
+})
+
+test('a custom provider round-trips through the API and becomes launchable', () => {
+  const s = store(baseState())
+  const created = handleApi(
+    {
+      method: 'PUT',
+      path: '/api/providers/my-gw',
+      body: {
+        revision: s.revision!(),
+        provider: {
+          label: 'My Gateway',
+          baseUrl: 'https://gw.example.com/anthropic',
+          defaultModels: { opus: 'big' },
+        },
+      },
+    },
+    deps(s),
+  )
+  assert.equal(created.status, 200)
+  assert.equal(s.state.providers!['my-gw']!.label, 'My Gateway')
+
+  // …and the very next bootstrap serves it merged with the shipped presets.
+  const body = handleApi({ method: 'GET', path: '/api/bootstrap', body: null }, deps(s))
+    .body as { providers: { id: string }[]; customProviders: Record<string, unknown> }
+  assert.ok(body.providers.some((p) => p.id === 'my-gw'), 'a new provider was not merged')
+  assert.ok('my-gw' in body.customProviders, 'the UI cannot tell which providers it may edit')
+})
+
+test('the API refuses an invalid provider with the validator’s own reason', () => {
+  const s = store(baseState())
+  const res = handleApi(
+    {
+      method: 'PUT',
+      path: '/api/providers/bad',
+      body: {
+        revision: s.revision!(),
+        provider: { label: 'Bad', baseUrl: 'https://gw.example.com/v1' },
+      },
+    },
+    deps(s),
+  )
+  assert.equal(res.status, 400)
+  assert.match(String((res.body as { error: string }).error), /v1\/v1\/messages/)
+  assert.equal(s.saves, 0)
+})
+
+test('a provider may not shadow a shipped id, through the API either', () => {
+  const s = store(baseState())
+  const res = handleApi(
+    {
+      method: 'PUT',
+      path: '/api/providers/openrouter',
+      body: {
+        revision: s.revision!(),
+        provider: { label: 'Not OpenRouter', baseUrl: 'https://attacker.example' },
+      },
+    },
+    deps(s),
+  )
+  assert.equal(res.status, 400)
+  assert.equal(s.saves, 0)
+})
+
+test('deleting a provider reports orphaned profiles rather than silently repairing them', () => {
+  // Only the user knows which provider the profile should point at now.
+  const s = store(baseState())
+  handleApi(
+    {
+      method: 'PUT',
+      path: '/api/providers/my-gw',
+      body: {
+        revision: s.revision!(),
+        provider: { label: 'GW', baseUrl: 'https://gw.example.com' },
+      },
+    },
+    deps(s),
+  )
+  handleApi(
+    {
+      method: 'PUT',
+      path: '/api/profiles/uses-gw',
+      body: { revision: s.revision!(), profile: { provider: 'my-gw' } },
+    },
+    deps(s),
+  )
+  const res = handleApi(
+    { method: 'DELETE', path: '/api/providers/my-gw', body: { revision: s.revision!() } },
+    deps(s),
+  )
+  assert.equal(res.status, 200)
+  assert.deepEqual((res.body as { orphanedProfiles: string[] }).orphanedProfiles, ['uses-gw'])
+  assert.ok(s.state.profiles['uses-gw'], 'the profile must survive; only the user can repoint it')
+})
+
+test('contextWindows accepts measured integers and drops anything else', () => {
+  // It feeds CLAUDE_CODE_AUTO_COMPACT_WINDOW; a bad value there overflows the
+  // conversation instead of compacting it.
+  const parsed = parseProfile(
+    { provider: 'zai', contextWindows: { good: 200000, zero: 0, neg: -1, str: '100', frac: 1.5 } },
+    undefined,
+  )
+  assert.notEqual(typeof parsed, 'string')
+  assert.deepEqual((parsed as { contextWindows: unknown }).contextWindows, { good: 200000 })
+})

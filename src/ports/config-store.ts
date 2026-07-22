@@ -7,7 +7,7 @@
 // an adapter obligation (fs-config-store re-asserts both on every write) and
 // `ConfigModes` below is how `config doctor` reads it back to check.
 
-import type { ClaudeCodeCompatFlags } from './claude-code.ts'
+import type { ClaudeCodeCompatFlags, ClaudeCodeCredentialEnv } from './claude-code.ts'
 import type { Tier } from './provider.ts'
 
 /**
@@ -84,12 +84,48 @@ export type Settings = {
  * The v2 config shape: named profiles. This is what `State` means everywhere
  * else in the codebase, and `SUPPORTED_VERSION` is 2.
  */
+/**
+ * A provider the USER defined, stored in config.json.
+ *
+ * Deliberately a SUBSET of `ProviderDescriptor`, and the omissions are the
+ * point. Shipped descriptors are guarded by test/registry.test.ts — no
+ * hand-typed [1m], no /v1 suffix, extendedContext cross-checked against
+ * defaultModels, compat flags proven real. None of those tests can reach a
+ * value that arrives from a config file, so anything they cannot guard is
+ * either validated at runtime (core/provider-def.ts) or not offered at all.
+ *
+ * NOT offered:
+ *   catalogId       a catalog needs a shipped adapter that knows the upstream
+ *                   JSON shape; there is nothing to point an id at.
+ *   extendedContext the [1m] claim is exactly the one that must be VERIFIED.
+ *                   An id carrying a suffix the endpoint does not recognise
+ *                   fails hard, and one that silently ignores it is a 200K
+ *                   window wearing a 1M label. A profile's `contextWindows`
+ *                   already covers the honest need (auto-compaction) without
+ *                   asserting a capability nobody checked.
+ */
+export type CustomProvider = {
+  id: string
+  label: string
+  baseUrl: string
+  credentialEnv?: ClaudeCodeCredentialEnv
+  credentialOptional?: boolean
+  defaultCredential?: string
+  defaultModels?: Partial<Record<Tier, string>>
+  env?: Record<string, string>
+  unsetEnv?: string[]
+  compat?: ClaudeCodeCompatFlags
+  subagentFollowsOpus?: boolean
+}
+
 export type State = {
   version: number
   profiles: Record<string, Profile>
   defaultProfile: string | null
   bindings: Record<string, BindingValue>
   settings: Settings
+  /** user-defined providers, alongside the shipped presets */
+  providers?: Record<string, CustomProvider>
 }
 
 /**

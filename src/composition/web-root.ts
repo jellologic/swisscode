@@ -49,6 +49,30 @@ export async function runWeb({
       store: deps.store,
       providers: deps.registry,
       agents: deps.agents,
+      // Resolved through the SAME ProcessPort the launcher uses, so "installed"
+      // in the UI means exactly what it means at launch — including the
+      // SWISSCODE_*_BIN overrides and the self-alias guard. A second
+      // implementation here could disagree with the thing it describes.
+      installed: () =>
+        deps.agents.all().map((agent) => {
+          try {
+            return {
+              id: agent.id,
+              label: agent.label,
+              installed: true,
+              path: deps.proc.resolveBinary(agent.binary),
+              error: null,
+            }
+          } catch (err) {
+            return {
+              id: agent.id,
+              label: agent.label,
+              installed: false,
+              path: null,
+              error: (err as { message?: string }).message ?? null,
+            }
+          }
+        }),
       port,
       assetDir: assetDir(),
     })

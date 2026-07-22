@@ -57,6 +57,21 @@ export const COMPAT_ENV: Record<string, ClaudeCodeCompatEnv> = Object.freeze({
 }) satisfies Record<ClaudeCodeCompatFlag, ClaudeCodeCompatEnv>
 
 /**
+ * The variable spellings that may carry the credential, as RUNTIME data.
+ *
+ * ports/claude-code.ts has the type (`ClaudeCodeCredentialEnv`), but a type
+ * erases — and validating a provider typed in by a user needs a list at
+ * runtime. It lives here because this adapter is the designated home for the
+ * dialect: core/ is forbidden from naming these, which is what keeps a
+ * user-defined provider validated by injection rather than by core learning
+ * Anthropic's vocabulary.
+ */
+export const CREDENTIAL_ENVS: readonly string[] = Object.freeze([
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_API_KEY',
+])
+
+/**
  * The finished plan, Claude-Code-internal shape. `set`/`unset` are the neutral
  * half (assignable to ports/agent.ts `EnvPlan`); `warnings` and `resolvedModels`
  * are extra context the adapter and its tests read.

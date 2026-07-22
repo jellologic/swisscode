@@ -32,6 +32,7 @@ import {
   summarize,
 } from '../adapters/agents/claude-code/doctor.ts'
 import { bindingEntries, pruneBindings } from '../core/binding.ts'
+import { withCustomProviders } from '../adapters/providers/composite.ts'
 import { createProbe } from '../adapters/doctor/probe.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import { createOllamaIntrospect, interpretOllamaContext } from '../adapters/doctor/ollama.ts'
@@ -77,7 +78,7 @@ export async function runDoctor({
   probe = null,
   ollama = null,
 }: RunDoctorOptions): Promise<DoctorRun> {
-  const { store, registry, agents, proc } = deps
+  const { store, registry: baseRegistry, agents, proc } = deps
   const ambient = proc.env()
   const loaded = store.load()
   const notes = []
@@ -91,6 +92,9 @@ export async function runDoctor({
 
   const selection = resolveProfile(loaded.state, { cwd, platform: process.platform })
   const profile = selection.profile ? applyOverrides(selection.profile, selection.overrides) : null
+  // Same composition as the launch path: a doctor that could not see a custom
+  // provider would report "unknown provider" for a profile that launches fine.
+  const registry = withCustomProviders(baseRegistry, loaded.state)
   const provider = profile ? registry.byId(profile.provider) : null
   const plan = profile ? buildEnvPlan(profile, provider, ambient) : null
   // The doctor validates the selected agent's binary; the endpoint probe below

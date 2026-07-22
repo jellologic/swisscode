@@ -29,6 +29,7 @@ import {
 import { validateProfileName } from '../core/migrate.ts'
 import { TIERS } from '../core/tiers.ts'
 import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
+import { withCustomProviders } from '../adapters/providers/composite.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import type { LoadResult, Profile, State } from '../ports/config-store.ts'
 import type { ProcessPort } from '../ports/process.ts'
@@ -104,12 +105,22 @@ Per-run overrides (never persisted):
 export async function runConfigCommand({
   command,
   args = [],
-  deps,
+  deps: baseDeps,
   openUi,
   out = console.log,
   err = console.error,
 }: RunConfigCommandOptions): Promise<number> {
   const [head, ...rest] = args
+
+  // Custom providers live in the config file, so every surface that names a
+  // provider has to compose the registry after reading it. Done ONCE here and
+  // shadowed over `deps`, because doing it per-subcommand is exactly how
+  // `config list` came to report "not in this build" for a provider that
+  // `config doctor` resolved fine — three call sites, one of them forgotten.
+  const deps: LaunchDeps = {
+    ...baseDeps,
+    registry: withCustomProviders(baseDeps.registry, baseDeps.store.load().state),
+  }
 
   // `setup` is only ever the first-run wizard.
   if (command === 'setup') {

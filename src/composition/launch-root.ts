@@ -13,6 +13,7 @@ import { resolveProfile } from '../core/profile.ts'
 import { createFsConfigStore } from '../adapters/store/fs-config-store.ts'
 import { createNodeProcess, detectRecursion } from '../adapters/process/node-process.ts'
 import { registry as providerRegistry } from '../adapters/providers/registry.ts'
+import { withCustomProviders } from '../adapters/providers/composite.ts'
 import { DEFAULT_AGENT_ID, registry as agentRegistry } from '../adapters/agents/registry.ts'
 import type { ProfileSelection } from '../core/profile.ts'
 import type { ConfigStorePort, LoadResult, Profile } from '../ports/config-store.ts'
@@ -146,7 +147,7 @@ export type PlannedLaunch = LaunchNeedsSetup | LaunchPlan
 
 export function planLaunch({
   store,
-  registry,
+  registry: baseRegistry,
   agents,
   proc,
   passthrough = [],
@@ -167,6 +168,13 @@ export function planLaunch({
   }
 
   const loaded = store.load()
+
+  // Custom providers live in the config file, so the registry cannot be
+  // resolved until it has been read. Composed here rather than in defaultDeps
+  // for that reason — and around the INJECTED registry, so a test's fake
+  // registry still governs the shipped half.
+  const registry = withCustomProviders(baseRegistry, loaded.state)
+
   const sel = resolveProfile(loaded.state, {
     cwd: safeCwd(proc),
     platform: process.platform,
