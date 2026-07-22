@@ -53,6 +53,7 @@ runtime assertions and is checked by `tsc`. `npm run typecheck` runs it.
 | `src/composition/**` | Five composition roots: `launch-root` (hot path), `config-root`, `doctor-root`, `ui-root`, `web-root`. |
 | `bin/swisscode.js` | Published entry shim. Plain JS, never compiled, imports exactly `../dist/cli.js`. |
 | `test/**` | `.ts`, run from source, never compiled, never packed. |
+| `web/**` | An npm WORKSPACE (`@swisscode/web`, private). Owns the browser-only devDeps — vite, panda, preact, `@types/react-dom`. Ships as built assets inside the swisscode package, never as its own release. |
 
 ## Hard invariants
 
@@ -196,6 +197,17 @@ neutral `LaunchIntent` is missing something — propose that instead.
 
 ## Useful facts
 
+- **`package-lock.json` is the only lockfile. Install with npm.** `bun install`
+  does not read it and resolves fresh — measured drift of 5 transitive packages
+  — and `bun publish` has no OIDC/provenance, so the npm CLI is permanently in
+  the release path (`publish.yml`). `bun.lock` is gitignored.
+- **Bun is a first-class RUNTIME, not the installer.** `bun run <script>`,
+  `bunx swisscode` and running swisscode under bun all work against an
+  npm-installed tree, and CI-equivalent `bun run test` passes. Keep it that way:
+  no package-manager-specific flags in `scripts`. `npm run --workspace web x`
+  breaks under bun, which rewrites `npm run` to `bun run` inside scripts and
+  spells the same idea `--filter`. Plain invocations (`tsc -p web/tsconfig.json`)
+  work everywhere.
 - Config: `~/.config/swisscode/config.json` (honours `XDG_CONFIG_HOME`), `0600`
   in a `0700` directory, written atomically. v1 configs migrate on read.
 - Env vars swisscode reads: `SWISSCODE_CLAUDE_BIN`, `SWISSCODE_KILO_BIN`,

@@ -9,12 +9,28 @@
 // allowed to reach.
 import { execFileSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import * as esbuild from 'esbuild'
 
 const TSC = 'node_modules/typescript/bin/tsc'
-const PANDA = '../node_modules/@pandacss/dev/bin.js'
-const VITE = '../node_modules/vite/bin/vite.js'
+
+/**
+ * Find a workspace tool, WHEREVER THE INSTALLER PUT IT.
+ *
+ * `web` is a workspace now, and npm and bun do not agree on where its
+ * dependencies land: npm usually hoists them to the root `node_modules`, bun
+ * may leave them in `web/node_modules`, and either can change its mind when a
+ * version conflict forces nesting. Hard-coding one path made the build work
+ * under one package manager and fail under the other, which is exactly the
+ * "works on my machine" this project runs two runtimes to avoid.
+ */
+function workspaceTool(relative) {
+  for (const base of ['web/node_modules', 'node_modules']) {
+    const candidate = join(base, relative)
+    if (existsSync(candidate)) return resolve(candidate)
+  }
+  return null
+}
 
 // Stale output is worse than no output: a deleted module would otherwise linger
 // in dist/ and keep resolving.
@@ -63,16 +79,18 @@ await esbuild.build({
 // rather than 404ing.
 const webRoot = 'web'
 let webBuilt = false
-if (existsSync(join(webRoot, 'node_modules', '.bin', 'vite')) || existsSync('node_modules/vite')) {
+const panda = workspaceTool('@pandacss/dev/bin.js')
+const vite = workspaceTool('vite/bin/vite.js')
+if (panda && vite) {
   // Panda is CODEGEN, and it has to run before Vite: the generated
   // styled-system/ is what the app imports, and its PostCSS plugin is what
   // fills the @layer declarations. Skipping it produces a build that succeeds
   // and a page that renders completely unstyled.
-  execFileSync(process.execPath, [PANDA, 'codegen', '--config', 'panda.config.ts'], {
+  execFileSync(process.execPath, [panda, 'codegen', '--config', 'panda.config.ts'], {
     cwd: webRoot,
     stdio: 'inherit',
   })
-  execFileSync(process.execPath, [VITE, 'build'], { cwd: webRoot, stdio: 'inherit' })
+  execFileSync(process.execPath, [vite, 'build'], { cwd: webRoot, stdio: 'inherit' })
   webBuilt = true
 } else {
   console.log('skipped dist/web (frontend toolchain not installed)')

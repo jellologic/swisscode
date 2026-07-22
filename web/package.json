@@ -1,0 +1,17 @@
+{
+  "name": "@swisscode/web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The browser UI for swisscode. Private: it ships as built assets inside the swisscode package, never as its own release.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@pandacss/dev": "^1.11.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "vite": "^8.1.5",
+    "preact": "^10.29.7",
+    "@types/react-dom": "^19.2.3"
+  }
+}
