@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { css } from '../../styled-system/css'
 import { ApiError, api, type CatalogModel, type CatalogResult } from '../api'
 import { Banner, Button, inputStyle } from '../ui'
+// The SAME filtering, ranking and formatting the Ink picker uses. These are
+// properties of the data, not of the widget, and the browser had drifted:
+// its own copy dropped the free-only filter, never sorted at all, and rendered
+// a free model as "$0.00/M" — the exact thing this file's header forbids.
+import { filterModels, rank } from '../../../src/core/catalog'
+import { formatContext, formatPrice } from '../../../src/core/format'
 
 /**
  * The browsable model list, for providers that publish one.
@@ -15,6 +21,20 @@ import { Banner, Button, inputStyle } from '../ui'
  *   * Nothing missing is rendered as a number. A catalog with no prices shows
  *     no prices, rather than "$0.00", which would read as free.
  */
+/**
+ * The per-million price pair, or just "free".
+ *
+ * `formatPrice` already returns "free" for zero — appending "/M in" to that
+ * gives "free/M in", which is not a thing anyone says. The FORMATTING is
+ * core's; only this bit of phrasing is the browser's, which is exactly the
+ * split that should exist between them.
+ */
+function priceLabel(pricing: { prompt: number; completion: number }): string {
+  const input = formatPrice(pricing.prompt)
+  const output = formatPrice(pricing.completion)
+  return input === 'free' && output === 'free' ? 'free' : `${input}/M in · ${output}/M out`
+}
+
 export function ModelPicker({
   catalogId,
   tier,
@@ -30,6 +50,7 @@ export function ModelPicker({
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [toolsOnly, setToolsOnly] = useState(true)
+  const [freeOnly, setFreeOnly] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -44,17 +65,12 @@ export function ModelPicker({
 
   const rows = useMemo(() => {
     if (!data) return []
-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
-    // The filter is inert when the catalog cannot speak to tool support, which
-    // is what stops it hiding everything.
-    const filterActive = toolsOnly && data.capabilities.toolSupportKnown
-    return data.models.filter((m) => {
-      if (filterActive && m.tools === false) return false
-      if (terms.length === 0) return true
-      const hay = `${m.id} ${m.name}`.toLowerCase()
-      return terms.every((t) => hay.includes(t))
-    })
-  }, [data, query, toolsOnly])
+    // `rank` before display, exactly as the terminal picker does: models with a
+    // published coding benchmark first and best-first, then everything else
+    // alphabetically. Registry order is arbitrary — it put the useful models
+    // wherever the provider happened to list them.
+    return filterModels(data.models, { query, toolsOnly, freeOnly }, data.capabilities).sort(rank)
+  }, [data, query, toolsOnly, freeOnly])
 
   return (
     <div
@@ -127,6 +143,12 @@ export function ModelPicker({
               tools only
             </label>
           ) : null}
+          {data?.capabilities.pricing ? (
+            <label className={css({ display: 'flex', gap: '1.5', alignItems: 'center', cursor: 'pointer' })}>
+              <input type="checkbox" checked={freeOnly} onChange={(e) => setFreeOnly(e.target.checked)} />
+              free only
+            </label>
+          ) : null}
           {data?.stale ? <span className={css({ color: 'warn' })}>stale cache</span> : null}
           {data?.fromCache && !data.stale ? <span>cached</span> : null}
         </div>
@@ -174,12 +196,8 @@ export function ModelPicker({
               <div className={css({ fontSize: '11.5px', color: 'faint', mt: '0.5' })}>
                 {m.name}
                 {/* Absent data stays absent. "$0.00" would read as free. */}
-                {m.pricing
-                  ? ` · $${(m.pricing.prompt * 1_000_000).toFixed(2)}/M in · $${(
-                      m.pricing.completion * 1_000_000
-                    ).toFixed(2)}/M out`
-                  : ''}
-                {m.context ? ` · ${Math.round(m.context / 1000)}K context` : ''}
+                {m.pricing ? ` · ${priceLabel(m.pricing)}` : ''}
+                {m.context ? ` · ${formatContext(m.context)} context` : ''}
               </div>
             </button>
           ))}

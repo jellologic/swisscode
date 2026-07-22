@@ -35,6 +35,18 @@ import { describeIdentity, readSessionIdentity } from '../adapters/claude-sessio
 import { accountLogin } from '../adapters/claude-session/onboard.ts'
 import { swapCredential } from '../adapters/claude-session/swap.ts'
 import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { CONFLICT_REASON, accountsUsedBy, credentialSource } from '../core/account.ts'
+import { isNewer } from '../core/version.ts'
+import {
+  createFsVersionStore,
+  installedVersion,
+  isStale,
+  type VersionStorePort,
+} from '../adapters/store/fs-version-store.ts'
+import { fetchLatestVersion } from '../adapters/net/latest-version.ts'
+import { formatWindow } from '../core/format.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import type { LoadResult, Profile, State } from '../ports/config-store.ts'
 import type { ProcessPort } from '../ports/process.ts'
@@ -88,6 +100,8 @@ const USAGE = `swisscode config — manage profiles and directory bindings
   swisscode config accounts login <name>   adopt a Claude subscription: makes a session
                  [--dir <path>]             directory and runs the agent so you can /login
   swisscode config accounts usage     how much of each subscription is left, and cache it
+  swisscode config upgrade            check npm for a newer swisscode and install it
+    [--dry-run]                         (--dry-run only prints the command)
   swisscode config accounts swap      move one account's login into another session
     --into <account-or-dir> <account>   directory — narrower than /login, which hits every
                                         running session at once
@@ -156,6 +170,11 @@ export async function runConfigCommand({
     return 0
   }
 
+  // A side errand, never awaited and never able to fail the command: the
+  // launch path cannot check for updates itself, so the commands that ARE
+  // allowed to reach the network keep the cache warm for it.
+  void refreshVersionCheck(deps.version ?? createFsVersionStore()).catch(() => {})
+
   switch (head) {
     case 'list':
       return listProfiles({ deps, out })
@@ -176,6 +195,8 @@ export async function runConfigCommand({
       return doctorCommand({ deps, args: rest, out, err })
     case 'web':
       return webCommand({ deps, args: rest, out, err })
+    case 'upgrade':
+      return upgradeCommand({ deps, args: rest, out, err })
     case 'accounts':
       return accountsCommand({ deps, args: rest, out, err })
     case 'agents':
@@ -429,10 +450,22 @@ function listProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
   return 0
 }
 
+/**
+ * Where a key comes from, phrased for a terminal.
+ *
+ * The CLASSIFICATION is core's (`credentialSource`); only the wording is this
+ * file's. That split is the point of the split: the web says the same things in
+ * its own vocabulary from the same decision.
+ */
 function credentialOrigin(account: { apiKey?: string; apiKeyFromEnv?: string }): string {
-  if (account.apiKeyFromEnv) return `read from $${account.apiKeyFromEnv} at launch`
-  if (account.apiKey) return 'stored in config.json (0600)'
-  return 'none'
+  switch (credentialSource(account)) {
+    case 'key-from-env':
+      return `read from $${account.apiKeyFromEnv} at launch`
+    case 'key':
+      return 'stored in config.json (0600)'
+    default:
+      return 'none'
+  }
 }
 
 type NamedProfileOptions = {
@@ -859,8 +892,8 @@ async function refreshUsage({
       continue
     }
     out(`    remaining  ${m.usage.remaining}%  (the tighter of the two windows)`)
-    out(`    5-hour     ${pctUsed(m.usage.fiveHour)}`)
-    out(`    7-day      ${pctUsed(m.usage.sevenDay)}`)
+    out(`    5-hour     ${formatWindow(m.usage.fiveHour, { resets: true })}`)
+    out(`    7-day      ${formatWindow(m.usage.sevenDay, { resets: true })}`)
   }
 
   const remaining = remainingMap(measurements)
@@ -981,14 +1014,138 @@ function swapAccount({
   return 0
 }
 
-/** "37% used, resets 15:10 today" — a window, phrased for a person. */
-function pctUsed(w: { utilization: number | null; resetsAt: string | null }): string {
-  if (w.utilization === null) return '— not published'
-  const resets = w.resetsAt ? new Date(w.resetsAt) : null
-  return (
-    `${w.utilization}% used` +
-    (resets && !Number.isNaN(resets.getTime()) ? `, resets ${resets.toLocaleString()}` : '')
-  )
+
+/**
+ * Refresh the cached "latest published version", at most once a day.
+ *
+ * THE LAUNCH PATH CANNOT DO THIS — it may not touch the network, by an
+ * invariant `test/architecture.test.ts` enforces — so the commands that are
+ * already allowed to reach out do it on its behalf, and the launcher reads the
+ * file they leave behind.
+ *
+ * Fire-and-forget and never awaited by a command's happy path: a registry that
+ * is slow, down, or replaced by a private mirror that has never heard of
+ * swisscode must not delay or fail `config list`.
+ */
+async function refreshVersionCheck(store: VersionStorePort, now = Date.now()): Promise<void> {
+  if (!isStale(store.read(), now)) return
+  // A TIGHTER TIMEOUT THAN AN ASKED-FOR REQUEST DESERVES, on purpose. The
+  // command's own output is already printed by the time this settles, so what
+  // this budget really buys is how long the shell prompt is held afterwards by
+  // a request nobody asked for. At most once a day, and 1.5s is the most a side
+  // errand should ever cost someone.
+  const latest = await fetchLatestVersion({ timeoutMs: 1500 })
+  if (latest) store.write({ latest, checkedAt: now })
+}
+
+/**
+ * How this copy of swisscode was installed, inferred from where it is running.
+ *
+ * INFERENCE, AND SAID SO. There is no reliable API for "which package manager
+ * put you here", so this reads the module path — which is honest for the common
+ * installs and admits when it does not recognise one rather than guessing a
+ * command that might do something unexpected to someone's system.
+ */
+export function detectInstall(modulePath: string): {
+  kind: 'npm-global' | 'bun-global' | 'ephemeral' | 'unknown'
+  command: string | null
+  note: string
+} {
+  const path = modulePath.replace(/\\/g, '/')
+  // Ephemeral runners are checked FIRST: their caches live inside paths that
+  // also contain "node_modules", so testing for a global install first would
+  // misread them and recommend an install the user never wanted.
+  if (/[/](_npx|\.npm[/]_npx)[/]/.test(path)) {
+    return {
+      kind: 'ephemeral',
+      command: null,
+      note: 'running via npx, which resolves the latest version each time — nothing to upgrade.',
+    }
+  }
+  if (/[/]\.bun[/]install[/]cache[/]/.test(path)) {
+    return {
+      kind: 'ephemeral',
+      command: null,
+      note:
+        'running from bun\'s cache. bunx can serve a STALE version — use `bunx swisscode@latest` ' +
+        'to force a fresh resolve, or install it properly with `bun install -g swisscode`.',
+    }
+  }
+  if (/[/]\.bun[/]/.test(path)) {
+    return { kind: 'bun-global', command: 'bun install -g swisscode', note: 'installed globally with bun.' }
+  }
+  if (/[/]node_modules[/]/.test(path)) {
+    return { kind: 'npm-global', command: 'npm install -g swisscode', note: 'installed with npm.' }
+  }
+  return {
+    kind: 'unknown',
+    command: null,
+    note: 'could not tell how this was installed — upgrade it the way you installed it.',
+  }
+}
+
+/**
+ * `swisscode config upgrade` — say what is out, and offer to fetch it.
+ *
+ * Prints the command BEFORE running it. This is the only command in swisscode
+ * that modifies something outside the config directory, and a tool that
+ * silently reinstalled itself would be exactly the kind of surprise this
+ * project spends its comments avoiding.
+ */
+async function upgradeCommand({
+  deps,
+  args,
+  out,
+  err,
+}: {
+  deps: LaunchDeps
+  args: string[]
+  out: Emit
+  err: Emit
+}): Promise<number> {
+  const store = deps.version ?? createFsVersionStore()
+  const running = installedVersion()
+  out(`installed  ${running ?? 'unknown'}`)
+
+  const latest = (await fetchLatestVersion()) ?? store.read()?.latest ?? null
+  if (!latest) {
+    err('swisscode: could not reach the registry, so there is nothing to compare against.')
+    return 1
+  }
+  if (latest) store.write({ latest, checkedAt: Date.now() })
+  out(`published  ${latest}`)
+
+  const install = detectInstall(fileURLToPath(import.meta.url))
+  if (!isNewer(latest, running)) {
+    out('')
+    out('Already current.')
+    // Still worth saying for a bunx user: "current" here describes the copy
+    // that is running, which bunx may have taken from its cache.
+    if (install.kind === 'ephemeral') out(`  note: ${install.note}`)
+    return 0
+  }
+
+  out('')
+  out(`  ${install.note}`)
+  if (!install.command) return 0
+
+  if (args.includes('--dry-run')) {
+    out(`  would run: ${install.command}`)
+    return 0
+  }
+  out(`  running: ${install.command}`)
+  out('')
+  try {
+    const [bin, ...rest] = install.command.split(' ')
+    execFileSync(bin!, rest, { stdio: 'inherit' })
+    out('')
+    out(`Upgraded. Check with \`swisscode --cc-version\`.`)
+    return 0
+  } catch (e) {
+    err(`swisscode: the upgrade command failed: ${(e as { message?: string }).message ?? 'unknown error'}`)
+    err(`Run it yourself: ${install.command}`)
+    return 1
+  }
 }
 
 function accountsCommand({
@@ -1053,13 +1210,20 @@ function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
     // `!` — read off Object.keys of this very object.
     const a = state.providerAccounts[name]!
     const provider = deps.registry.byId(a.provider)
-    const usedBy = Object.entries(state.profiles ?? {})
-      .filter(([, p]) => (p.accounts ?? []).includes(name))
-      .map(([n]) => n)
+    const usedBy = accountsUsedBy(state.profiles, name)
 
     out(`  ${name}${a.label ? `  (${a.label})` : ''}`)
     out(`    provider   ${a.provider}${provider ? '' : '  — not in this build'}`)
     if (a.baseUrl) out(`    baseUrl    ${a.baseUrl}`)
+    // A conflicting account is called out BEFORE anything else about it. The
+    // previous version simply rendered the session branch, so a stored key sat
+    // in config.json invisible to the one command whose job is saying what an
+    // account is.
+    if (credentialSource(a) === 'conflict') {
+      out(`    PROBLEM    ${CONFLICT_REASON}`)
+      out('               the launch will use the session directory and ignore the key.')
+      out(`               Remove one: \`swisscode config ${name}\` or edit the config.`)
+    }
     if (a.configDir) {
       // A session account has no key to describe, so describe the LOGIN
       // instead. The email is the thing the user recognises — "which of my

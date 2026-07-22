@@ -17,6 +17,7 @@ import {
   guardDocumentRequest,
   tokensMatch,
 } from '../../src/adapters/web/security.ts'
+import { CONFLICT_REASON } from '../../src/core/account.ts'
 import { handleApi, parseAccount, parseAgentProfile, redactAccount, redactState } from '../../src/adapters/web/api.ts'
 import { FALLBACK_SCRIPT_PATH, resolveAsset, startWebServer } from '../../src/adapters/web/server.ts'
 import { request } from 'node:http'
@@ -403,6 +404,21 @@ test('installed agents are reported as unknown rather than faked when unavailabl
   })
   const agentsFound = (withProbe.body as Record<string, unknown>).installedAgents as unknown[]
   assert.equal(agentsFound.length, 2)
+})
+
+test('the API refuses a key+session account with core\'s exact sentence', () => {
+  // The rule lives in core/account.ts so this endpoint, the CLI listing, the
+  // doctor and the launch path cannot drift apart on it — they already had,
+  // and the doctor was calling such an account healthy.
+  const refusal = parseAccount(
+    { provider: 'anthropic', apiKey: 'sk-x', configDir: '/home/u/.claude' },
+    undefined,
+  )
+  assert.equal(refusal, CONFLICT_REASON)
+
+  // …and each mode ALONE is still accepted, or the refusal would be useless.
+  assert.equal(typeof parseAccount({ provider: 'anthropic', configDir: '/d' }, undefined), 'object')
+  assert.equal(typeof parseAccount({ provider: 'anthropic', apiKey: 'sk-x' }, undefined), 'object')
 })
 
 test('session logins are reported as unknown rather than faked when unwired', () => {

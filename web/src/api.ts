@@ -208,20 +208,26 @@ export type DoctorReport = {
   summary: { counts: Record<string, number>; exitCode: number }
 }
 
-export type CatalogModel = {
-  id: string
-  name: string
-  description?: string
-  context: number | null
-  pricing: { prompt: number; completion: number } | null
-  /** TRI-STATE. null is UNKNOWN, false is CONFIRMED ABSENT. Do not collapse. */
-  tools: boolean | null
-}
+/**
+ * A catalog row, RE-EXPORTED FROM CORE rather than mirrored here.
+ *
+ * This used to be a hand-written subset — id, name, context, pricing, tools —
+ * and the subset was the bug. The server sends the whole `NormalizedModel`
+ * (the catalog endpoint spreads its result), so the browser was already
+ * receiving `benchmarks` and simply could not see them: the picker could not
+ * call core's `rank`, which sorts on the coding benchmark, and so showed models
+ * in whatever order the provider happened to list them.
+ *
+ * A type-only import — it erases, costs the bundle nothing, and cannot drift.
+ */
+import type { CatalogCapabilities, NormalizedModel } from '../../src/ports/catalog'
+
+export type CatalogModel = NormalizedModel
 
 export type CatalogResult = {
   id: string
   label: string
-  capabilities: { pricing: boolean; benchmarks: boolean; toolSupportKnown: boolean }
+  capabilities: CatalogCapabilities
   models: CatalogModel[]
   fromCache: boolean
   stale: boolean

@@ -8,3 +8,11 @@ web/styled-system/
 # Playwright MCP writes screenshots here during manual verification
 .playwright-mcp/
 profiles.png
+
+# Bun resolves fresh rather than reading package-lock.json, so a committed
+# bun.lock would drift from it silently — measured at 5 transitive packages.
+# package-lock.json is canonical: `npm ci` gates CI, and npm trusted publishing
+# (OIDC + provenance) keeps the npm CLI in the release path permanently.
+# Bun stays a first-class RUNTIME — `bun run`, `bunx` — just not the installer.
+bun.lock
+bun.lockb

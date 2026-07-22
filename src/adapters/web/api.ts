@@ -12,6 +12,7 @@ import { bindPath, bindingEntries, unbindPath } from '../../core/binding.ts'
 import { validateProfileName } from '../../core/migrate.ts'
 import { toCustomProvider, validateCustomProvider } from '../../core/provider-def.ts'
 import { TIERS } from '../../core/tiers.ts'
+import { accountsUsedBy, validateAccount } from '../../core/account.ts'
 import { COMPAT_ENV, CREDENTIAL_ENVS } from '../agents/claude-code/env.ts'
 import type {
   AgentProfile,
@@ -210,11 +211,11 @@ export function parseAccount(
     else delete account.apiKeyFromEnv
   }
   // The two modes are MUTUALLY EXCLUSIVE, and the conflict is refused rather
-  // than resolved by precedence: "which credential did this actually use" must
-  // never have a subtle answer.
-  if (account.configDir && (account.apiKey || account.apiKeyFromEnv)) {
-    return 'an account uses either a key or an existing login directory, never both'
-  }
+  // than resolved by precedence. The RULE lives in core/account.ts so the
+  // launch path and the doctor reach the same verdict this endpoint does —
+  // they used to disagree, and the doctor called a conflicting account healthy.
+  const invalid = validateAccount(account)
+  if (invalid) return invalid
   return account
 }
 
@@ -444,9 +445,7 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
 
       // Profiles referencing it are REPORTED, never silently repaired: only the
       // user knows which account should pay instead.
-      const affected = Object.entries(loaded.state.profiles ?? {})
-        .filter(([, pr]) => (pr.accounts ?? []).includes(name))
-        .map(([n]) => n)
+      const affected = accountsUsedBy(loaded.state.profiles, name)
 
       const accounts = { ...loaded.state.providerAccounts }
       delete accounts[name]
