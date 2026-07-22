@@ -48,6 +48,9 @@ export const claudeCode = {
     skipPermissions: true,
     extendedContextSuffix: true,
     compatFlags: true,
+    // CLAUDE_CONFIG_DIR. The whole reason session mode exists: a subscription
+    // login lives in a directory rather than in a variable we could carry.
+    sessionDir: true,
   },
   binary,
   translate(input: TranslateInput): Translation {

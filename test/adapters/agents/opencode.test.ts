@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { opencode, OPENCODE_CONFIG_ENV, OPENCODE_AUTO_FLAG } from '../../../src/adapters/agents/opencode/index.ts'
 import type { LaunchIntent, TranslateInput } from '../../../src/ports/agent.ts'
+import { makeProfile } from '../../support/fixtures.ts'
 
 function intent(over: Partial<LaunchIntent> = {}): LaunchIntent {
   return {
@@ -15,7 +16,7 @@ function intent(over: Partial<LaunchIntent> = {}): LaunchIntent {
 }
 
 function run(i: LaunchIntent, passthrough: string[] = []) {
-  const input: TranslateInput = { intent: i, profile: { provider: 'zai' }, provider: null, passthrough, ambient: {} }
+  const input: TranslateInput = { intent: i, profile: makeProfile({ provider: 'zai' }), provider: null, passthrough, ambient: {} }
   const t = opencode.translate(input)
   const raw = t.plan.set[OPENCODE_CONFIG_ENV]
   return { t, config: raw ? JSON.parse(raw) : null }

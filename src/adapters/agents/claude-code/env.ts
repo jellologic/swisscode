@@ -6,16 +6,51 @@
 // variable this tool emits is chosen here. The generic accumulator it is built
 // on (makeEnvWriter, materializeEnv) is neutral and lives in core/env-plan.ts.
 
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { TIERS } from '../../../core/tiers.ts'
 import { definedEntriesOf, makeEnvWriter, resolveCredential } from '../../../core/env-plan.ts'
 import { TIER_ENV } from './tiers.ts'
 import { autoCompactWindow, withExtendedContext } from './context.ts'
 import { inspectAmbient } from './hygiene.ts'
-import type { Profile } from '../../../ports/config-store.ts'
+import type { ResolvedProfile } from '../../../ports/config-store.ts'
 import type { ClaudeCodeCompatEnv, ClaudeCodeCompatFlag } from '../../../ports/claude-code.ts'
 import type { ProviderDescriptor, ResolvedModels, Tier } from '../../../ports/provider.ts'
 import type { EnvMap } from '../../../ports/process.ts'
 import type { EnvWarning } from '../../../ports/agent.ts'
+
+/**
+ * Does this session directory mean "the default login"?
+ *
+ * Lives here, in the env lowering, because it is an ENV-LOWERING QUESTION: the
+ * answer decides whether CLAUDE_CONFIG_DIR is written or cleared. It earns no
+ * module of its own — the launch path is held under 40 modules so it stays
+ * auditable in a sitting, and that budget is a real constraint rather than a
+ * decoration.
+ *
+ * MEASURED, and the measurement is the whole reason it exists. Claude Code
+ * chooses which Keychain item holds the credential from WHETHER
+ * `CLAUDE_CONFIG_DIR` IS SET, hashing the path into the service name whenever
+ * it is — so the default directory has two distinct credentials depending on
+ * how you arrive at it. Verified on a real machine:
+ *
+ *     claude config ls                                  ->  logged in
+ *     CLAUDE_CONFIG_DIR=$HOME/.claude claude config ls   ->  "Not logged in"
+ *
+ * Same directory, same `.claude.json`, different login. Identity is shared —
+ * that file really is the same one — so a session lowered the wrong way reports
+ * the correct email while being unable to authenticate, which is about the most
+ * confusing failure on offer.
+ */
+export function isDefaultConfigDir(
+  dir: string,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  // `resolve` so a trailing slash, a doubled separator, or a relative spelling
+  // of the same directory all answer alike. A near-miss does not fail loudly;
+  // it silently takes the hashed-credential branch.
+  return resolve(dir) === resolve(join(env.HOME || homedir(), '.claude'))
+}
 
 /**
  * CompatFlags -> env var. Descriptors never spell a variable name; they set a
@@ -57,6 +92,21 @@ export const COMPAT_ENV: Record<string, ClaudeCodeCompatEnv> = Object.freeze({
 }) satisfies Record<ClaudeCodeCompatFlag, ClaudeCodeCompatEnv>
 
 /**
+ * The variable spellings that may carry the credential, as RUNTIME data.
+ *
+ * ports/claude-code.ts has the type (`ClaudeCodeCredentialEnv`), but a type
+ * erases — and validating a provider typed in by a user needs a list at
+ * runtime. It lives here because this adapter is the designated home for the
+ * dialect: core/ is forbidden from naming these, which is what keeps a
+ * user-defined provider validated by injection rather than by core learning
+ * Anthropic's vocabulary.
+ */
+export const CREDENTIAL_ENVS: readonly string[] = Object.freeze([
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_API_KEY',
+])
+
+/**
  * The finished plan, Claude-Code-internal shape. `set`/`unset` are the neutral
  * half (assignable to ports/agent.ts `EnvPlan`); `warnings` and `resolvedModels`
  * are extra context the adapter and its tests read.
@@ -73,7 +123,7 @@ export type EnvPlan = {
 }
 
 export function buildEnvPlan(
-  profile: Profile | null | undefined,
+  profile: ResolvedProfile | null | undefined,
   provider: ProviderDescriptor | null | undefined,
   ambientEnv: EnvMap = {},
 ): EnvPlan {
@@ -130,14 +180,54 @@ export function buildEnvPlan(
     write('ANTHROPIC_API_KEY', '')
   }
 
+  // 4b. SESSION MODE. The account points at a directory holding a login Claude
+  //     Code already performed, so the credential is not ours to supply — we
+  //     just tell it where to look.
+  //
+  //     BOTH credential variables are cleared, and that is the whole point.
+  //     ANTHROPIC_API_KEY overrides an OAuth login outright, and a stale
+  //     ANTHROPIC_AUTH_TOKEN left in a shell would be presented instead of the
+  //     subscription this account names. Verified before this was written: the
+  //     anthropic-direct path cleared only the first, so a stale auth token
+  //     survived into the child — a silent wrong-account launch, which is the
+  //     exact failure the golden maps exist to catch.
+  //
+  //     SETTING THE VARIABLE TO THE DEFAULT PATH IS NOT THE SAME AS LEAVING IT
+  //     UNSET, and this is not a subtlety we may round off. Claude Code decides
+  //     which Keychain item holds the credential from whether CLAUDE_CONFIG_DIR
+  //     IS SET — not from what it contains — hashing the path into the service
+  //     name whenever it is. So the default directory has two different
+  //     credentials depending on how you arrive at it. Verified on this machine:
+  //
+  //       claude config ls                          -> logged in
+  //       CLAUDE_CONFIG_DIR=$HOME/.claude ... ls    -> "Not logged in"
+  //
+  //     Same directory, same `.claude.json`, different login. An account that
+  //     names the default directory therefore lowers to UNSETTING the variable,
+  //     which is also what makes adopting an existing `~/.claude` work with no
+  //     re-login. Writing the path instead would hand the user a session that
+  //     reports the right email — identity comes from `.claude.json`, which IS
+  //     shared — while being logged out.
+  const sessionDir = profile?.configDir
+  if (sessionDir) {
+    write('CLAUDE_CONFIG_DIR', isDefaultConfigDir(sessionDir, ambientEnv) ? '' : sessionDir)
+    write('ANTHROPIC_API_KEY', '')
+    write('ANTHROPIC_AUTH_TOKEN', '')
+  }
+
   // 5. Credential, unconditionally — an empty one clears a stale variable.
   //    `defaultCredential` covers the keyless endpoint: a local Ollama ignores
   //    the token entirely (verified: no header, a wrong key and a bearer token
   //    all behave identically), but Claude Code still wants the variable to
   //    carry something, so the descriptor supplies the placeholder rather than
   //    every user being told to invent one.
-  const credentialEnv = provider?.credentialEnv ?? 'ANTHROPIC_AUTH_TOKEN'
-  write(credentialEnv, resolveCredential(profile, ambientEnv) || (provider?.defaultCredential ?? ''))
+  //    Skipped entirely in session mode: step 4b already cleared both
+  //    variables, and writing one back — even an empty one — would re-open the
+  //    question of which credential a subscription launch presented.
+  if (!sessionDir) {
+    const credentialEnv = provider?.credentialEnv ?? 'ANTHROPIC_AUTH_TOKEN'
+    write(credentialEnv, resolveCredential(profile, ambientEnv) || (provider?.defaultCredential ?? ''))
+  }
 
   // 6. All four tiers, from one table.
   const effectiveModels: Partial<Record<Tier, string>> = {

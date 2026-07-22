@@ -8,6 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ConfigModes, ConfigStorePort, LoadResult, State } from '../../ports/config-store.ts'
@@ -116,8 +117,16 @@ export function createFsConfigStore({
     sawCorrupt = false
   }
 
-  function backupV1() {
-    const backup = join(CONFIG_DIR, 'config.v1.bak.json')
+  /**
+   * Snapshot the file BEFORE a migration overwrites it, named for the version
+   * it preserves.
+   *
+   * Parameterised since v3: the ladder now migrates from 1 OR 2, and a v2 file
+   * kept as `config.v1.bak.json` would misdescribe itself to anyone reaching
+   * for it after a bad upgrade — which is the one moment the name matters.
+   */
+  function backupPrevious(fromVersion: number) {
+    const backup = join(CONFIG_DIR, `config.v${fromVersion}.bak.json`)
     try {
       // 'wx' so a second run never clobbers the original snapshot.
       writeFileSync(backup, readFileSync(CONFIG_PATH, 'utf8'), { flag: 'wx', mode: 0o600 })
@@ -161,11 +170,11 @@ export function createFsConfigStore({
     if (result.migratedFrom !== null && !readOnly) {
       try {
         ensureDir()
-        backupV1()
+        backupPrevious(result.migratedFrom)
         writeAtomic(CONFIG_PATH, `${JSON.stringify(result.state, null, 2)}\n`)
         warnings.push(
-          `migrated config.json to the v${SUPPORTED_VERSION} profile format ` +
-            `(previous file kept as config.v1.bak.json).`,
+          `migrated config.json to the v${SUPPORTED_VERSION} format ` +
+            `(previous file kept as config.v${result.migratedFrom}.bak.json).`,
         )
       } catch (err) {
         warnings.push(
@@ -211,5 +220,24 @@ export function createFsConfigStore({
     return out
   }
 
-  return { load, save, path: () => CONFIG_PATH, dir: () => CONFIG_DIR, modes }
+  /**
+   * Content hash, not mtime. mtime has coarse and platform-dependent
+   * granularity, so two writes inside the same tick can share a timestamp and a
+   * lost update would slip through exactly when writers are most concurrent.
+   * Hashing the bytes cannot have that failure. The file is a few KB, so the
+   * cost is irrelevant next to being wrong.
+   *
+   * Null when there is no file yet — which is itself a meaningful revision: a
+   * caller that read "no config" and then saves must still be told if someone
+   * created one in the meantime.
+   */
+  function revision(): string | null {
+    try {
+      return createHash('sha256').update(readFileSync(CONFIG_PATH)).digest('hex').slice(0, 32)
+    } catch {
+      return null
+    }
+  }
+
+  return { load, save, path: () => CONFIG_PATH, dir: () => CONFIG_DIR, modes, revision }
 }

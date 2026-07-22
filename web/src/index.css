@@ -1,0 +1,12 @@
+@layer reset, base, tokens, recipes, utilities;
+
+html, body, #root { height: 100% }
+body {
+  margin: 0;
+  background: var(--colors-bg);
+  color: var(--colors-text);
+  font-family: var(--fonts-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+input, select, button { font-family: inherit }

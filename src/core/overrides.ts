@@ -1,28 +1,30 @@
-// Per-run profile overrides.
+// Per-run overrides, applied to the RESOLVED profile.
 //
-// INVARIANT: this path never writes. Overrides produce a modified copy that
-// lives for exactly one launch; the only writers in the codebase are the wizard
-// and the `config *` subcommands. test/core/overrides.test.ts asserts zero
-// store writes across a matrix of override shapes.
+// INVARIANT: this path never writes CONFIG. Overrides produce a modified copy
+// that lives for exactly one launch; the only config writers in the codebase
+// are the wizard and the `config *` subcommands. test/core/overrides.test.ts
+// asserts zero `store.save` calls across a matrix of override shapes.
 //
-// The `--cc-*` PARSER that produces these override objects belongs to the UX
-// phase. The merge itself is pure and lands here now.
+// (A round-robin cursor is not config and does not go through the store — see
+// core/resolve.ts and adapters/store/fs-cursor-store.ts.)
 
 import { TIERS, isTier } from './tiers.ts'
-import type { Profile, ProfileOverrides, State } from '../ports/config-store.ts'
+import type { ProfileOverrides, ResolvedProfile, State } from '../ports/config-store.ts'
 import type { ProviderDescriptor, Tier } from '../ports/provider.ts'
 import type { EnvMap } from '../ports/process.ts'
 
 /**
- * Returns a NEW profile; the input is never mutated.
+ * Returns a NEW resolved profile; the input is never mutated.
  *
- * `profile` is a plain `Profile`, not nullable: both call sites (launch-root
- * and doctor-root) refuse to proceed when selection produced no profile, so the
- * `?? {}` below is defence rather than a supported mode. A `Profile | null`
- * signature would push a phantom null through every consumer downstream.
+ * Operates on the flattened view rather than on stored objects, which is what
+ * keeps `--cc-*` from having to know that a profile is now three objects: an
+ * override changes what THIS LAUNCH does, not what is filed where.
  */
-export function applyOverrides(profile: Profile, overrides: ProfileOverrides = {}): Profile {
-  const next = structuredClone(profile ?? {})
+export function applyOverrides(
+  profile: ResolvedProfile,
+  overrides: ProfileOverrides = {},
+): ResolvedProfile {
+  const next = structuredClone(profile ?? {}) as ResolvedProfile
 
   if (typeof overrides.provider === 'string') next.provider = overrides.provider
   if (typeof overrides.agent === 'string') next.agent = overrides.agent
@@ -49,7 +51,7 @@ export function applyOverrides(profile: Profile, overrides: ProfileOverrides = {
   }
 
   if (overrides.env && typeof overrides.env === 'object') {
-    // Merged AFTER profile.env, and '' still means UNSET.
+    // Merged AFTER the agent profile's env, and '' still means UNSET.
     next.env = { ...(next.env ?? {}), ...overrides.env }
   }
 
@@ -59,11 +61,21 @@ export function applyOverrides(profile: Profile, overrides: ProfileOverrides = {
 /**
  * Never send a credential to a host it was not entered for.
  *
- * Order: keep the key when the provider is unchanged; otherwise borrow the
- * credential and base URL from another profile that already uses the target
- * provider; otherwise accept one already present in the ambient env; otherwise
- * refuse. There is no "just send the key we have" branch — that is how a z.ai
- * token ends up POSTed to OpenRouter.
+ * SINCE v3 THIS IS A LOOKUP, NOT A SEARCH — and that change is most of why the
+ * schema was split. The v2 version had to rummage through every other profile
+ * hoping to find one that happened to hold a key for the target provider, and
+ * then copy the key, endpoint and models back out of it. Credentials were
+ * trapped inside profiles, so retargeting meant scavenging.
+ *
+ * Now an account names exactly one provider, so "which credential may go to
+ * this host" is `providerAccounts` filtered by `provider`. The safety rule is
+ * unchanged and is now STRUCTURAL rather than a copying discipline.
+ *
+ * Order: keep the account when the provider is unchanged; otherwise adopt an
+ * account that already belongs to the target provider; otherwise accept a
+ * credential already present in the ambient env; otherwise refuse. There is no
+ * "just send the key we have" branch — that is how a z.ai token ends up POSTed
+ * to OpenRouter.
  *
  * MODEL IDS ARE DROPPED for the same reason the credential is. `glm-5.2` was
  * chosen for z.ai; forwarding it to OpenRouter is a guaranteed 404 wearing the
@@ -72,35 +84,37 @@ export function applyOverrides(profile: Profile, overrides: ProfileOverrides = {
  * because it is merged after this runs.
  */
 export function retargetProvider(
-  profile: Profile,
+  profile: ResolvedProfile,
   targetProviderId: string | null | undefined,
   state: State | null | undefined,
   descriptor: ProviderDescriptor | null | undefined,
   ambientEnv: EnvMap = {},
-): { ok: true; profile: Profile; borrowedFrom: string | null } | { ok: false; reason: string } {
+): {
+  ok: true
+  profile: ResolvedProfile
+  borrowedFrom: string | null
+} | { ok: false; reason: string } {
   if (!targetProviderId || profile?.provider === targetProviderId) {
     return { ok: true, profile, borrowedFrom: null }
   }
 
-  const next = structuredClone(profile ?? {})
+  const next = structuredClone(profile ?? {}) as ResolvedProfile
   next.provider = targetProviderId
   delete next.baseUrl
   delete next.models
   // Keyed by model id from the old provider's catalog, so meaningless here.
   delete next.contextWindows
 
-  for (const [name, candidate] of Object.entries(state?.profiles ?? {})) {
-    if (candidate?.provider !== targetProviderId) continue
-    if (!candidate.apiKey && !candidate.apiKeyFromEnv) continue
+  // The lookup the old scavenge was imitating.
+  for (const [name, account] of Object.entries(state?.providerAccounts ?? {})) {
+    if (account?.provider !== targetProviderId) continue
+    if (!account.apiKey && !account.apiKeyFromEnv) continue
     delete next.apiKey
     delete next.apiKeyFromEnv
-    if (candidate.apiKey) next.apiKey = candidate.apiKey
-    if (candidate.apiKeyFromEnv) next.apiKeyFromEnv = candidate.apiKeyFromEnv
-    if (candidate.baseUrl) next.baseUrl = candidate.baseUrl
-    // That profile is already configured FOR this provider, so its models are
-    // the best available answer — better than the descriptor defaults.
-    if (candidate.models) next.models = structuredClone(candidate.models)
-    if (candidate.contextWindows) next.contextWindows = structuredClone(candidate.contextWindows)
+    if (account.apiKey) next.apiKey = account.apiKey
+    if (account.apiKeyFromEnv) next.apiKeyFromEnv = account.apiKeyFromEnv
+    if (account.baseUrl) next.baseUrl = account.baseUrl
+    next.accountName = name
     return { ok: true, profile: next, borrowedFrom: name }
   }
 
@@ -122,9 +136,9 @@ export function retargetProvider(
   return {
     ok: false,
     reason:
-      `no credential for provider "${targetProviderId}". The current profile's key was ` +
-      `entered for "${profile?.provider}" and will not be sent somewhere else. Add a ` +
-      `profile for "${targetProviderId}"` +
+      `no account for provider "${targetProviderId}". The current account's key was ` +
+      `entered for "${profile?.provider}" and will not be sent somewhere else. Add an ` +
+      `account with \`swisscode config accounts\`` +
       (credentialEnv ? `, or set ${credentialEnv} in your environment.` : '.'),
   }
 }

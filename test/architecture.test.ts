@@ -104,12 +104,23 @@ test('the published bin shim is dependency-free and runs compiled output', () =>
   )
 })
 
-test('the launch path never statically reaches adapters/ui or adapters/catalog', () => {
+test('the launch path never statically reaches adapters/ui, catalog, usage or claude-session', () => {
   const { files } = launchClosure()
   for (const f of files) {
     const rel = relative(ROOT, f)
     assert.ok(!rel.startsWith('src/adapters/ui'), `${rel} is a UI adapter`)
     assert.ok(!rel.startsWith('src/adapters/catalog'), `${rel} is a catalog adapter`)
+    // Usage endpoints are CONFIGURATION-TIME only. The `usage` selection
+    // strategy reads a cached snapshot precisely because the launch path may
+    // not reach the network, and an adapter that crept onto it would quietly
+    // turn every launch into an HTTP request to a billing endpoint.
+    assert.ok(!rel.startsWith('src/adapters/usage'), `${rel} is a usage adapter`)
+    // Session inspection is configuration-time for the same reason, with a
+    // sharper edge: `.claude.json` is a ~200 kB file on a well-used account and
+    // reading a credential can raise a Keychain prompt. A launch resolves a
+    // session directory and lowers it to an env var WITHOUT OPENING IT — the
+    // agent is the one that reads it, milliseconds later, as it already does.
+    assert.ok(!rel.startsWith('src/adapters/claude-session'), `${rel} inspects a session`)
   }
 })
 
@@ -128,8 +139,17 @@ test('the launch path is small enough to keep auditing by hand', () => {
   // Bumped from 30 when issue #19 put the agent-CLI seam on the launch path: the
   // agent registry, three adapters (claude-code/kilo/opencode) and the Claude
   // Code lowering that moved out of core/. Still small enough to read in a sitting.
+  //
+  // Bumped again from 40 for `adapters/store/fs-usage-store.ts` — the `usage`
+  // strategy's exact counterpart to the rotation cursor that was already here.
+  // Both are one small best-effort read from the state directory, and selection
+  // cannot honour a strategy whose input it cannot see. This ceiling is a real
+  // constraint, not a decoration: it has already turned away one module this
+  // phase (`isDefaultConfigDir` went into the env lowering that uses it rather
+  // than getting a file of its own). Raise it only for a capability the launch
+  // genuinely needs, and say which one.
   const { files } = launchClosure()
-  assert.ok(files.length < 40, `launch path has grown to ${files.length} modules`)
+  assert.ok(files.length <= 42, `launch path has grown to ${files.length} modules`)
 })
 
 function walk(dir: string): string[] {

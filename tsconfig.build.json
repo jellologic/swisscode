@@ -16,7 +16,21 @@
     // No source maps either. They would reference .ts files that the tarball
     // deliberately does not ship, leaving dangling links in the artifact.
     // Dev debugging reads the real sources, because dev runs the real sources.
-    "sourceMap": false
+    "sourceMap": false,
+
+    // Comments are stripped from the EMITTED artifact only.
+    //
+    // This codebase carries an unusually heavy comment load on purpose — it is
+    // most of how the reasoning is preserved — and shipping every one of them
+    // compiled cost 128 kB of the 508 kB `dist/` tree, a quarter of it, for
+    // prose nobody reads in that form. The source is what carries the doctrine,
+    // and the source is a `git clone` away.
+    //
+    // What this does NOT give up is the property build.js actually claims: the
+    // launch path stays a tree of individual modules with no bundler in the
+    // way, each one still mapping 1:1 to a file in `src/`. Auditing structure
+    // is unaffected; only the prose is gone.
+    "removeComments": true
   },
 
   // The Ink UI is NOT emitted by tsc. esbuild bundles it straight from source
@@ -24,13 +38,27 @@
   // copies of the same component tree and put React-importing modules inside
   // the package next to a launch path that promises never to touch them.
   //
-  // The exclude also follows the wizard's NON-.tsx imports — the catalog / net /
-  // clock / cache leaf cluster and the two core helpers (catalog, format) it
-  // pulls in. Those are reached ONLY by the UI (verified: no launch/config/doctor
-  // runtime module imports them), and esbuild already inlines them into dist/ui.js,
-  // so emitting them here would ship that cluster twice. fs-config-store stays
-  // emitted — it is the CONFIG store the launch/config paths need, distinct from
-  // the UI-only fs-cache-store.
+  // The exclude also lists the wizard's NON-.tsx imports — the catalog / net /
+  // clock / cache leaf cluster and the two core helpers (catalog, format).
+  //
+  // THIS STOPPED BEING THE WHOLE STORY when the web UI landed. Those modules
+  // were once reached ONLY by the Ink wizard, so excluding them avoided
+  // emitting a cluster esbuild already inlines into dist/ui.js.
+  // composition/web-root.ts now imports the same catalogs to serve the
+  // browser's model picker — and an `exclude` cannot prevent that. It only
+  // filters the `include` globs; a module reached through an IMPORT rejoins the
+  // program and is emitted anyway. (The same rule that makes naming the UI in
+  // type space so dangerous, from the other direction.)
+  //
+  // So the cluster IS emitted now, and dist/ui.js still carries its own inlined
+  // copy. Two copies in one process is a state this codebase already
+  // anticipates: it is exactly why test/architecture.test.ts forbids top-level
+  // mutable state in core/. The entries stay because they still describe the
+  // intent for the .tsx-only modules, and because deleting them would erase the
+  // record of why they were ever here.
+  //
+  // fs-config-store stays emitted regardless — it is the CONFIG store the
+  // launch/config paths need, distinct from the UI-only fs-cache-store.
   "include": ["src"],
   "exclude": [
     "src/adapters/ui",

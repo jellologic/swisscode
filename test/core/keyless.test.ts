@@ -19,13 +19,13 @@ import { makeProfile } from '../support/fixtures.ts'
 import type { ProviderDescriptor } from '../../src/ports/provider.ts'
 
 test('a keyless profile sends the provider placeholder', () => {
-  const plan = buildEnvPlan(makeProfile({ provider: 'ollama' }), ollama, {})
+  const plan = buildEnvPlan(makeProfile(({ provider: 'ollama' })), ollama, {})
   assert.equal(plan.set.ANTHROPIC_AUTH_TOKEN, 'ollama')
   assert.ok(!plan.unset.includes('ANTHROPIC_AUTH_TOKEN'), 'the variable must be populated')
 })
 
 test('a real key still wins over the placeholder', () => {
-  const plan = buildEnvPlan(makeProfile({ provider: 'ollama', apiKey: 'mine' }), ollama, {})
+  const plan = buildEnvPlan(makeProfile(({ provider: 'ollama', apiKey: 'mine' })), ollama, {})
   assert.equal(plan.set.ANTHROPIC_AUTH_TOKEN, 'mine')
 })
 
@@ -51,7 +51,7 @@ test('apiKeyFromEnv wins too, and an unset variable falls back rather than blank
 test('the placeholder reaches every agent, not just Claude Code', () => {
   // Kilo and OpenCode read the neutral intent, so the fallback has to live
   // there as well as in the Claude Code lowering.
-  const intent = buildIntent(makeProfile({ provider: 'ollama' }), ollama, {})
+  const intent = buildIntent(makeProfile(({ provider: 'ollama' })), ollama, {})
   assert.equal(intent.credential, 'ollama')
 })
 
@@ -68,12 +68,12 @@ test('a provider that needs a real key does NOT get a placeholder', () => {
   const cloud: ProviderDescriptor = ollamaCloud
   assert.equal(cloud.defaultCredential, undefined)
 
-  const plan = buildEnvPlan(makeProfile({ provider: 'ollama-cloud' }), ollamaCloud, {})
+  const plan = buildEnvPlan(makeProfile(({ provider: 'ollama-cloud' })), ollamaCloud, {})
   assert.ok(
     plan.unset.includes('ANTHROPIC_AUTH_TOKEN'),
     'a keyless cloud profile must clear the variable, not invent a token',
   )
-  const intent = buildIntent(makeProfile({ provider: 'ollama-cloud' }), ollamaCloud, {})
+  const intent = buildIntent(makeProfile(({ provider: 'ollama-cloud' })), ollamaCloud, {})
   assert.equal(intent.credential, '')
 })
 
@@ -101,7 +101,7 @@ test('a local launch sets no auto-compact window, because none is measured', () 
   // Guessing one that is too large means the conversation overflows instead of
   // compacting, so the correct output is nothing at all.
   const plan = buildEnvPlan(
-    makeProfile({ provider: 'ollama', models: { opus: 'qwen3-coder:30b' } }),
+    makeProfile(({ provider: 'ollama', models: { opus: 'qwen3-coder:30b' } })),
     ollama,
     {},
   )

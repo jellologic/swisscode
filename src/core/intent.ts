@@ -13,7 +13,7 @@
 import { TIERS } from './tiers.ts'
 import { definedEntriesOf, resolveCredential } from './env-plan.ts'
 import type { LaunchIntent } from '../ports/agent.ts'
-import type { Profile } from '../ports/config-store.ts'
+import type { ResolvedProfile } from '../ports/config-store.ts'
 import type { ProviderDescriptor, Tier, TierRecord } from '../ports/provider.ts'
 import type { EnvMap } from '../ports/process.ts'
 
@@ -30,7 +30,7 @@ export type IntentOptions = {
 }
 
 export function buildIntent(
-  profile: Profile | null | undefined,
+  profile: ResolvedProfile | null | undefined,
   provider: ProviderDescriptor | null | undefined,
   ambientEnv: EnvMap = {},
   opts: IntentOptions = {},
@@ -57,5 +57,8 @@ export function buildIntent(
   }
   // Under exactOptionalPropertyTypes, only present it when there is one.
   if (profile?.contextWindows) intent.contextWindows = profile.contextWindows
+  // Session mode. Neutral here — which variable expresses it is the adapter's
+  // business, and core/ may not name an agent's dialect in emitted code.
+  if (profile?.configDir) intent.sessionDir = profile.configDir
   return intent
 }

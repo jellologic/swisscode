@@ -18,6 +18,9 @@ export const openrouter = {
   // Has a queryable catalog, so the wizard offers a browsable picker instead of
   // asking you to type model ids from memory.
   catalogId: 'openrouter',
+  // Verified against the live service: GET {baseUrl}/v1/key reports
+  // limit / limit_remaining / usage. See adapters/usage/openrouter.ts.
+  usageId: 'openrouter',
   // OpenRouter has no notion of the opus/sonnet/haiku tiers, so subagents need
   // to be pinned explicitly or they fall back to a model that 404s.
   subagentFollowsOpus: true,

@@ -14,9 +14,11 @@ import { makeState } from '../support/fixtures.ts'
 
 const state = {
   version: 2,
+  providerAccounts: { z: { provider: 'zai' }, or: { provider: 'openrouter' } },
+  agentProfiles: { z: {}, or: {} },
   profiles: {
-    z: { provider: 'zai' },
-    or: { provider: 'openrouter' },
+    z: { agentProfile: 'z', accounts: ['z'] },
+    or: { agentProfile: 'or', accounts: ['or'] },
   },
   defaultProfile: 'z',
   bindings: { '/work/or-project': 'or' },
@@ -60,7 +62,7 @@ test('no profiles at all resolves to nothing, which means the wizard', () => {
 
 test('exactly one profile and no default is not ambiguous', () => {
   const sel = resolveProfile(
-    makeState({ profiles: { solo: { provider: 'zai' } }, defaultProfile: 'solo' }),
+    makeState({ providerAccounts: { solo: { provider: 'zai' } }, agentProfiles: { solo: {} }, profiles: { solo: { agentProfile: 'solo', accounts: ['solo'] } }, defaultProfile: 'solo' }),
     { cwd: '/x' },
   )
   assert.equal(sel.name, 'solo')
@@ -157,6 +159,6 @@ test('tier 1 short-circuits the binding walk entirely', () => {
 
 test('a profile named after a subcommand is still selectable by flag', () => {
   // `config list` always wins positionally, but the profile is not unreachable.
-  const shadowed = makeState({ profiles: { list: { provider: 'zai' } }, defaultProfile: null })
+  const shadowed = makeState({ providerAccounts: { list: { provider: 'zai' } }, agentProfiles: { list: {} }, profiles: { list: { agentProfile: 'list', accounts: ['list'] } }, defaultProfile: null })
   assert.equal(resolveProfile(shadowed, { profileFlag: 'list' }).name, 'list')
 })

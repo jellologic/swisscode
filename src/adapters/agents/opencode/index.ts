@@ -16,6 +16,7 @@ import {
   ambientUnset,
   anthropicOptions,
   collapsedTierWarning,
+  sessionUnavailableWarning,
   extendedContextWarning,
   modelRef,
   modelsBlock,
@@ -49,6 +50,9 @@ export const opencode = {
     skipPermissions: true,
     extendedContextSuffix: false,
     compatFlags: false,
+    // OpenCode takes its credential inline in OPENCODE_CONFIG_CONTENT, so a
+    // session-mode account gives it nothing to authenticate with.
+    sessionDir: false,
   },
   binary,
   translate(input: TranslateInput): Translation {
@@ -77,6 +81,8 @@ export const opencode = {
         : [...passthrough]
 
     const warnings: EnvWarning[] = []
+    const noSession = sessionUnavailableWarning(intent, 'OpenCode')
+    if (noSession) warnings.push(noSession)
     const collapse = collapsedTierWarning(intent, ['opus', 'haiku'], 'OpenCode')
     if (collapse) warnings.push(collapse)
     const ext = extendedContextWarning(intent, primary, 'OpenCode')

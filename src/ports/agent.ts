@@ -11,7 +11,7 @@
 // Type-only, like every port: `export {}` at runtime.
 
 import type { ExtendedContext, ProviderDescriptor, Tier, TierRecord } from './provider.ts'
-import type { Profile } from './config-store.ts'
+import type { ResolvedProfile } from './config-store.ts'
 import type { AgentBinarySpec, EnvMap } from './process.ts'
 
 /**
@@ -56,6 +56,19 @@ export type LaunchIntent = {
   skipPermissions: boolean
   extendedContext?: ExtendedContext | null
   contextWindows?: Record<string, number>
+  /**
+   * A directory holding a login the agent already performed, or absent.
+   *
+   * The NEUTRAL half of session-mode authentication. An account can present a
+   * key, or it can point at somewhere the agent keeps its own credential — a
+   * Claude Code subscription being the shipped case. Which environment variable
+   * carries it is the adapter's business, exactly as it is for the credential.
+   *
+   * Spelled "session directory" rather than after any agent's variable because
+   * core/ builds this intent, and test/architecture.test.ts forbids core/ from
+   * naming an agent's dialect in emitted code.
+   */
+  sessionDir?: string | null
 }
 
 /**
@@ -74,6 +87,15 @@ export type AgentCapabilities = {
   skipPermissions: boolean
   extendedContextSuffix: boolean
   compatFlags: boolean
+  /**
+   * Can this CLI be pointed at an existing login directory?
+   *
+   * Claude Code can (CLAUDE_CONFIG_DIR). Kilo and OpenCode take a credential
+   * inline and have no equivalent, so an account in session mode gives them
+   * nothing to authenticate with — which they must WARN about rather than
+   * launch unauthenticated, the same rule tier-collapse already follows.
+   */
+  sessionDir: boolean
 }
 
 /**
@@ -84,7 +106,7 @@ export type AgentCapabilities = {
  */
 export type TranslateInput = {
   intent: LaunchIntent
-  profile: Profile
+  profile: ResolvedProfile
   provider: ProviderDescriptor | null
   passthrough: string[]
   ambient: EnvMap

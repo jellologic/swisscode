@@ -3,3 +3,8 @@ dist/
 *.log
 .DS_Store
 .playwright-mcp/
+web/styled-system/
+
+# Playwright MCP writes screenshots here during manual verification
+.playwright-mcp/
+profiles.png

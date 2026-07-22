@@ -24,7 +24,7 @@ import { SOFT_RESERVED } from '../../../core/migrate.ts'
 import { isInsecureRemoteBaseUrl, sanitizeUrlForDisplay } from '../../../core/url-safety.ts'
 import type { EnvPlan } from './env.ts'
 import type { ProfileSelection } from '../../../core/profile.ts'
-import type { ConfigModes, LoadResult, Profile } from '../../../ports/config-store.ts'
+import type { ConfigModes, LoadResult, ResolvedProfile } from '../../../ports/config-store.ts'
 import type { ClaudeCodeCredentialEnv } from '../../../ports/claude-code.ts'
 import type { ProviderDescriptor, ResolvedModels, Tier } from '../../../ports/provider.ts'
 import type {
@@ -118,7 +118,7 @@ export type StaticChecksInput = {
   /** resolveProfile() result */
   selection: ProfileSelection
   /** after overrides */
-  profile: Profile | null
+  profile: ResolvedProfile | null
   /** descriptor, or null when unknown */
   provider: ProviderDescriptor | null
   /** buildEnvPlan() result */
@@ -471,7 +471,7 @@ export type ProbeSpec = {
  * signature stays stable.
  */
 export function probeSpec(
-  profile: Profile | null | undefined,
+  profile: ResolvedProfile | null | undefined,
   provider: ProviderDescriptor | null | undefined,
   plan: EnvPlan | null | undefined,
 ): ProbeSpec {

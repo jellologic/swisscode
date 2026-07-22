@@ -119,6 +119,40 @@ file with mode `0600` and then moved into place, with the mode re-asserted by
 aside rather than overwritten, and a v1 file is backed up before migration.
 (`adapters/store/fs-config-store.ts`)
 
+**Exactly one module reads a credential swisscode did not write, and exactly one
+writes one.** Session mode handles Claude subscription logins, which belong to
+the agent rather than to us, so the surface is deliberately tiny:
+
+- `adapters/claude-session/identity.ts` reads *who* an account is from
+  `.claude.json`. No credential, no keychain, no prompt — which is why listing
+  accounts is free.
+- `adapters/claude-session/credentials.ts` reads the token, only so usage can be
+  measured. It never refreshes: refreshing needs Anthropic's own OAuth client
+  id, and impersonating their client is the line this design stays behind. An
+  expired token is *reported*; the agent refreshes it itself on its next run.
+- `adapters/claude-session/swap.ts` is the only writer. It is a separate module
+  precisely so the read path's "never writes" promise holds by construction.
+
+**A moved credential never touches argv, and never gets truncated.** `ps` shows
+argv to every user on the machine, so a secret must not go there.
+`/usr/bin/security add-generic-password` offers no safe alternative: `-w <value>`
+is argv, and `-w` reading from stdin **silently truncates at 128 bytes** —
+measured, 500 in and 128 stored with exit 0 and no warning, against a real
+credential of ~3.9 kB. So the credential is written as a `0600` file in a `0700`
+directory instead, and any competing keychain item for that directory is dropped
+afterwards so exactly one stored credential remains. The blob is moved as opaque
+bytes, never parsed into a shape that could be logged or narrowed — dropping
+`refreshToken` would hand the target a login that dies at the next refresh.
+(`test/adapters/claude-session-swap.test.ts`: *THE SECRET NEVER REACHES ARGV*,
+*THE BLOB IS NEVER TRUNCATED*)
+
+**Measuring usage is never automatic.** A keychain read can raise an unlock
+dialog, so it happens only when asked: `config accounts usage`, `config doctor`,
+or the button in the web UI. The web route is a `POST` for the same reason — a
+`GET` is something a browser may prefetch, retry or replay on its own
+initiative, and nothing that can pop a system dialog should be reachable that
+way. The launch path never measures at all; it reads a cached snapshot.
+
 **Binary resolution cannot be hijacked into a loop.** `SWISSCODE=1` is set in the
 child; seeing it in the ambient environment means swisscode resolved to itself
 via an alias or a shim, and the launch is refused rather than recursing into a

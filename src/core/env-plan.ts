@@ -6,7 +6,7 @@
 // or CLAUDE_CODE_* string — that is the whole point of the split.
 
 import type { EnvPlan } from '../ports/agent.ts'
-import type { Profile } from '../ports/config-store.ts'
+import type { ResolvedProfile } from '../ports/config-store.ts'
 import type { EnvMap } from '../ports/process.ts'
 
 /**
@@ -66,7 +66,7 @@ export function definedEntriesOf<T>(
  * Neutral: it produces the VALUE; which variable carries it is the adapter's call.
  */
 export function resolveCredential(
-  profile: Profile | null | undefined,
+  profile: ResolvedProfile | null | undefined,
   ambientEnv: EnvMap | null | undefined,
 ): string {
   if (profile?.apiKeyFromEnv) return ambientEnv?.[profile.apiKeyFromEnv] ?? ''

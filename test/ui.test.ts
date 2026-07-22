@@ -70,21 +70,25 @@ stdin.write(ENTER) // "yes"
 await tick()
 
 assert.ok(result, 'wizard should have produced a profile')
-assert.equal(result.provider, 'zai')
-assert.equal(result.apiKey, 'secret-token')
-assert.equal(result.skipPermissions, true)
+// The wizard returns the stored PROFILE — references only. What it configured
+// lives in the account and the agent profile it wrote alongside it.
+assert.equal(result.agentProfile, 'zai')
+assert.deepEqual(result.accounts, ['zai'])
+
+const path = join(home, 'swisscode', 'config.json')
+const saved = JSON.parse(readFileSync(path, 'utf8'))
+assert.equal(saved.version, 3, 'wizard must write the v3 schema')
+
+// The settings themselves live on the agent profile the wizard minted.
+assert.equal(saved.agentProfiles.zai.skipPermissions, true)
 // Four tiers, not three: [1m] is read per variable, so a tier the wizard never
 // writes is a tier that silently runs at the assumed window.
-assert.deepEqual(result.models, {
+assert.deepEqual(saved.agentProfiles.zai.models, {
   opus: 'glm-5.2',
   sonnet: 'glm-5.2',
   haiku: 'glm-5.2',
   fable: 'glm-5.2',
 })
-
-const path = join(home, 'swisscode', 'config.json')
-const saved = JSON.parse(readFileSync(path, 'utf8'))
-assert.equal(saved.version, 2, 'wizard must write the v2 profile schema')
 assert.equal(saved.defaultProfile, 'zai')
 assert.deepEqual(saved.profiles.zai, result, 'the profile must persist verbatim')
 assert.equal(statSync(path).mode & 0o777, 0o600, 'the file holds an API key')

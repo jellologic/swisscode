@@ -13,6 +13,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFsConfigStore } from '../../src/adapters/store/fs-config-store.ts'
+import { makeProfile } from '../support/fixtures.ts'
 
 /** Byte-for-byte what swisscode 0.1.0's saveConfig writes. */
 const V1_ON_DISK = `${JSON.stringify(
@@ -51,19 +52,21 @@ test('a real 0.1.0 config file migrates automatically on load', () => {
   const loaded = store.load()
 
   assert.equal(loaded.migrated, true)
-  assert.equal(loaded.state.version, 2)
+  assert.equal(loaded.state.version, 3)
   assert.equal(loaded.state.defaultProfile, 'zai')
-  assert.deepEqual(loaded.state.profiles.zai, {
+  assert.deepEqual(loaded.state.providerAccounts.zai, {
     provider: 'zai',
     apiKey: 'zai-secret-key',
+  })
+  assert.deepEqual(loaded.state.agentProfiles.zai, {
     models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2' },
     skipPermissions: true,
   })
 
   // Persisted, and the original kept beside it.
   const onDisk = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))
-  assert.equal(onDisk.version, 2)
-  assert.equal(onDisk.profiles.zai.apiKey, 'zai-secret-key')
+  assert.equal(onDisk.version, 3)
+  assert.equal(onDisk.providerAccounts.zai.apiKey, 'zai-secret-key')
   assert.equal(readFileSync(join(dir, 'config.v1.bak.json'), 'utf8'), V1_ON_DISK)
   assert.ok(loaded.warnings.some((w) => w.includes('migrated')))
 })
@@ -90,14 +93,22 @@ test('the migrated file keeps 0600 in a 0700 directory', () => {
 
 test('save writes 0600 in 0700 even when the directory did not exist', () => {
   const { dir, store } = freshHome()
-  store.save({ version: 2, profiles: { a: { provider: 'zai' } }, defaultProfile: 'a', bindings: {}, settings: {} })
+  store.save({
+    version: 3,
+    providerAccounts: { a: { provider: 'zai' } },
+    agentProfiles: { a: {} },
+    profiles: { a: { agentProfile: 'a', accounts: ['a'] } },
+    defaultProfile: 'a',
+    bindings: {},
+    settings: {},
+  })
   assert.equal(statSync(dir).mode & 0o777, 0o700)
   assert.equal(statSync(join(dir, 'config.json')).mode & 0o777, 0o600)
 })
 
 test('save leaves no temp file behind', () => {
   const { dir, store } = freshHome()
-  store.save({ version: 2, profiles: {}, defaultProfile: null, bindings: {}, settings: {} })
+  store.save({ version: 2, providerAccounts: {}, agentProfiles: {}, profiles: {}, defaultProfile: null, bindings: {}, settings: {} })
   assert.deepEqual(readdirSync(dir), ['config.json'])
 })
 
@@ -109,7 +120,7 @@ test('a truncated config is quarantined rather than overwritten in place', () =>
   // Still on disk: nothing has been written yet.
   assert.equal(readFileSync(join(dir, 'config.json'), 'utf8'), '{"provider": "zai", "apiK')
 
-  store.save({ version: 2, profiles: {}, defaultProfile: null, bindings: {}, settings: {} })
+  store.save({ version: 2, providerAccounts: {}, agentProfiles: {}, profiles: {}, defaultProfile: null, bindings: {}, settings: {} })
   const quarantined = readdirSync(dir).filter((f) => f.startsWith('config.corrupt-'))
   assert.equal(quarantined.length, 1)
   assert.equal(readFileSync(join(dir, quarantined[0]!), 'utf8'), '{"provider": "zai", "apiK')
@@ -123,7 +134,7 @@ test('a quarantine that cannot rename aborts save() instead of destroying the co
   chmodSync(dir, 0o500)
   try {
     assert.throws(
-      () => store.save({ version: 2, profiles: {}, defaultProfile: null, bindings: {}, settings: {} }),
+      () => store.save({ version: 2, providerAccounts: {}, agentProfiles: {}, profiles: {}, defaultProfile: null, bindings: {}, settings: {} }),
       /could not move it aside|refusing to overwrite/,
     )
     chmodSync(dir, 0o700)
@@ -137,14 +148,16 @@ test('a quarantine that cannot rename aborts save() instead of destroying the co
 test('a NEWER schema is read but never written back', () => {
   const future = `${JSON.stringify({
     version: 99,
-    profiles: { a: { provider: 'zai', apiKey: 'k' } },
+    providerAccounts: { a: { provider: 'zai', apiKey: 'k' } },
+    agentProfiles: { a: {} },
+    profiles: { a: { agentProfile: 'a', accounts: ['a'] } },
     defaultProfile: 'a',
   })}\n`
   const { dir, store } = freshHome(future)
   const loaded = store.load()
 
   assert.equal(loaded.readOnly, true)
-  assert.equal(loaded.state.profiles.a!.provider, 'zai')
+  assert.equal(loaded.state.providerAccounts.a!.provider, 'zai')
   assert.ok(loaded.warnings.some((w) => w.includes('version 99')))
 
   const before = statSync(join(dir, 'config.json')).mtimeMs
@@ -167,9 +180,9 @@ test('a failed migration write does not block the launch', () => {
   const loaded = store.load()
 
   // The migrated settings are still usable in memory, and the launch proceeds.
-  assert.equal(loaded.state.version, 2)
-  assert.equal(loaded.state.profiles.zai!.provider, 'zai')
-  assert.equal(loaded.state.profiles.zai!.apiKey, 'zai-secret-key')
+  assert.equal(loaded.state.version, 3)
+  assert.equal(loaded.state.providerAccounts.zai!.provider, 'zai')
+  assert.equal(loaded.state.providerAccounts.zai!.apiKey, 'zai-secret-key')
   assert.ok(loaded.warnings.some((w) => w.includes('could not rewrite')))
   // The original file is untouched, so the next run can migrate it again.
   assert.equal(readFileSync(join(dir, 'config.json'), 'utf8'), V1_ON_DISK)
@@ -184,8 +197,10 @@ test('the 0700 directory mode is re-asserted even on a loose existing dir', () =
 
 test('unknown top-level keys survive a round trip', () => {
   const withExtra = `${JSON.stringify({
-    version: 2,
-    profiles: { a: { provider: 'zai', futureField: 1 } },
+    version: 3,
+    providerAccounts: { a: { provider: 'zai' } },
+    agentProfiles: { a: {} },
+    profiles: { a: { agentProfile: 'a', accounts: ['a'], futureField: 1 } },
     defaultProfile: 'a',
     bindings: {},
     settings: {},
@@ -200,7 +215,50 @@ test('unknown top-level keys survive a round trip', () => {
 })
 
 test('a v1 config whose provider is no longer known still migrates', () => {
-  const { store } = freshHome(`${JSON.stringify({ provider: 'volcengine', apiKey: 'k' })}\n`)
+  const { store } = freshHome(`${JSON.stringify(makeProfile({ provider: 'volcengine', apiKey: 'k' }))}\n`)
   const loaded = store.load()
-  assert.equal(loaded.state.profiles.volcengine!.provider, 'volcengine')
+  assert.equal(loaded.state.providerAccounts.volcengine!.provider, 'volcengine')
+})
+
+// revision(): lost-update detection for long-lived editors (the web UI).
+
+test('revision is null when there is no file, and a string once there is', () => {
+  // "No config yet" is itself a revision worth quoting back: a caller that read
+  // an empty state and then saves must still be told if someone created one in
+  // the meantime.
+  const { store } = freshHome()
+  assert.equal(store.revision!(), null)
+  store.save({ version: 2, providerAccounts: {}, agentProfiles: {}, profiles: {}, defaultProfile: null, bindings: {}, settings: {} })
+  assert.equal(typeof store.revision!(), 'string')
+})
+
+test('revision follows CONTENT, not the clock', () => {
+  // Deliberately not mtime. Its granularity is coarse and platform-dependent,
+  // so two writes inside one tick can share a timestamp — a lost update would
+  // slip through exactly when writers are most concurrent. Hashing bytes cannot
+  // have that failure, and this test is what pins the choice.
+  const { store } = freshHome()
+  const base = { version: 2, providerAccounts: {}, agentProfiles: {}, profiles: {}, defaultProfile: null, bindings: {}, settings: {} }
+
+  store.save(base)
+  const first = store.revision!()
+
+  // Same content written again, immediately: same revision.
+  store.save(base)
+  assert.equal(store.revision!(), first, 'identical content changed the revision')
+
+  // Different content, also immediately: different revision.
+  store.save({ ...base, defaultProfile: 'work', profiles: { work: { provider: 'zai' } } } as never)
+  assert.notEqual(store.revision!(), first, 'a real edit did not change the revision')
+})
+
+test('an edit made behind our back is visible as a revision change', () => {
+  // The interleaving this exists to catch: read, wait, and meanwhile another
+  // swisscode command writes.
+  const { dir, store } = freshHome()
+  store.save({ version: 2, providerAccounts: {}, agentProfiles: {}, profiles: {}, defaultProfile: null, bindings: {}, settings: {} })
+  const held = store.revision!()
+
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ version: 2, providerAccounts: {}, agentProfiles: {}, profiles: {}, defaultProfile: 'other', bindings: {}, settings: {} }))
+  assert.notEqual(store.revision!(), held)
 })

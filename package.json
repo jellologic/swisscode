@@ -1,7 +1,7 @@
 {
   "name": "swisscode",
   "version": "0.3.0",
-  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode against Ollama (local, no key), OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen & more — named profiles, per-directory bindings and real 1M-context fixes, with no proxy or daemon.",
+  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode. Run multiple Claude Pro/Max accounts, check usage limits and switch accounts without /login — or point any coding CLI at Ollama (local, no key), OpenRouter, z.ai/GLM, DeepSeek & Qwen. No proxy, no daemon.",
   "type": "module",
   "bin": {
     "swisscode": "./bin/swisscode.js"
@@ -18,22 +18,22 @@
     "build": "node build.js",
     "dev": "node build.js && tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "typecheck": "tsc --noEmit",
-    "test": "tsc --noEmit && node build.js && node --test \"test/**/*.test.ts\"",
+    "test": "tsc --noEmit && npm run typecheck:web && node build.js && node --test \"test/**/*.test.ts\"",
     "prepare": "node build.js",
-    "prepublishOnly": "node build.js"
+    "prepublishOnly": "node build.js",
+    "size": "node scripts/size-budget.js",
+    "dev:web": "vite --config web/vite.config.ts",
+    "typecheck:web": "tsc --noEmit -p web/tsconfig.json"
   },
   "keywords": [
     "claude",
     "claude-code",
     "anthropic",
-    "anthropic-api",
     "cli",
     "launcher",
-    "ai",
     "llm",
     "coding-agent",
     "ai-agent",
-    "agentic",
     "provider-switcher",
     "claude-code-router",
     "openrouter",
@@ -48,10 +48,16 @@
     "siliconflow",
     "ollama",
     "local-llm",
-    "local-ai",
-    "offline-ai",
-    "self-hosted",
-    "developer-tools"
+    "developer-tools",
+    "claude-max",
+    "claude-pro",
+    "subscription",
+    "multiple-accounts",
+    "account-switcher",
+    "usage-limits",
+    "rate-limits",
+    "claude-usage",
+    "bunx"
   ],
   "license": "MIT",
   "repository": {
@@ -69,10 +75,15 @@
     "react": "^19.2.0"
   },
   "devDependencies": {
+    "@pandacss/dev": "^1.11.4",
     "@types/node": "^22.20.1",
     "@types/react": "^19.2.17",
-    "esbuild": "^0.25.0",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "esbuild": "^0.28.1",
     "ink-testing-library": "^4.0.0",
-    "typescript": "^7.0.2"
+    "preact": "^10.29.7",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5"
   }
 }

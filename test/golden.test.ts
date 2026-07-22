@@ -32,6 +32,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildEnvPlan } from '../src/adapters/agents/claude-code/env.ts'
 import { PROVIDERS, byId } from '../src/adapters/providers/registry.ts'
+import { makeProfile } from './support/fixtures.ts'
 
 const AMBIENT = Object.freeze({
   PATH: '/usr/bin',
@@ -111,6 +112,9 @@ const GOLDEN: Record<string, GoldenPlan> = {
     },
     unset: ['ANTHROPIC_API_KEY', ...TIER_VARS],
   },
+  // Session mode is not a provider, so it cannot have its own GOLDEN entry
+  // keyed by provider id — it is asserted separately below, against the same
+  // polluted ambient env.
   ollama: {
     set: {
       // Bare host, http, loopback. The cleartext guard exempts loopback, so
@@ -155,7 +159,7 @@ function planFor(id: string) {
     apiKey: 'KEY',
     ...(provider.askBaseUrl ? { baseUrl: 'https://custom.example' } : {}),
   }
-  return buildEnvPlan(profile, provider, AMBIENT)
+  return buildEnvPlan(makeProfile(profile), provider, AMBIENT)
 }
 
 for (const provider of PROVIDERS) {
@@ -170,6 +174,26 @@ for (const provider of PROVIDERS) {
 
 test('every shipped provider has a golden map', () => {
   assert.deepEqual(PROVIDERS.map((p) => p.id).sort(), Object.keys(GOLDEN).sort())
+})
+
+test('a subscription launch clears BOTH credential variables', () => {
+  // THE SILENT-WRONG-ACCOUNT CASE. A session-mode account carries no credential
+  // of its own — Claude Code reads one from the directory we point it at. Any
+  // ANTHROPIC_API_KEY in the environment overrides an OAuth login outright, and
+  // a stale ANTHROPIC_AUTH_TOKEN would be presented instead of the subscription
+  // this account names. Before session mode existed the anthropic path cleared
+  // only the first, so the second survived into the child.
+  const plan = buildEnvPlan(
+    makeProfile({ provider: 'anthropic', configDir: '/home/u/.swisscode/personal' }),
+    byId('anthropic'),
+    AMBIENT,
+  )
+  assert.equal(plan.set.CLAUDE_CONFIG_DIR, '/home/u/.swisscode/personal')
+  assert.ok(plan.unset.includes('ANTHROPIC_API_KEY'), 'a stale API key would override the login')
+  assert.ok(plan.unset.includes('ANTHROPIC_AUTH_TOKEN'), 'a stale auth token would be presented')
+  // And nothing invents a credential to put back.
+  assert.equal(plan.set.ANTHROPIC_API_KEY, undefined)
+  assert.equal(plan.set.ANTHROPIC_AUTH_TOKEN, undefined)
 })
 
 test('no launch inherits a stale ANTHROPIC_API_KEY it did not ask for', () => {
