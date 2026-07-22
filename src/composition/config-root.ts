@@ -86,6 +86,9 @@ const USAGE = `swisscode config — manage profiles and directory bindings
   swisscode config bind|unbind        aliases for use / use --clear
   swisscode config bindings [--prune] list bindings; --prune drops dead ones
 
+  swisscode config web [--port <n>]   configure swisscode from a browser
+                 [--no-open]
+
   swisscode config doctor [--json]    check binary, endpoint, credential, models,
                                        tool calling, env conflicts, permissions
                  [--offline]           skip every network probe
@@ -144,6 +147,8 @@ export async function runConfigCommand({
       return listBindings({ deps, prune: rest.includes('--prune'), out, err })
     case 'doctor':
       return doctorCommand({ deps, args: rest, out, err })
+    case 'web':
+      return webCommand({ deps, args: rest, out, err })
     default:
       break
   }
@@ -649,4 +654,61 @@ function refuseWrite(err: Emit): number {
       'refusing to overwrite it. Upgrade swisscode.',
   )
   return 2
+}
+
+/**
+ * `swisscode config web` — the browser UI, and the singleton.
+ *
+ * The server module is imported LAZILY even from here, which is already a lazy
+ * module. config-root is reached for every `config` subcommand, including
+ * `list` and `doctor`, and none of those should pay for loading an HTTP server.
+ *
+ * Returns a promise that never settles on success: the server owns the process
+ * until Ctrl-C. That is the one place in swisscode where a command deliberately
+ * does not exit, and it is why this is opt-in rather than a background daemon.
+ */
+async function webCommand({
+  deps,
+  args,
+  out,
+  err,
+}: {
+  deps: LaunchDeps
+  args: string[]
+  out: Emit
+  err: Emit
+}): Promise<number> {
+  const portFlag = args.indexOf('--port')
+  let port = 0
+  if (portFlag !== -1) {
+    const raw = args[portFlag + 1]
+    const parsed = Number(raw)
+    if (!raw || !Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+      err(`swisscode: --port needs a number between 0 and 65535; got "${raw ?? ''}".`)
+      return 2
+    }
+    port = parsed
+  }
+
+  const { runWeb } = await import('./web-root.ts')
+  try {
+    const server = await runWeb({
+      deps,
+      port,
+      noOpen: args.includes('--no-open'),
+      out,
+    })
+    // Resolve only when the server closes, so the command holds the terminal.
+    await new Promise<void>((resolve) => {
+      const stop = () => {
+        void server.close().then(resolve)
+      }
+      process.once('SIGINT', stop)
+      process.once('SIGTERM', stop)
+    })
+    return 0
+  } catch (e) {
+    err(`swisscode: ${(e as { message?: string }).message ?? 'could not start the web UI'}`)
+    return 2
+  }
 }
