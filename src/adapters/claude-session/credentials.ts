@@ -11,8 +11,9 @@
 //     OAuth client id, which is the impersonation line this design stays behind.
 //     An expired token is reported as expired; the agent refreshes it itself the
 //     next time you run it, which is both correct and free.
-//   - It never WRITES. Writing is Phase 4's targeted swap, and keeping the read
-//     path write-free means nothing here can damage a login.
+//   - It never WRITES. Writing lives in `swap.ts`, alone, so that nothing on
+//     this path can damage a login — a property held by construction rather
+//     than by care.
 //   - It never LOGS the token, and no caller is given a shape that tempts it to.
 //
 // OFF THE LAUNCH PATH — `test/architecture.test.ts` enforces it. A launch hands

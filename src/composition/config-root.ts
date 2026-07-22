@@ -33,6 +33,7 @@ import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
 import { describeIdentity, readSessionIdentity } from '../adapters/claude-session/identity.ts'
 import { accountLogin } from '../adapters/claude-session/onboard.ts'
+import { swapCredential } from '../adapters/claude-session/swap.ts'
 import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import type { LoadResult, Profile, State } from '../ports/config-store.ts'
@@ -87,6 +88,9 @@ const USAGE = `swisscode config — manage profiles and directory bindings
   swisscode config accounts login <name>   adopt a Claude subscription: makes a session
                  [--dir <path>]             directory and runs the agent so you can /login
   swisscode config accounts usage     how much of each subscription is left, and cache it
+  swisscode config accounts swap      move one account's login into another session
+    --into <account-or-dir> <account>   directory — narrower than /login, which hits every
+                                        running session at once
   swisscode config agents             agent profiles, and which profiles use each
 
   swisscode config agent              list agents and which profile uses each
@@ -873,6 +877,110 @@ async function refreshUsage({
   return 0
 }
 
+/**
+ * `swisscode config accounts swap --into <target> <account>`.
+ *
+ * The narrow version of `/login`. `/login` writes one global slot that every
+ * running Claude Code re-reads, so switching for one terminal switches all of
+ * them; this writes ONE directory's slot and leaves the others alone.
+ *
+ * Refuses to overwrite a DIFFERENT account's login without `--yes`. Everything
+ * else here is recoverable by re-running the command; that one loses a stored
+ * token, and while `/login` can always put it back, silently discarding
+ * someone's credential is not a thing a tool should do on a typo.
+ */
+function swapAccount({
+  deps,
+  args,
+  out,
+  err,
+}: {
+  deps: LaunchDeps
+  args: string[]
+  out: Emit
+  err: Emit
+}): number {
+  const intoIndex = args.indexOf('--into')
+  const into = intoIndex >= 0 ? args[intoIndex + 1] : undefined
+  const yes = args.includes('--yes')
+  const positional = args.filter(
+    (a, i) => !a.startsWith('--') && args[i - 1] !== '--into',
+  )
+  const sourceName = positional[0]
+
+  if (!sourceName || !into) {
+    err('swisscode: usage: swisscode config accounts swap --into <account-or-dir> <account>')
+    return 2
+  }
+
+  const { state } = deps.store.load()
+  const accounts = state.providerAccounts ?? {}
+
+  const source = accounts[sourceName]
+  if (!source) {
+    err(`swisscode: no account named "${sourceName}".`)
+    return 2
+  }
+  if (!source.configDir) {
+    err(
+      `swisscode: "${sourceName}" is a key account. Only a session account has a login to move — ` +
+        'a key is already shared by every profile that names it.',
+    )
+    return 2
+  }
+
+  // The target may be an account name or a bare directory. An account name wins
+  // when both could match, because that is the vocabulary the rest of these
+  // commands use and a directory can always be spelled unambiguously.
+  const targetAccount = accounts[into]
+  const targetDir = targetAccount?.configDir ?? into
+  if (targetAccount && !targetAccount.configDir) {
+    err(`swisscode: "${into}" is a key account, so it has no session directory to swap into.`)
+    return 2
+  }
+
+  const sourceIdentity = readSessionIdentity(source.configDir)
+  const targetIdentity = readSessionIdentity(targetDir)
+  // Compare by accountUuid where both publish one — an email can change, and
+  // two directories holding the same login is exactly what a repeated swap
+  // produces and must stay idempotent.
+  const differs =
+    targetIdentity !== null &&
+    (sourceIdentity?.accountUuid && targetIdentity.accountUuid
+      ? sourceIdentity.accountUuid !== targetIdentity.accountUuid
+      : describeIdentity(sourceIdentity) !== describeIdentity(targetIdentity))
+  if (differs && !yes) {
+    err(`swisscode: ${targetDir} currently holds a different login:`)
+    err(`  there now  ${describeIdentity(targetIdentity)}`)
+    err(`  moving in  ${describeIdentity(sourceIdentity)}`)
+    err('Re-run with --yes to overwrite it. `/login` can always put the old one back.')
+    return 2
+  }
+
+  const result = swapCredential(source.configDir, targetDir, {})
+  if (!result.ok) {
+    err(`swisscode: ${result.reason}`)
+    return 1
+  }
+
+  out(`Moved ${describeIdentity(sourceIdentity)} into ${targetDir}`)
+  if (!result.wroteIdentity) {
+    // The token moved but the identity did not, which is the half-done state
+    // this command exists to avoid — so it is said plainly rather than left for
+    // the user to discover through a confusing `/status`.
+    out('')
+    out('  note: the token moved but `.claude.json` could not be updated, so `/status` in that')
+    out('        directory may still name the previous account until the agent rewrites it.')
+  }
+  out('')
+  out('  A session already running there picks this up within ~30 seconds — the agent re-reads')
+  out('  its credential on a timer, and swisscode cannot reach into a running process.')
+  out('  Anything that session creates after that belongs to the new account.')
+  out('  Sessions using any other directory are untouched, which is the point of doing it this')
+  out('  way rather than with `/login`.')
+  return 0
+}
+
 /** "37% used, resets 15:10 today" — a window, phrased for a person. */
 function pctUsed(w: { utilization: number | null; resetsAt: string | null }): string {
   if (w.utilization === null) return '— not published'
@@ -897,6 +1005,7 @@ function accountsCommand({
   const [sub, ...rest] = args
   if (sub === undefined) return listAccounts({ deps, out })
   if (sub === 'usage') return refreshUsage({ deps, out, err })
+  if (sub === 'swap') return swapAccount({ deps, args: rest, out, err })
   if (sub !== 'login') {
     err(`swisscode: unknown accounts subcommand "${sub}". Try \`swisscode config accounts\`.`)
     return 2
