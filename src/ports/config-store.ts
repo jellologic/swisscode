@@ -7,7 +7,8 @@
 // an adapter obligation (fs-config-store re-asserts both on every write) and
 // `ConfigModes` below is how `config doctor` reads it back to check.
 
-import type { ClaudeCodeCompatFlags, Tier } from './provider.ts'
+import type { ClaudeCodeCompatFlags } from './claude-code.ts'
+import type { Tier } from './provider.ts'
 
 /**
  * A named profile.
@@ -22,6 +23,14 @@ import type { ClaudeCodeCompatFlags, Tier } from './provider.ts'
 export type Profile = {
   /** id from the provider registry */
   provider: string
+  /**
+   * id from the agent registry — which coding CLI to launch. Absent means the
+   * default, 'claude-code', so every profile written before this field existed
+   * keeps launching Claude Code with no migration. A profile naming an agent
+   * this build does not know still launches Claude Code (launch-root refuses
+   * only an explicit --cc-agent for an unknown id).
+   */
+  agent?: string
   label?: string
   baseUrl?: string
   /** inline; the file is 0600 */
@@ -53,6 +62,8 @@ export type Profile = {
 export type ProfileOverrides = {
   baseUrl?: string
   provider?: string
+  /** which agent CLI to launch for this run — --cc-agent NAME */
+  agent?: string
   /** a bare string sets ALL FOUR tiers — see core/overrides.ts for why */
   models?: string | Partial<Record<Tier, string>>
   env?: Record<string, string>

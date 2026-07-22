@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { SKIP_FLAG, buildArgs, parseArgv } from '../../src/core/args.ts'
+import { parseArgv } from '../../src/core/args.ts'
+// buildArgs + the skip flag are Claude-Code-specific and now live in the adapter.
+import { SKIP_FLAG, buildArgs } from '../../src/adapters/agents/claude-code/index.ts'
 
 test('everything that is not reserved forwards to claude verbatim', () => {
   const r = parseArgv(['--resume', '-p', 'hello world', '--model', 'opus'])
@@ -36,26 +38,23 @@ test('config takes its trailing tokens so the CLI can complain about them', () =
   assert.deepEqual(r.commandArgs, ['extra'])
 })
 
-test('buildArgs prepends the skip flag according to the profile', () => {
-  assert.deepEqual(buildArgs(makeProfile({ skipPermissions: true }), ['-p', 'x']), [SKIP_FLAG, '-p', 'x'])
-  assert.deepEqual(buildArgs(makeProfile({ skipPermissions: false }), ['-p', 'x']), ['-p', 'x'])
-})
-
-test('a per-run override beats the stored preference', () => {
-  assert.deepEqual(buildArgs(makeProfile({ skipPermissions: false }), [], true), [SKIP_FLAG])
-  assert.deepEqual(buildArgs(makeProfile({ skipPermissions: true }), [], false), [])
+test('buildArgs prepends the skip flag when skipPermissions is set', () => {
+  // The --yolo/--safe/profile resolution is buildIntent's job now; buildArgs
+  // only decides the flag from the resolved boolean.
+  assert.deepEqual(buildArgs(true, ['-p', 'x']), [SKIP_FLAG, '-p', 'x'])
+  assert.deepEqual(buildArgs(false, ['-p', 'x']), ['-p', 'x'])
 })
 
 test('the flag is never duplicated when the user typed it themselves', () => {
   // Deliberate: the scan does not stop at `--`. If the user typed the flag
   // anywhere at all, a second copy is worse than honouring theirs.
-  assert.deepEqual(buildArgs(makeProfile({ skipPermissions: true }), [SKIP_FLAG]), [SKIP_FLAG])
-  assert.deepEqual(buildArgs(makeProfile({ skipPermissions: true }), ['--', SKIP_FLAG]), ['--', SKIP_FLAG])
+  assert.deepEqual(buildArgs(true, [SKIP_FLAG]), [SKIP_FLAG])
+  assert.deepEqual(buildArgs(true, ['--', SKIP_FLAG]), ['--', SKIP_FLAG])
 })
 
 test('buildArgs copies rather than aliasing the passthrough array', () => {
   const passthrough = ['-p']
-  const out = buildArgs(makeProfile({}), passthrough)
+  const out = buildArgs(false, passthrough)
   out.push('mutated')
   assert.deepEqual(passthrough, ['-p'])
 })
@@ -67,7 +66,6 @@ test('buildArgs copies rather than aliasing the passthrough array', () => {
 
 import { CC_FLAGS } from '../../src/core/args.ts'
 import { TIERS } from '../../src/core/tiers.ts'
-import { makeProfile } from '../support/fixtures.ts'
 import type { Tier } from '../../src/ports/provider.ts'
 
 test('the reserved namespace grew by the --cc- prefix and nothing else', () => {
@@ -84,7 +82,7 @@ test('--cc-* flags never reach claude', () => {
   assert.equal(r.error, null)
   assert.deepEqual(r.passthrough, ['--resume', '-p', 'hi'])
   assert.ok(!r.passthrough.some((a) => a.startsWith('--cc-')))
-  assert.ok(!buildArgs(makeProfile({}), r.passthrough).some((a) => a.startsWith('--cc-')))
+  assert.ok(!buildArgs(false, r.passthrough).some((a) => a.startsWith('--cc-')))
 })
 
 test('an unknown --cc-* option is a hard error, not a passthrough token', () => {

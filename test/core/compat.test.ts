@@ -6,8 +6,9 @@
 // and test/registry.test.ts catches it.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildEnvPlan, COMPAT_ENV } from '../../src/core/env.ts'
-import type { ClaudeCodeCompatFlags, ProviderDescriptor } from '../../src/ports/provider.ts'
+import { buildEnvPlan, COMPAT_ENV } from '../../src/adapters/agents/claude-code/env.ts'
+import type { ClaudeCodeCompatFlags } from '../../src/ports/claude-code.ts'
+import type { ProviderDescriptor } from '../../src/ports/provider.ts'
 import type { Profile } from '../../src/ports/config-store.ts'
 import type { EnvMap } from '../../src/ports/process.ts'
 

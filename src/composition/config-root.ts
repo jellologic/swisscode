@@ -28,6 +28,7 @@ import {
 } from '../core/binding.ts'
 import { validateProfileName } from '../core/migrate.ts'
 import { TIERS } from '../core/tiers.ts'
+import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import type { LoadResult, Profile, State } from '../ports/config-store.ts'
 import type { ProcessPort } from '../ports/process.ts'
@@ -64,7 +65,7 @@ export type RunConfigCommandOptions = {
 }
 
 const SUBCOMMANDS = Object.freeze([
-  'list', 'default', 'rm', 'use', 'bind', 'unbind', 'bindings', 'doctor', 'help',
+  'list', 'default', 'agent', 'rm', 'use', 'bind', 'unbind', 'bindings', 'doctor', 'help',
 ])
 
 const USAGE = `swisscode config — manage profiles and directory bindings
@@ -74,6 +75,10 @@ const USAGE = `swisscode config — manage profiles and directory bindings
   swisscode config list               every profile, with its provider and models
   swisscode config default <name>     set the profile used when nothing else applies
   swisscode config rm <name>          delete a profile and any bindings to it
+
+  swisscode config agent              list agents and which profile uses each
+  swisscode config agent <name>       show which coding CLI <name> launches
+  swisscode config agent <name> <id>  set the coding CLI (claude-code|kilo|opencode)
 
   swisscode config use <name>         bind the current directory to <name>
   swisscode config use --show         explain which profile applies here, and why
@@ -126,6 +131,8 @@ export async function runConfigCommand({
       return listProfiles({ deps, out })
     case 'default':
       return setDefault({ deps, name: rest[0], out, err })
+    case 'agent':
+      return agentCommand({ deps, args: rest, out, err })
     case 'rm':
       return removeProfile({ deps, name: rest[0], out, err })
     case 'use':
@@ -193,6 +200,80 @@ async function openWizard({
 
   const saved = await openUi(mode, { state: loaded.state, profileName: name })
   if (saved) out(`\n  saved to ${deps.store.path()}\n`)
+  return 0
+}
+
+/**
+ * `config agent` — view or set which coding CLI a profile launches. Bare lists
+ * the agents and every profile's choice; one arg shows a profile's agent; two
+ * sets it (the only writing branch).
+ */
+function agentCommand({
+  deps,
+  args,
+  out,
+  err,
+}: {
+  deps: LaunchDeps
+  args: string[]
+  out: Emit
+  err: Emit
+}): number {
+  const loaded = deps.store.load()
+  const state = loaded.state
+  const known = deps.agents.all()
+  const [profileName, agentId, ...extra] = args
+
+  if (extra.length > 0) {
+    err(
+      `swisscode: \`config agent\` takes at most a profile and an agent id; ` +
+        `got extra ${extra.map((a) => `"${a}"`).join(' ')}.`,
+    )
+    return 2
+  }
+
+  if (profileName === undefined) {
+    out(`Agents: ${known.map((a) => `${a.id} (${a.label})`).join(', ')}`)
+    const names = Object.keys(state.profiles ?? {}).sort()
+    if (names.length === 0) {
+      out('No profiles yet. Run `swisscode config` to make one.')
+      return 0
+    }
+    for (const n of names) out(`  ${n} → ${state.profiles[n]?.agent ?? DEFAULT_AGENT_ID}`)
+    return 0
+  }
+
+  const profile = state.profiles?.[profileName]
+  if (!profile) {
+    const names = Object.keys(state.profiles ?? {})
+    err(
+      `swisscode: "${profileName}" is not a profile.` +
+        (names.length ? ` Known profiles: ${names.join(', ')}.` : ''),
+    )
+    return 2
+  }
+
+  if (agentId === undefined) {
+    out(`${profileName} → ${profile.agent ?? DEFAULT_AGENT_ID}`)
+    return 0
+  }
+
+  if (!known.some((a) => a.id === agentId)) {
+    err(
+      `swisscode: "${agentId}" is not a known agent. Valid ids: ${known.map((a) => a.id).join(', ')}.`,
+    )
+    return 2
+  }
+  if (loaded.readOnly) {
+    err('swisscode: config.json is newer than this swisscode understands; refusing to edit it.')
+    return 2
+  }
+  const next: State = {
+    ...state,
+    profiles: { ...state.profiles, [profileName]: { ...profile, agent: agentId } },
+  }
+  deps.store.save(next)
+  out(`${profileName} now launches ${agentId}.`)
   return 0
 }
 

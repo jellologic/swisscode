@@ -16,26 +16,23 @@
 //   3. Doctor proposes; it does not repair. The one exception is the explicit
 //      `--fix`, and even then only for the repairs listed as `fix`-able below.
 
-import { TIERS, TIER_ENV } from './tiers.ts'
+import { TIERS } from '../../../core/tiers.ts'
+import { TIER_ENV } from './tiers.ts'
 import { SUFFIX, bareModelId } from './context.ts'
 import { staleStoredModels } from './hygiene.ts'
-import { SOFT_RESERVED } from './migrate.ts'
+import { SOFT_RESERVED } from '../../../core/migrate.ts'
 import type { EnvPlan } from './env.ts'
-import type { ProfileSelection } from './profile.ts'
-import type { ConfigModes, LoadResult, Profile } from '../ports/config-store.ts'
-import type {
-  ClaudeCodeCredentialEnv,
-  ProviderDescriptor,
-  ResolvedModels,
-  Tier,
-} from '../ports/provider.ts'
+import type { ProfileSelection } from '../../../core/profile.ts'
+import type { ConfigModes, LoadResult, Profile } from '../../../ports/config-store.ts'
+import type { ClaudeCodeCredentialEnv } from '../../../ports/claude-code.ts'
+import type { ProviderDescriptor, ResolvedModels, Tier } from '../../../ports/provider.ts'
 import type {
   DoctorCheck,
   DoctorCounts,
   DoctorStatus,
   DoctorSummary,
   ProbeResult,
-} from '../ports/doctor.ts'
+} from '../../../ports/doctor.ts'
 
 export const OK = 'ok'
 export const WARN = 'warn'

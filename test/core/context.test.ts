@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { SUFFIX, bareModelId, withExtendedContext } from '../../src/core/context.ts'
+import { SUFFIX, bareModelId, withExtendedContext } from '../../src/adapters/agents/claude-code/context.ts'
 
 const supported = { supported: true, models: ['glm-5.2', 'kimi-k3'], window: 1_000_000 }
 const unsupported = { supported: false, models: [] }

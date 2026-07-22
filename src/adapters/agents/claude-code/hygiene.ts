@@ -1,4 +1,4 @@
-// Inherited-environment hygiene.
+// Inherited-environment hygiene — Claude Code edition.
 //
 // A variable the user exported months ago in a shell profile outranks nothing
 // here — the profile always wins, because buildEnvPlan writes unconditionally.
@@ -9,34 +9,23 @@
 // decision that was already made, which is why they are informational and why
 // suppressing them is safe.
 //
-// PERFORMANCE CONTRACT (this runs on every launch):
-// nothing here iterates the ambient environment. It walks the plan — a dozen
-// keys the launch is already touching — and does a hash lookup per key. A clean
-// environment therefore costs a dozen misses and produces zero warnings.
-// Scanning process.env for ANTHROPIC_*/CLAUDE_CODE_* would be O(env size) for
-// no extra signal: a variable we do not set cannot conflict with us.
+// This is Claude-Code-specific: it reasons about ANTHROPIC_*/CLAUDE_CODE_*
+// ambient variables, so it lives in the adapter. The neutral warning SHAPE
+// (EnvWarning) is in ports/agent.ts so launch-root can surface any adapter's.
+//
+// PERFORMANCE CONTRACT (this runs on every launch): nothing here iterates the
+// ambient environment. It walks the plan — a dozen keys the launch is already
+// touching — and does a hash lookup per key.
 
 import { TIER_ENV_VARS } from './tiers.ts'
 import { SUFFIX, bareModelId, supportsExtendedContext } from './context.ts'
-import type { Profile } from '../ports/config-store.ts'
-import type { ProviderDescriptor } from '../ports/provider.ts'
-import type { EnvMap } from '../ports/process.ts'
+import type { Profile } from '../../../ports/config-store.ts'
+import type { ProviderDescriptor } from '../../../ports/provider.ts'
+import type { EnvMap } from '../../../ports/process.ts'
+import type { EnvWarning, WarningSeverity } from '../../../ports/agent.ts'
 
 /** Highest-cost failure mode in the tool: it bills someone else's account. */
 export const BILLING_KEY = 'ANTHROPIC_API_KEY'
-
-/**
- * `high` and `medium` both surface; `info` is reported but never treated as a
- * conflict — core/doctor.ts maps it to an `ok` check rather than a warning, so
- * the distinction is load-bearing for the exit code.
- */
-export type WarningSeverity = 'high' | 'medium' | 'info'
-
-export type EnvWarning = {
-  severity: WarningSeverity
-  code: string
-  message: string
-}
 
 /**
  * The two fields of a plan that hygiene actually reads. Narrower than the plan
@@ -70,9 +59,6 @@ export function inspectAmbient(
   const seen = new Set<string>()
 
   // 1. The billing one. Deliberately first and deliberately loud.
-  // A stale ANTHROPIC_API_KEY makes Claude Code fall back to Anthropic and bill
-  // that account for traffic the user believes is going to a gateway they have
-  // already paid for. Nothing else in this tool costs money by being quiet.
   const staleKey = ambientEnv[BILLING_KEY]
   if (staleKey && unset.includes(BILLING_KEY)) {
     seen.add(BILLING_KEY)
@@ -146,7 +132,6 @@ export function inspectAmbient(
   }
 
   // 4. Everything else the profile and the shell both touch.
-  // Bounded by the plan, not by the environment.
   const alsoSet: string[] = []
   for (const key of Object.keys(set)) {
     if (seen.has(key) || !isClaudeVar(key)) continue
@@ -170,16 +155,6 @@ export function inspectAmbient(
   }
 
   // 4b. The one variable worth looking up that we do not set.
-  // CLAUDE_CODE_DISABLE_1M_CONTEXT turns the extended-context window off
-  // wholesale. Because swisscode never sets it, the plan-walk above cannot see
-  // it — and a user who has it exported gets every [1m] this tool carefully
-  // derived silently ignored, with a config that still reads as correct.
-  //
-  // That is worth one hash lookup. It is a targeted exception to the
-  // walk-the-plan rule, not a licence to start scanning the environment.
-  //
-  // The name is confirmed present in the env-var table of claude 2.1.216; what
-  // it does beyond gating the suffix check has not been verified here.
   if (ambientEnv.CLAUDE_CODE_DISABLE_1M_CONTEXT && ctx.provider?.extendedContext?.supported) {
     warnings.push(
       w(
@@ -193,11 +168,6 @@ export function inspectAmbient(
   }
 
   // 5. The tripwire for the bug this whole phase exists to kill.
-  // [1m] is read PER VARIABLE. Three suffixed tiers and one bare one is not a
-  // partial win, it is a tier that silently runs at the assumed window while
-  // everything looks configured. Structurally impossible to hit by omission now
-  // that the tier loop is a table, but a user CAN pin one tier to a model the
-  // provider does not serve at 1M, and that is worth saying out loud.
   const ec = ctx.provider?.extendedContext
   if (ec?.supported) {
     const bare: string[] = []
@@ -211,10 +181,6 @@ export function inspectAmbient(
         w(
           'medium',
           'unsuffixed-tier',
-          // `ctx.provider?.` rather than `ctx.provider.`: reaching `ec.supported`
-          // already proves `ctx.provider` is present, but that runs through an
-          // optional chain the compiler will not carry into a separate
-          // reference. The two differ only on a path that cannot be taken.
           `${ctx.provider?.label ?? ctx.provider?.id} serves an extended context ` +
             `window, but ${bare.join(', ')} is not one of the models documented ` +
             `to support it, so that tier runs at the standard window. ` +

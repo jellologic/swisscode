@@ -1,7 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildEnvPlan, materializeEnv } from '../../src/core/env.ts'
-import { TIER_ENV, TIERS } from '../../src/core/tiers.ts'
+import { buildEnvPlan } from '../../src/adapters/agents/claude-code/env.ts'
+import { materializeEnv } from '../../src/core/env-plan.ts'
+import { TIER_ENV } from '../../src/adapters/agents/claude-code/tiers.ts'
+import { TIERS } from '../../src/core/tiers.ts'
 import type { ProviderDescriptor } from '../../src/ports/provider.ts'
 import { makeDescriptor, makeProfile } from '../support/fixtures.ts'
 
@@ -174,7 +176,7 @@ test('compat flags map to env vars and unset ones are never written', () => {
 test('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is not reachable from a compat flag', async () => {
   // It also disables gateway model discovery, so it must not hide behind a
   // boolean that reads like a harmless compatibility switch.
-  const { COMPAT_ENV } = await import('../../src/core/env.ts')
+  const { COMPAT_ENV } = await import('../../src/adapters/agents/claude-code/env.ts')
   const vars = Object.values(COMPAT_ENV).map(([k]) => k)
   assert.ok(!vars.includes('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'))
 })

@@ -6,8 +6,8 @@
 // constantly. Both are silent.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { autoCompactWindow, contextWindowFor } from '../../src/core/context.ts'
-import { buildEnvPlan } from '../../src/core/env.ts'
+import { autoCompactWindow, contextWindowFor } from '../../src/adapters/agents/claude-code/context.ts'
+import { buildEnvPlan } from '../../src/adapters/agents/claude-code/env.ts'
 import { byId } from '../../src/adapters/providers/registry.ts'
 import type { ProviderDescriptor } from '../../src/ports/provider.ts'
 import { makeProfile } from '../support/fixtures.ts'

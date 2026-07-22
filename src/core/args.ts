@@ -23,22 +23,22 @@
 // Nothing else is reserved, and nothing else may be added.
 
 import { TIERS, isTier } from './tiers.ts'
-import type { Profile, ProfileOverrides } from '../ports/config-store.ts'
+import type { ProfileOverrides } from '../ports/config-store.ts'
 import type { Tier } from '../ports/provider.ts'
 
-export const SKIP_FLAG = '--dangerously-skip-permissions'
 export const CONFIG_COMMANDS = Object.freeze(['config', 'setup'])
 export const CC_PREFIX = '--cc-'
 
 /**
  * The complete set of --cc-* options. Anything else carrying the prefix is a
  * HARD ERROR rather than a passthrough token: the prefix is reserved, so a
- * typo'd `--cc-porfile` must not reach Claude Code as prompt text while the
+ * typo'd `--cc-porfile` must not reach the agent as prompt text while the
  * launch quietly uses the wrong profile.
  */
 export const CC_FLAGS = Object.freeze([
   '--cc-profile',
   '--cc-provider',
+  '--cc-agent',
   '--cc-model',
   '--cc-base-url',
   '--cc-env',
@@ -87,6 +87,7 @@ export function parseArgv(argv: string[] = []): ParsedArgv {
   let skipOverride: boolean | null = null
   let profileFlag: string | null = null
   let providerFlag: string | null = null
+  let agentFlag: string | null = null
   let baseUrlFlag: string | null = null
   // Overrides apply strictly left to right, so a bare `--cc-model X` resets all
   // four tiers and a later `--cc-model opus=Y` refines one of them.
@@ -164,6 +165,12 @@ export function parseArgv(argv: string[] = []): ParsedArgv {
       continue
     }
 
+    if (name === '--cc-agent') {
+      if (agentFlag !== null) return { ...base, error: '--cc-agent was given more than once.' }
+      agentFlag = value
+      continue
+    }
+
     if (name === '--cc-base-url') {
       if (baseUrlFlag !== null) return { ...base, error: '--cc-base-url was given more than once.' }
       baseUrlFlag = value
@@ -203,6 +210,7 @@ export function parseArgv(argv: string[] = []): ParsedArgv {
   }
 
   if (providerFlag !== null) overrides.provider = providerFlag
+  if (agentFlag !== null) overrides.agent = agentFlag
   if (baseUrlFlag !== null) overrides.baseUrl = baseUrlFlag
   if (models !== null) overrides.models = models
   if (env !== null) overrides.env = env
@@ -236,19 +244,4 @@ function profileCandidate(first: unknown): string | null {
   if (typeof first !== 'string' || first.length === 0) return null
   if (first.startsWith('-')) return null
   return first
-}
-
-/**
- * Deliberate: the scan for an already-present skip flag does NOT stop at `--`.
- * If the user typed the flag anywhere at all, prepending a second copy is
- * worse than honouring the one they wrote.
- */
-export function buildArgs(
-  profile: Profile | null | undefined,
-  passthrough: string[] = [],
-  skipOverride: boolean | null = null,
-): string[] {
-  const skip = skipOverride ?? profile?.skipPermissions ?? false
-  const alreadyPresent = passthrough.includes(SKIP_FLAG)
-  return skip && !alreadyPresent ? [SKIP_FLAG, ...passthrough] : [...passthrough]
 }

@@ -9,7 +9,8 @@
 // worse bug than anything it detects.
 
 import { existsSync } from 'node:fs'
-import { buildEnvPlan } from '../core/env.ts'
+import { buildEnvPlan } from '../adapters/agents/claude-code/env.ts'
+import { claudeCode } from '../adapters/agents/claude-code/index.ts'
 import { applyOverrides } from '../core/overrides.ts'
 import { resolveProfile } from '../core/profile.ts'
 import {
@@ -25,7 +26,7 @@ import {
   renderText,
   staticChecks,
   summarize,
-} from '../core/doctor.ts'
+} from '../adapters/agents/claude-code/doctor.ts'
 import { bindingEntries, pruneBindings } from '../core/binding.ts'
 import { createProbe } from '../adapters/doctor/probe.ts'
 import type { LaunchDeps } from './launch-root.ts'
@@ -67,7 +68,7 @@ export async function runDoctor({
   now = () => Date.now(),
   probe = null,
 }: RunDoctorOptions): Promise<DoctorRun> {
-  const { store, registry, proc } = deps
+  const { store, registry, agents, proc } = deps
   const ambient = proc.env()
   const loaded = store.load()
   const notes = []
@@ -83,13 +84,16 @@ export async function runDoctor({
   const profile = selection.profile ? applyOverrides(selection.profile, selection.overrides) : null
   const provider = profile ? registry.byId(profile.provider) : null
   const plan = profile ? buildEnvPlan(profile, provider, ambient) : null
+  // The doctor validates the selected agent's binary; the endpoint probe below
+  // is shared (every agent reaches the same Anthropic-compatible endpoint).
+  const agent = agents.byId(profile?.agent ?? claudeCode.id) ?? claudeCode
 
   let binary: { path: string | null; error: string | null | undefined } = {
     path: null,
     error: null,
   }
   try {
-    binary = { path: proc.resolveBinary(), error: null }
+    binary = { path: proc.resolveBinary(agent.binary), error: null }
   } catch (err) {
     // Property read preserved verbatim — see the note in the UI wizard's
     // `persist`. Neither `instanceof Error` narrowing nor a `?? null` here:

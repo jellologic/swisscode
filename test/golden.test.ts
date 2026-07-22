@@ -30,7 +30,7 @@
 //                               is meant to prevent, not a second fix.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildEnvPlan } from '../src/core/env.ts'
+import { buildEnvPlan } from '../src/adapters/agents/claude-code/env.ts'
 import { PROVIDERS, byId } from '../src/adapters/providers/registry.ts'
 
 const AMBIENT = Object.freeze({

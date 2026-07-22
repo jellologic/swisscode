@@ -125,8 +125,11 @@ test('the UI bundle is reachable only through a dynamic import', () => {
 })
 
 test('the launch path is small enough to keep auditing by hand', () => {
+  // Bumped from 30 when issue #19 put the agent-CLI seam on the launch path: the
+  // agent registry, three adapters (claude-code/kilo/opencode) and the Claude
+  // Code lowering that moved out of core/. Still small enough to read in a sitting.
   const { files } = launchClosure()
-  assert.ok(files.length < 30, `launch path has grown to ${files.length} modules`)
+  assert.ok(files.length < 40, `launch path has grown to ${files.length} modules`)
 })
 
 function walk(dir: string): string[] {
@@ -204,6 +207,25 @@ function runtimeResidue(file: string): string {
     .replace(/^\s*\/\/.*$/gm, '')
     .trim()
 }
+
+test('core/ and ports/ name no ANTHROPIC_ or CLAUDE_CODE_ variable (issue #19 purity)', () => {
+  // The point of the agent-CLI seam: the Claude-Code dialect lives only in
+  // adapters/agents/claude-code (and the type-only ports/claude-code.ts, which
+  // erases to nothing). Scanned POST-ERASURE, so a comment that MENTIONS a
+  // variable is fine — only emitted code that NAMES one fails, which is the
+  // property that actually matters.
+  const dirs = [join(ROOT, 'src', 'core'), join(ROOT, 'src', 'ports')]
+  for (const dir of dirs) {
+    for (const file of walk(dir)) {
+      const m = runtimeResidue(file).match(/ANTHROPIC_[A-Z0-9_]*|CLAUDE_CODE_[A-Z0-9_]*/)
+      assert.equal(
+        m,
+        null,
+        `${relative(ROOT, file)} names "${m?.[0]}" in emitted code — that dialect belongs to the Claude Code adapter`,
+      )
+    }
+  }
+})
 
 test('ports/ carry no runtime behaviour at all', () => {
   const files = walk(join(ROOT, 'src', 'ports'))

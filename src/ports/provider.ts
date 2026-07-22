@@ -3,27 +3,25 @@
 // Ports are type-only modules (`export {}` at runtime). Descriptors are plain
 // data; conformance is structural at compile time. test/architecture.test.ts
 // asserts the residue is exactly `export {}`.
+//
+// This module is NEUTRAL: it must not spell an ANTHROPIC_* or CLAUDE_CODE_*
+// string. The Claude-Code-shaped types a descriptor needs (which variable
+// carries the credential, the gateway compat switches) live in
+// ports/claude-code.ts and are imported below. `credentialEnv` and `compat`
+// stay on the descriptor because a provider preset IS an Anthropic-compatible
+// endpoint; a non-Claude-Code agent adapter simply ignores them and reads the
+// neutral LaunchIntent instead (see ports/agent.ts).
 
-// AGENT-CLI SEAM (issue #19)
-//
-// Everything in THIS BLOCK is Claude-Code-shaped and only Claude-Code-shaped.
-// It is named so, and grouped so, because issue #19 extracts an AgentCliPort to
-// let other agent CLIs (opencode) be swapped in — and this block is where that
-// cut falls. Nothing below this block, and nothing in core/, may assume these
-// names.
-//
-// The rule this block exists to keep visible: a type that spells an ANTHROPIC_*
-// or CLAUDE_CODE_* string belongs HERE, not in the neutral domain. A descriptor
-// says "this gateway needs the adaptive-thinking workaround"; it never says
-// "set CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1". The mapping from the former to
-// the latter lives in core/env.ts and stays a single table.
+import type { ClaudeCodeCompatFlags, ClaudeCodeCredentialEnv } from './claude-code.ts'
 
 /**
- * Claude Code's four model tiers.
+ * The four model tiers a profile can pin.
  *
- * SEAM: these are Claude Code's names, and each maps 1:1 to an
- * ANTHROPIC_DEFAULT_*_MODEL variable (the table is core/tiers.ts). A different
- * agent CLI would bring its own set, so this union moves with the AgentCliPort.
+ * NEUTRAL vocabulary: this is how a swisscode PROFILE expresses models,
+ * independent of which agent CLI runs. The Claude Code adapter maps each tier
+ * 1:1 to an ANTHROPIC_DEFAULT_*_MODEL variable (its own table); a single-slot
+ * CLI like Kilo maps opus to its one model and warns about the rest. The
+ * neutral LaunchIntent (ports/agent.ts) carries a `TierRecord` of resolved ids.
  *
  * FOUR, exhaustively. A missing tier is the bug that shipped in 0.1.0: `[1m]`
  * is read PER VARIABLE, so one unsuffixed tier silently runs at the assumed
@@ -46,69 +44,16 @@ export type Tier = 'opus' | 'sonnet' | 'haiku' | 'fable'
 export type TierRecord<T> = { [K in Tier]: T }
 
 /**
- * Which variable carries the credential.
- *
- * SEAM: both spellings are Anthropic's. The choice is load-bearing rather than
- * cosmetic — ANTHROPIC_API_KEY triggers Claude Code's one-time interactive
- * approval prompt, which is why most gateway presets use the auth token.
- */
-export type ClaudeCodeCredentialEnv = 'ANTHROPIC_AUTH_TOKEN' | 'ANTHROPIC_API_KEY'
-
-/**
- * Gateway compatibility switches. Each maps to exactly one env var; the mapping
- * lives in core/env.ts so a descriptor never spells a variable name and a
- * typo'd name cannot become a silent no-op.
- *
- * SEAM: every one of these clears a symptom of running CLAUDE CODE against a
- * third-party gateway, and each maps to a `CLAUDE_CODE_` or `API_` variable.
- *
- * A provider ships these as defaults. A profile may override any single key —
- * `"compat": {"disableAdaptiveThinking": true}` in config.json — and a profile
- * setting one to `false` actively unsets the variable rather than leaving one
- * inherited from the shell.
- *
- * Each flag names the symptom it clears, because that is the only thing that
- * makes it possible to decide whether you need one:
- *
- *   disableExperimentalBetas  HTTP 400 "Extra inputs are not permitted"
- *   disableAdaptiveThinking   HTTP 400 "Input tag 'adaptive' found"
- *   skipFastModeOrgCheck      fast mode reports "disabled by organization"
- *   enableToolSearch          MCP tool search is off by default off-first-party
- *   forceIdleTimeoutOff       long stalls on slow or locally hosted models
- *   dropAttributionHeader     poor prompt-cache hit rate through a gateway
- *
- * There is deliberately NO flag for CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC.
- * It also disables gateway model discovery, so it must not be reachable from a
- * boolean that reads like a harmless compatibility switch.
- */
-export type ClaudeCodeCompatFlag =
-  | 'disableExperimentalBetas'
-  | 'disableAdaptiveThinking'
-  | 'skipFastModeOrgCheck'
-  | 'enableToolSearch'
-  | 'forceIdleTimeoutOff'
-  | 'dropAttributionHeader'
-
-/**
- * A set of compat switches. Every key optional and every key a known flag: a
- * misspelled flag in a descriptor or a profile is now a compile error rather
- * than a silent no-op that core/env.ts skips because the lookup missed.
- */
-export type ClaudeCodeCompatFlags = Partial<Record<ClaudeCodeCompatFlag, boolean>>
-
-// end AGENT-CLI SEAM
-
-/**
  * A model family that genuinely supports an extended context window.
  * `models` lists BARE ids; the `[1m]` suffix is derived at env-build time by
- * core/context.ts and must never be typed into a descriptor.
+ * the Claude Code adapter and must never be typed into a descriptor.
  *
- * DELIBERATELY NEUTRAL, and it stays on this side of the seam. This declares a
- * fact about a MODEL ("these ids serve a 1M window"), not a fact about Claude
- * Code. The `[1m]` spelling is the Claude-Code-shaped half and it lives in
- * core/context.ts, which is the only module that renders it. Keeping the split
- * here is what lets a future AgentCliPort reuse the capability declaration
- * unchanged while bringing its own way of asking for the wider window.
+ * DELIBERATELY NEUTRAL. This declares a fact about a MODEL ("these ids serve a
+ * 1M window"), not a fact about Claude Code. The `[1m]` spelling is the
+ * Claude-Code-shaped half and it lives in the Claude Code adapter's context.ts,
+ * which is the only module that renders it. Keeping the split here is what lets
+ * a different agent adapter reuse the capability declaration unchanged while
+ * bringing its own way of asking for the wider window.
  *
  * This is a CAPABILITY DECLARATION, not a string transformation. A model earns
  * the suffix by being named here, which is why "apply [1m] only where the model
@@ -152,7 +97,7 @@ export type ProviderHints = {
 export type ProviderDescriptor = {
   id: string
   label: string
-  /** null = actively CLEAR ANTHROPIC_BASE_URL rather than inherit the shell's */
+  /** null = actively CLEAR the base URL rather than inherit the shell's */
   baseUrl: string | null
   /** the wizard prompts for the URL */
   askBaseUrl?: boolean
@@ -162,10 +107,10 @@ export type ProviderDescriptor = {
    * BARE ids, never [1m].
    *
    * `Partial`, not `TierRecord`: a descriptor pinning NO models is a real and
-   * correct state (anthropic-direct and `custom` both ship `{}`, so Claude Code
-   * picks its own). Exhaustiveness is required of the RESOLVED map that
-   * core/env.ts builds — see `ResolvedModels` — because that is the one that
-   * has to answer for every variable.
+   * correct state (anthropic-direct and `custom` both ship `{}`, so the agent
+   * picks its own). Exhaustiveness is required of the RESOLVED map that the
+   * Claude Code adapter builds — see `ResolvedModels` — because that is the one
+   * that has to answer for every variable.
    */
   defaultModels: Partial<Record<Tier, string>>
   /** vars to SET */
@@ -182,7 +127,7 @@ export type ProviderDescriptor = {
 }
 
 /**
- * The env-var assignment core/env.ts resolves for every tier.
+ * The env-var assignment the Claude Code adapter resolves for every tier.
  *
  * EXHAUSTIVE keys, nullable values — and the two are not the same statement.
  * Every tier must be ANSWERED FOR (that is the 0.1.0 fix); the answer is

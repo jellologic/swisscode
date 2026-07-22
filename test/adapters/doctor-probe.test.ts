@@ -11,6 +11,7 @@ import {
 } from '../../src/adapters/doctor/probe.ts'
 import { runDoctor } from '../../src/composition/doctor-root.ts'
 import { registry } from '../../src/adapters/providers/registry.ts'
+import { registry as agents } from '../../src/adapters/agents/registry.ts'
 import type { ProbeFetch, ProbeResponse } from '../../src/adapters/doctor/probe.ts'
 import type { ProbeRequest, ProbeResult } from '../../src/ports/doctor.ts'
 import type { State } from '../../src/ports/config-store.ts'
@@ -184,6 +185,7 @@ function deps(over: { state?: State; env?: EnvMap } = {}) {
         modes: () => ({ dir: 0o700, file: 0o600 }),
       },
       registry,
+      agents,
       proc: {
         env: () => over.env ?? {},
         cwd: () => '/work',
