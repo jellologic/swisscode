@@ -36,6 +36,9 @@ const MIME: Readonly<Record<string, string>> = Object.freeze({
   '.ico': 'image/x-icon',
 })
 
+/** Extensions read as bytes rather than utf8. */
+const BINARY_EXT = new Set(['.woff2', '.png', '.ico'])
+
 export type WebServerOptions = ApiDeps & {
   /** 0 lets the OS choose, which is the default: a fixed port is squattable. */
   port?: number
@@ -218,7 +221,20 @@ export function startWebServer(options: WebServerOptions): Promise<RunningServer
     if (assetDir && url.pathname !== '/') {
       const file = resolveAsset(assetDir, url.pathname)
       if (file) {
-        const type = MIME[extname(file).toLowerCase()] ?? 'application/octet-stream'
+        const ext = extname(file).toLowerCase()
+        const type = MIME[ext] ?? 'application/octet-stream'
+        // Binary assets are streamed as-is; text goes through `send` so it
+        // picks up the security headers with a correct content-length.
+        if (BINARY_EXT.has(ext)) {
+          const buf = readFileSync(file)
+          res.writeHead(200, {
+            ...SECURITY_HEADERS,
+            'content-type': type,
+            'content-length': buf.length,
+          })
+          res.end(buf)
+          return
+        }
         return send(res, 200, readFileSync(file, 'utf8'), type)
       }
     }

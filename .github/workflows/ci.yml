@@ -67,8 +67,16 @@ jobs:
         run: npm ci
 
       # `npm test` is the whole gate on purpose: tsc --noEmit (which is what
-      # runs test/ports.conformance.ts), then the two-stage build, then
-      # node --test over the suite. Splitting it into separate steps would let
-      # the three UI suites run against a stale dist/.
+      # runs test/ports.conformance.ts), then the build, then node --test over
+      # the suite. Splitting it into separate steps would let the three UI
+      # suites run against a stale dist/.
       - name: Test
         run: npm test
+
+      # What users actually download. Shipping the web UI means everyone gets a
+      # React bundle they may never open; the budget keeps that a decision that
+      # is re-made on every PR rather than one that drifts. One cell is enough —
+      # the tarball is identical across the matrix.
+      - name: Size budget
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 24
+        run: npm run size

@@ -9,9 +9,12 @@
 // allowed to reach.
 import { execFileSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import * as esbuild from 'esbuild'
 
 const TSC = 'node_modules/typescript/bin/tsc'
+const PANDA = '../node_modules/@pandacss/dev/bin.js'
+const VITE = '../node_modules/vite/bin/vite.js'
 
 // Stale output is worse than no output: a deleted module would otherwise linger
 // in dist/ and keep resolving.
@@ -44,4 +47,33 @@ await esbuild.build({
   external: ['ink', 'react', 'react/jsx-runtime', 'ink-select-input', 'ink-text-input'],
 })
 
-console.log(`built dist/ (tsc) and dist/ui.js (esbuild, from ${uiRoot})`)
+// Stage 3. The web UI, built by Vite into dist/web.
+//
+// Its whole toolchain — vite, react-dom, Panda — is a devDependency and none of
+// it ships: `files` is bin/dist/README, so users receive the emitted assets and
+// nothing that produced them. The runtime dependency count is unchanged.
+//
+// Skipped when the toolchain is absent so `npm ci --omit=dev` and a published
+// tarball rebuild both still work; the server falls back to a page that says so
+// rather than 404ing.
+const webRoot = 'web'
+let webBuilt = false
+if (existsSync(join(webRoot, 'node_modules', '.bin', 'vite')) || existsSync('node_modules/vite')) {
+  // Panda is CODEGEN, and it has to run before Vite: the generated
+  // styled-system/ is what the app imports, and its PostCSS plugin is what
+  // fills the @layer declarations. Skipping it produces a build that succeeds
+  // and a page that renders completely unstyled.
+  execFileSync(process.execPath, [PANDA, 'codegen', '--config', 'panda.config.ts'], {
+    cwd: webRoot,
+    stdio: 'inherit',
+  })
+  execFileSync(process.execPath, [VITE, 'build'], { cwd: webRoot, stdio: 'inherit' })
+  webBuilt = true
+} else {
+  console.log('skipped dist/web (frontend toolchain not installed)')
+}
+
+console.log(
+  `built dist/ (tsc), dist/ui.js (esbuild, from ${uiRoot})` +
+    (webBuilt ? ' and dist/web (vite)' : ''),
+)

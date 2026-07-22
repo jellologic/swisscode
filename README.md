@@ -304,6 +304,42 @@ stderr when it is on — it is not shipped on by default, because a preset that
 quietly removed a feature to dodge an upstream bug would be the kind of silent
 behaviour this tool exists to avoid.
 
+## Web UI
+
+The CLI is not the only way in. `swisscode config web` serves a local
+configuration UI — profiles, providers, agents, model tiers, compatibility
+flags and settings, everything the CLI can express:
+
+```sh
+swisscode config web              # prints a URL; Ctrl-C to stop
+swisscode config web --port 7391
+```
+
+It is a **singleton by construction**: the port bind is the mutex, so a second
+instance tells you one is already running rather than racing it. It binds
+`127.0.0.1` only, never `0.0.0.0`.
+
+**Your keys never reach the browser.** The page is told whether a key is *set*,
+never what it is, and editing is write-only: leaving the field blank keeps the
+stored key, and clearing one is a separate, explicit action. That is the same
+rule `config doctor` follows.
+
+Because a browser will talk to `localhost` on behalf of any page you have open,
+the server checks the `Host` header against an exact allowlist (this is the
+DNS-rebinding defence — the connection genuinely comes from loopback, so nothing
+at the socket level can tell an attack apart), validates `Origin`, and requires a
+per-run token in a custom header, which forces a CORS preflight it never answers.
+
+Edits are checked against the revision they were based on, so a browser tab left
+open while you run `swisscode config work` in a terminal gets a conflict rather
+than silently overwriting it.
+
+You can also define **your own providers** here — a gateway or local server
+swisscode ships no preset for. They are validated on save with the same rules the
+shipped presets are tested against: no `/v1` suffix, no hand-typed `[1m]`, real
+compatibility flags. Shipped presets stay read-only, and a custom provider cannot
+shadow one.
+
 ## Agents
 
 The **provider** is which model backend you talk to; the **agent** is which
