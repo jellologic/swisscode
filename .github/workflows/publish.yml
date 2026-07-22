@@ -1,0 +1,56 @@
+name: Publish to npm
+
+# Trusted publishing (OIDC): releases carry NO stored credential. npm verifies
+# this workflow's identity against the trusted publisher configured for
+# `swisscode` on npmjs.com, so there is deliberately no NPM_TOKEN secret in the
+# repo. See docs/RELEASING.md for the one-time npmjs.com setup.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# id-token: write is what lets npm mint the OIDC assertion and attach a build
+# provenance attestation. contents: read is all the checkout needs.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1; the runner's bundled npm can lag.
+      - name: Use a trusted-publishing-capable npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The publish gate. `npm test` runs tsc --noEmit, the build, and the full
+      # node --test suite; a red tree never reaches the registry.
+      - name: Test
+        run: npm test
+
+      # A mistagged release must never ship the wrong version. The tag drives the
+      # release, so it has to agree with what package.json will actually publish.
+      - name: Verify the tag matches package.json
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag v$tag does not match package.json version $pkg"
+            exit 1
+          fi
+
+      # No NODE_AUTH_TOKEN: trusted publishing authenticates via OIDC, and
+      # --provenance attaches the signed build attestation.
+      - name: Publish with provenance
+        run: npm publish --provenance --access public
