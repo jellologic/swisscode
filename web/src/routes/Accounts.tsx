@@ -1,7 +1,29 @@
 import { useState } from 'react'
 import { css } from '../../styled-system/css'
 import { ApiError, api, type Bootstrap, type ProviderAccount, type UsageReport } from '../api'
-import { Banner, Button, Dot, Empty, Field, Panel, inputStyle, monoInput } from '../ui'
+import {
+  Badge,
+  Banner,
+  Button,
+  Code,
+  DataList,
+  DataRow,
+  Dot,
+  Empty,
+  Field,
+  FormActions,
+  Inline,
+  Mono,
+  Note,
+  PageHeader,
+  Panel,
+  SectionLabel,
+  SegmentedControl,
+  Stack,
+  inputStyle,
+  monoInput,
+  selectStyle,
+} from '../ui'
 // The SAME decisions the CLI and the API make, imported rather than restated.
 // core/ is pure — no I/O, no node builtins — so it bundles into the browser as
 // happily as it compiles for the launch path.
@@ -60,6 +82,64 @@ function credentialLine(account: ProviderAccount, login: string | null): string 
       return 'no key'
   }
 }
+
+/* --------------------------------------------------------------- row layout */
+
+/**
+ * The row's lower block: three columns, one fact each, the same fact every row.
+ *
+ * ONE TEMPLATE FOR BOTH LINES is the whole idea. The measured figures are extra
+ * CELLS of this grid rather than a paragraph appended underneath, so `5h` lands
+ * under the credential it was read from and every account's percentages sit on
+ * the same two vertical edges. That is what turns five facts on two ragged
+ * lines into something read down a column — and it is why measuring adds one
+ * grid row to every account at once instead of a stray third line to some.
+ */
+const rowGrid = css({
+  display: 'grid',
+  gridTemplateColumns: '[7rem 1fr 1fr]',
+  columnGap: '4',
+  rowGap: '1.5',
+  alignItems: 'baseline',
+  // Monospace for the whole block, not just the ids: every cell in it is an
+  // identifier or a figure, and a column of percentages set in a proportional
+  // face does not line up no matter what the grid does.
+  textStyle: 'code',
+  // A grid item's automatic minimum size is its MIN-CONTENT, so one long login
+  // — an email is a single unbreakable word — would widen its `1fr` track and
+  // knock the column out of line for every other row. Zeroing the minimum is
+  // what keeps the tracks equal; the wrap is what keeps the text inside them.
+  '& > *': { minW: '0', overflowWrap: 'break-word' },
+})
+
+/** Measured figures sit one step out of the tertiary line they share. */
+const measuredCell = css({ color: 'content.secondary' })
+/** The one number worth finding at a glance. */
+const figure = css({ color: 'content.primary', fontWeight: 'medium' })
+const windowLabel = css({ color: 'content.tertiary' })
+/** An account with nothing to measure says so once, across the whole grid. */
+const usageNote = css({ gridColumn: '[1 / -1]', color: 'content.tertiary' })
+/**
+ * The conflict is the only sentence on this screen allowed a status colour.
+ *
+ * It stays in the credential cell rather than becoming a page banner, because
+ * the row is where the problem is and a banner would say "something is wrong"
+ * without saying which of eight accounts. The dot and the badge do the finding;
+ * this does the explaining, and neither needs to shout to be the only red on
+ * the page.
+ */
+const conflictCell = css({ color: 'danger.default' })
+// No `fontWeight` here: `textStyle: 'meta'` already sets 400 on this span, so
+// an override next to it would be overriding the value with itself.
+const accountLabel = css({ textStyle: 'meta', color: 'content.tertiary' })
+
+const CREDENTIAL_MODES = [
+  { id: 'key', label: 'API key' },
+  { id: 'session', label: 'Existing Claude Code login' },
+] as const
+
+/** Ties the visible caption to the group it names. One editor is open at a time. */
+const MODE_LABEL_ID = 'account-credential-mode'
 
 export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Promise<void> }) {
   const accounts = Object.entries(data.state.providerAccounts ?? {})
@@ -142,14 +222,13 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
     const isNew = !data.state.providerAccounts?.[editing]
     const provider = data.providers.find((p) => p.id === draft.provider)
     const stored = data.state.providerAccounts?.[editing]
+    const mode: 'key' | 'session' = draft.configDir ? 'session' : 'key'
     return (
       <>
-        <div className={css({ display: 'flex', alignItems: 'center', gap: '3', mb: '5' })}>
-          <Button onClick={() => setEditing(null)}>← Back</Button>
-          <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>
-            {isNew ? 'New account' : `Account · ${editing}`}
-          </h1>
-        </div>
+        <PageHeader
+          title={isNew ? 'New account' : `Account · ${editing}`}
+          onBack={() => setEditing(null)}
+        />
         {error ? <Banner tone="danger">{error}</Banner> : null}
 
         <Panel title="Identity">
@@ -168,7 +247,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
           </Field>
           <Field label="Provider">
             <select
-              className={inputStyle}
+              className={selectStyle}
               value={String(draft.provider ?? '')}
               onChange={(e) => put('provider', e.target.value)}
             >
@@ -196,113 +275,140 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
         </Panel>
 
         <Panel title="Credential">
-          <Field
-            label="How this account authenticates"
-            hint="A key, or a login the agent already performed. Never both — the server refuses that rather than picking one."
-          >
-            <select
-              className={inputStyle}
-              value={draft.configDir ? 'session' : 'key'}
-              onChange={(e) => put('configDir', e.target.value === 'session' ? '~/.claude' : '')}
-            >
-              <option value="key">API key</option>
-              <option value="session">Existing Claude Code login</option>
-            </select>
-          </Field>
-
-          {draft.configDir ? (
-            <>
-              <Field
-                label="Session directory"
-                hint="The CLAUDE_CONFIG_DIR this account launches with. ~/.claude is the login you already have; a separate path is a separate account."
-              >
-                <input
-                  className={monoInput}
-                  value={field('configDir')}
-                  onChange={(e) => put('configDir', e.target.value)}
-                  placeholder="~/.claude"
-                />
-              </Field>
+          <Stack gap="4">
+            {/*
+              A choice of MODE, so a segmented control rather than a select: the
+              two answers are the two shapes an account can have, and a closed
+              menu that has to be opened to learn what the alternative even is
+              hides the one decision this panel exists to make.
+            */}
+            <Stack gap="2" align="start">
               {/*
-                THE ONE THING THIS PAGE CANNOT DO. `/login` is an interactive
-                OAuth flow inside the agent's own TUI; a browser tab cannot
-                drive it. Pointing an account at an empty directory here is
-                legal and silently useless until someone logs in there, so the
-                terminal command that does it is named rather than implied.
+                The caption is POINTED AT rather than repeated. A `SegmentedControl`
+                is a `role="group"`, not a form control, so there is no `htmlFor`
+                that could reach it; an `aria-label` saying the same words is a
+                second copy that drifts, and it leaves the visible caption
+                naming nothing.
               */}
-              <Banner tone="warn">
-                Logging in happens in a terminal, not here — run{' '}
-                <code>swisscode config accounts login {editing || '<name>'}</code> and complete{' '}
-                <code>/login</code> inside the agent. This page only points the account at a
-                directory.
-              </Banner>
-              {!isNew && data.logins ? (
-                <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
-                  currently: {data.logins[editing] ?? 'not logged in'}
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <Field
-                label={stored?.hasKey ? 'Replace stored key' : 'API key'}
-                hint={
-                  provider?.hints.keyHint ??
-                  'Write-only: the key is never sent to this page. Leave blank to keep the stored one.'
-                }
-              >
-                <input
-                  className={monoInput}
-                  type="password"
-                  value={field('apiKey')}
-                  onChange={(e) => put('apiKey', e.target.value)}
-                  placeholder={stored?.hasKey ? '•••••••• stored' : 'paste key'}
-                />
-              </Field>
-              <Field
-                label="…or read it from an environment variable"
-                hint="Keeps the secret out of config.json entirely."
-              >
-                <input
-                  className={monoInput}
-                  value={field('apiKeyFromEnv')}
-                  onChange={(e) => put('apiKeyFromEnv', e.target.value)}
-                  placeholder="MY_TOKEN"
-                />
-              </Field>
-            </>
-          )}
+              <SectionLabel id={MODE_LABEL_ID}>How this account authenticates</SectionLabel>
+              <SegmentedControl
+                labelledBy={MODE_LABEL_ID}
+                options={CREDENTIAL_MODES}
+                value={mode}
+                onChange={(id) => put('configDir', id === 'session' ? '~/.claude' : '')}
+              />
+              <Note>
+                A key, or a login the agent already performed. Never both — the server refuses that
+                rather than picking one.
+              </Note>
+            </Stack>
+
+            {/*
+              A plain wrapper, deliberately: `Field` owns its own bottom margin,
+              so a run of them must NOT become `Stack` children or every gap is
+              counted twice. The Stack above spaces the two groups, not the
+              fields inside this one.
+            */}
+            <div>
+              {mode === 'session' ? (
+                <>
+                  <Field
+                    label="Session directory"
+                    hint="The CLAUDE_CONFIG_DIR this account launches with. ~/.claude is the login you already have; a separate path is a separate account."
+                  >
+                    <input
+                      className={monoInput}
+                      value={field('configDir')}
+                      onChange={(e) => put('configDir', e.target.value)}
+                      placeholder="~/.claude"
+                    />
+                  </Field>
+                  {/*
+                    THE ONE THING THIS PAGE CANNOT DO. `/login` is an interactive
+                    OAuth flow inside the agent's own TUI; a browser tab cannot
+                    drive it. Pointing an account at an empty directory here is
+                    legal and silently useless until someone logs in there, so the
+                    terminal command that does it is named rather than implied.
+                  */}
+                  <Banner tone="warn">
+                    Logging in happens in a terminal, not here — run{' '}
+                    <Code>swisscode config accounts login {editing || '<name>'}</Code> and complete{' '}
+                    <Code>/login</Code> inside the agent. This page only points the account at a
+                    directory.
+                  </Banner>
+                  {!isNew && data.logins ? (
+                    <Note>
+                      currently: <Mono>{data.logins[editing] ?? 'not logged in'}</Mono>
+                    </Note>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <Field
+                    label={stored?.hasKey ? 'Replace stored key' : 'API key'}
+                    hint={
+                      provider?.hints.keyHint ??
+                      'Write-only: the key is never sent to this page. Leave blank to keep the stored one.'
+                    }
+                  >
+                    <input
+                      className={monoInput}
+                      type="password"
+                      value={field('apiKey')}
+                      onChange={(e) => put('apiKey', e.target.value)}
+                      placeholder={stored?.hasKey ? '•••••••• stored' : 'paste key'}
+                    />
+                  </Field>
+                  <Field
+                    label="…or read it from an environment variable"
+                    hint="Keeps the secret out of config.json entirely."
+                  >
+                    <input
+                      className={monoInput}
+                      value={field('apiKeyFromEnv')}
+                      onChange={(e) => put('apiKeyFromEnv', e.target.value)}
+                      placeholder="MY_TOKEN"
+                    />
+                  </Field>
+                </>
+              )}
+            </div>
+          </Stack>
         </Panel>
 
-        <div className={css({ display: 'flex', gap: '2', mb: '10' })}>
+        <FormActions>
           <Button variant="primary" onClick={() => void save(editing)} disabled={!editing.trim()}>
             {isNew ? 'Create account' : 'Save changes'}
           </Button>
           <Button onClick={() => setEditing(null)}>Cancel</Button>
-        </div>
+        </FormActions>
       </>
     )
   }
 
   return (
     <>
-      <div className={css({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: '5' })}>
-        <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>Accounts</h1>
-        <div className={css({ display: 'flex', gap: '2' })}>
-          {/*
-            Measuring is a BUTTON rather than something the page does on load.
-            Each session account costs a keychain read — which on macOS can pop
-            an unlock dialog — plus a request to Anthropic. A screen that did
-            that every time you opened it would be indefensible.
-          */}
-          <Button onClick={() => void measure()} disabled={measuring}>
-            {measuring ? 'Measuring…' : 'Measure usage'}
-          </Button>
-          <Button variant="primary" onClick={() => open(null)}>
-            New account
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Accounts"
+        meta={`${accounts.length} account${accounts.length === 1 ? '' : 's'}`}
+        description="Who pays: a provider plus the credential that authenticates against it — either an API key, or a directory holding a login the agent already performed. Profiles name one or more."
+        actions={
+          <>
+            {/*
+              Measuring is a BUTTON rather than something the page does on load.
+              Each session account costs a keychain read — which on macOS can pop
+              an unlock dialog — plus a request to Anthropic. A screen that did
+              that every time you opened it would be indefensible.
+            */}
+            <Button onClick={() => void measure()} disabled={measuring}>
+              {measuring ? 'Measuring…' : 'Measure usage'}
+            </Button>
+            <Button variant="primary" onClick={() => open(null)}>
+              New account
+            </Button>
+          </>
+        }
+      />
       {error ? <Banner tone="danger">{error}</Banner> : null}
       {warnings.map((w) => (
         <Banner key={w} tone="warn">
@@ -315,79 +421,104 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
           in, and its token unexpired, to report a window.
         </Banner>
       ) : null}
-      {usage?.checkedAt ? (
-        <div className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '4'})}>
-          Measured {new Date(usage.checkedAt).toLocaleTimeString()}. “% left” is the tighter of the two
-          windows, never their average — an account at 5% of its 5-hour window and 95% of its weekly
-          one has almost nothing left. Profiles using the <code>usage</code> strategy now select on
-          these figures.
-        </div>
-      ) : null}
 
-      <Panel title={`${accounts.length} account${accounts.length === 1 ? '' : 's'}`}>
+      {/*
+        What the figures mean belongs to the LIST, not to the page, so it is the
+        panel's description: it appears directly above the rows it explains and
+        disappears with them, instead of floating as a stray paragraph the
+        moment somebody clicks Measure.
+      */}
+      <Panel
+        flush
+        description={
+          usage?.checkedAt ? (
+            <>
+              Measured {new Date(usage.checkedAt).toLocaleTimeString()}. “% left” is the tighter of
+              the two windows, never their average — an account at 5% of its 5-hour window and 95%
+              of its weekly one has almost nothing left. Profiles using the <Code>usage</Code>{' '}
+              strategy now select on these figures.
+            </>
+          ) : undefined
+        }
+      >
         {accounts.length === 0 ? (
           <Empty>No accounts yet. An account is a provider plus the credential that pays for it.</Empty>
         ) : (
-          accounts.map(([name, a]) => {
-            // The reverse index: a profile lists its accounts, but only this
-            // view can say which profiles an account backs — the question you
-            // have before deleting one or rotating a key.
-            const usedBy = accountsUsedBy(data.state.profiles, name)
-            const login = a.configDir ? (data.logins?.[name] ?? null) : null
-            const measured = usage?.accounts.find((m) => m.name === name)
-            return (
-              <div
-                key={name}
-                className={css({
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '3',
-                  py: '2.5',
-                  borderBottom: '[1px solid]',
-                  borderColor: 'border.subtle',
-                  _last: { borderBottom: 'none' },
-                })}
-              >
-                {/*
-                  A session account is "ready" when someone has LOGGED IN there,
-                  not when a path is set. A directory nobody has logged into
-                  looks identical in config.json and fails only after execve, so
-                  the dot tracks the login rather than the field.
-                */}
-                <Dot tone={ready(a, login) ? 'ok' : 'neutral'} />
-                <div className={css({ flex: '1', minW: '0' })}>
-                  <div className={css({ textStyle: 'body', fontWeight: 'medium' })}>
-                    {name}
-                    {a.label ? (
-                      <span className={css({ color: 'content.tertiary', fontWeight: 'normal', ml: '2', textStyle: 'meta' })}>
-                        {a.label}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
-                    {a.provider}
-                    {' · '}
-                    {credentialLine(a, login)}
-                    {' · '}
-                    {usedBy.length > 0 ? `used by ${usedBy.join(', ')}` : 'unused'}
-                  </div>
-                  {measured ? (
-                    <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono', mt: '1' })}>
-                      {measured.mode === 'key'
-                        ? 'key account — no subscription window'
-                        : measured.remaining === null
-                          ? 'could not be measured'
-                          : `${measured.remaining}% left · 5h ${formatWindow(measured.fiveHour)} · 7d ${formatWindow(measured.sevenDay)}`}
+          <DataList>
+            {accounts.map(([name, a]) => {
+              // The reverse index: a profile lists its accounts, but only this
+              // view can say which profiles an account backs — the question you
+              // have before deleting one or rotating a key.
+              const usedBy = accountsUsedBy(data.state.profiles, name)
+              const login = a.configDir ? (data.logins?.[name] ?? null) : null
+              const measured = usage?.accounts.find((m) => m.name === name)
+              const conflict = credentialSource(a) === 'conflict'
+              return (
+                <DataRow
+                  key={name}
+                  align="start"
+                  leading={
+                    /*
+                      Three states, not two. A session account is "ready" when
+                      someone has LOGGED IN there, not when a path is set — a
+                      directory nobody has logged into looks identical in
+                      config.json and fails only after execve, so the dot tracks
+                      the login rather than the field. An account holding BOTH a
+                      key and a login is not merely unready, it is misconfigured
+                      in a way that silently ignores one of them, and a grey dot
+                      would file that under "not set up yet".
+                    */
+                    <Dot tone={conflict ? 'danger' : ready(a, login) ? 'ok' : 'neutral'} />
+                  }
+                  title={
+                    <Inline gap="2" align="baseline" wrap>
+                      <span>{name}</span>
+                      {a.label ? <span className={accountLabel}>{a.label}</span> : null}
+                      {conflict ? <Badge tone="danger">conflict</Badge> : null}
+                    </Inline>
+                  }
+                  meta={
+                    <div className={rowGrid}>
+                      <div>{a.provider}</div>
+                      <div className={conflict ? conflictCell : undefined}>
+                        {credentialLine(a, login)}
+                      </div>
+                      <div>{usedBy.length > 0 ? `used by ${usedBy.join(', ')}` : 'unused'}</div>
+                      {measured ? (
+                        measured.mode === 'key' ? (
+                          <div className={usageNote}>key account — no subscription window</div>
+                        ) : measured.remaining === null ? (
+                          <div className={usageNote}>could not be measured</div>
+                        ) : (
+                          <>
+                            <div className={measuredCell}>
+                              <span className={figure}>{measured.remaining}%</span> left
+                            </div>
+                            <div className={measuredCell}>
+                              <span className={windowLabel}>5h</span>{' '}
+                              {formatWindow(measured.fiveHour)}
+                            </div>
+                            <div className={measuredCell}>
+                              <span className={windowLabel}>7d</span>{' '}
+                              {formatWindow(measured.sevenDay)}
+                            </div>
+                          </>
+                        )
+                      ) : null}
                     </div>
-                  ) : null}
-                </div>
-                <Button onClick={() => open(name)}>Edit</Button>
-                <Button variant="danger" onClick={() => void remove(name)}>
-                  Delete
-                </Button>
-              </div>
-            )
-          })
+                  }
+                  actions={
+                    <>
+                      <Button onClick={() => open(name)}>Edit</Button>
+                      <Button variant="danger" onClick={() => void remove(name)}>
+                        Delete
+                      </Button>
+                    </>
+                  }
+                />
+              )
+            })}
+          </DataList>
         )}
       </Panel>
     </>

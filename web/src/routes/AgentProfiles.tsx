@@ -1,8 +1,64 @@
-import { useState } from 'react'
-import { css } from '../../styled-system/css'
+import { Fragment, useState } from 'react'
+import { css, cva, cx } from '../../styled-system/css'
 import { ApiError, api, type Bootstrap } from '../api'
-import { Banner, Button, Dot, Empty, Field, Panel, inputStyle, monoInput } from '../ui'
+import {
+  Badge,
+  Banner,
+  Button,
+  Checkbox,
+  Code,
+  DataList,
+  DataRow,
+  Dot,
+  Empty,
+  Field,
+  FormActions,
+  Inline,
+  KeyValue,
+  KeyValueList,
+  Mono,
+  Note,
+  PageHeader,
+  Panel,
+  SectionLabel,
+  Stack,
+  inputStyle,
+  labelStyle,
+  monoInput,
+  selectStyle,
+} from '../ui'
 import { ModelPicker } from './ModelPicker'
+
+/**
+ * The four tiers as ONE grid rather than four independent rows.
+ *
+ * A `Field` per tier gave every row its own label width and its own input edge,
+ * so four controls describing one thing lined up on nothing. Sharing the tracks
+ * is what makes a blank tier visible at a glance, and that is the entire point
+ * of this panel: Claude Code reads the extended-context marker per variable, so
+ * the tier nobody filled in is the one that silently runs narrow.
+ *
+ * A `cva` rather than a template string chosen at render time, because Panda is
+ * a build-time extractor: a value it can only learn at runtime emits no CSS at
+ * all. The third track exists only when there is a catalog to browse — with no
+ * Browse button the auto-placement would wrap the next tier's label into the
+ * empty column and undo the alignment this grid is for.
+ */
+const modelGrid = cva({
+  base: { display: 'grid', alignItems: 'center', columnGap: '3', rowGap: '2' },
+  variants: {
+    browsable: {
+      true: { gridTemplateColumns: '[auto minmax(0, 1fr) auto]' },
+      false: { gridTemplateColumns: '[auto minmax(0, 1fr)]' },
+    },
+  },
+  defaultVariants: { browsable: false },
+})
+
+// The same type as a `Field` label, because that is what it is — so it names the
+// shared class rather than restating it. What differs is that it sits in a
+// shared column instead of owning its own row, and that it is clickable.
+const tierLabel = cx(labelStyle, css({ cursor: 'pointer' }))
 
 /**
  * Agent profiles — what runs.
@@ -80,15 +136,14 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
       ? data.state.providerAccounts?.[viaProfile.accounts[0]]
       : undefined
     const provider = data.providers.find((p) => p.id === viaAccount?.provider)
+    const browsable = Boolean(provider?.catalogId)
 
     return (
       <>
-        <div className={css({ display: 'flex', alignItems: 'center', gap: '3', mb: '5' })}>
-          <Button onClick={() => setEditing(null)}>← Back</Button>
-          <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>
-            {isNew ? 'New agent profile' : `Agent profile · ${editing}`}
-          </h1>
-        </div>
+        <PageHeader
+          title={isNew ? 'New agent profile' : `Agent profile · ${editing}`}
+          onBack={() => setEditing(null)}
+        />
         {error ? <Banner tone="danger">{error}</Banner> : null}
         {users.length > 1 ? (
           <Banner tone="warn">
@@ -116,7 +171,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
           </Field>
           <Field label="Agent" hint="Which coding CLI to launch. Blank uses Claude Code.">
             <select
-              className={inputStyle}
+              className={selectStyle}
               value={String(draft.agent ?? '')}
               onChange={(e) => put('agent', e.target.value)}
             >
@@ -133,113 +188,123 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
           </Field>
         </Panel>
 
-        <Panel title="Models">
-          <p className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '3'})}>
-            All four tiers, from one table. Claude Code reads the extended-context marker per
-            variable, so a tier left out is the bug where three run wide and the fourth silently
-            does not. Blank inherits the provider default.
-          </p>
-          {data.tiers.map((tier) => (
-            <Field key={tier} label={tier}>
-              <span className={css({ display: 'flex', gap: '2' })}>
-                <input
-                  className={monoInput}
-                  value={models[tier] ?? ''}
-                  onChange={(e) => put('models', { ...models, [tier]: e.target.value })}
-                  placeholder={provider?.defaultModels?.[tier] ?? '—'}
-                />
-                {provider?.catalogId ? (
-                  <Button onClick={() => setPicking(tier)}>Browse</Button>
-                ) : null}
-              </span>
-            </Field>
-          ))}
-          {!provider ? (
-            <p className={css({ textStyle: 'meta', color: 'content.tertiary'})}>
-              No profile uses this setup yet, so there is no provider to browse a catalog from.
-              Type ids by hand, or attach it to a profile first.
-            </p>
-          ) : null}
-
-          {picking && provider?.catalogId ? (
-            <ModelPicker
-              catalogId={provider.catalogId}
-              tier={picking}
-              onClose={() => setPicking(null)}
-              onPick={(model) => {
-                setDraft((d) => ({
-                  ...d,
-                  models: { ...((d.models as Record<string, string>) ?? {}), [picking]: model.id },
-                  // Capture the MEASURED window alongside the id — the only
-                  // moment it is known, and what later lets swisscode set an
-                  // auto-compact window without ever guessing one.
-                  ...(model.context
-                    ? {
-                        contextWindows: {
-                          ...((d.contextWindows as Record<string, number>) ?? {}),
-                          [model.id]: model.context,
-                        },
-                      }
-                    : {}),
-                }))
-                setPicking(null)
-              }}
-            />
-          ) : null}
+        <Panel
+          title="Models"
+          description={
+            'All four tiers, from one table. Claude Code reads the extended-context marker per ' +
+            'variable, so a tier left out is the bug where three run wide and the fourth silently ' +
+            'does not. Blank inherits the provider default.'
+          }
+        >
+          <Stack gap="4">
+            {/* The label is not wrapped around its input the way `Field` wraps
+                one, because the two live in different grid columns — hence the
+                explicit htmlFor, which buys back the click target. */}
+            <div className={modelGrid({ browsable })}>
+              {data.tiers.map((tier) => (
+                <Fragment key={tier}>
+                  <label className={tierLabel} htmlFor={`model-${tier}`}>
+                    {tier}
+                  </label>
+                  <input
+                    id={`model-${tier}`}
+                    className={monoInput}
+                    value={models[tier] ?? ''}
+                    onChange={(e) => put('models', { ...models, [tier]: e.target.value })}
+                    placeholder={provider?.defaultModels?.[tier] ?? '—'}
+                  />
+                  {browsable ? <Button onClick={() => setPicking(tier)}>Browse</Button> : null}
+                </Fragment>
+              ))}
+            </div>
+            {!provider ? (
+              <Note>
+                No profile uses this setup yet, so there is no provider to browse a catalog from.
+                Type ids by hand, or attach it to a profile first.
+              </Note>
+            ) : null}
+          </Stack>
         </Panel>
+
+        {picking && provider?.catalogId ? (
+          <ModelPicker
+            catalogId={provider.catalogId}
+            tier={picking}
+            onClose={() => setPicking(null)}
+            onPick={(model) => {
+              setDraft((d) => ({
+                ...d,
+                models: { ...((d.models as Record<string, string>) ?? {}), [picking]: model.id },
+                // Capture the MEASURED window alongside the id — the only
+                // moment it is known, and what later lets swisscode set an
+                // auto-compact window without ever guessing one.
+                ...(model.context
+                  ? {
+                      contextWindows: {
+                        ...((d.contextWindows as Record<string, number>) ?? {}),
+                        [model.id]: model.context,
+                      },
+                    }
+                  : {}),
+              }))
+              setPicking(null)
+            }}
+          />
+        ) : null}
 
         <Panel title="Behaviour">
-          <label className={css({ display: 'flex', gap: '2', alignItems: 'center', mb: '4', textStyle: 'body' })}>
-            <input
-              type="checkbox"
+          <Stack gap="5">
+            <Checkbox
               checked={Boolean(draft.skipPermissions)}
-              onChange={(e) => put('skipPermissions', e.target.checked)}
+              onChange={(v) => put('skipPermissions', v)}
+              label={
+                <>
+                  Skip permission prompts <Code>--dangerously-skip-permissions</Code>
+                </>
+              }
             />
-            Skip permission prompts (--dangerously-skip-permissions)
-          </label>
 
-          <div className={css({ textStyle: 'meta', fontWeight: 'medium', color: 'content.secondary', mb: '2' })}>
-            Gateway compatibility
-          </div>
-          {data.compatFlags.map((flag) => (
-            <label key={flag.id} className={css({ display: 'block', mb: '2.5', textStyle: 'meta'})}>
-              <span className={css({ display: 'flex', gap: '2', alignItems: 'center' })}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(compat[flag.id])}
-                  onChange={(e) => put('compat', { ...compat, [flag.id]: e.target.checked })}
-                />
-                <code className={css({ fontFamily: 'mono', textStyle: 'meta' })}>{flag.id}</code>
-              </span>
+            <Stack gap="2">
+              <SectionLabel>Gateway compatibility</SectionLabel>
               {/* A flag that trades something away says what it costs, here as
-                  well as on stderr. */}
-              {flag.consequence ? (
-                <span className={css({ display: 'block', color: 'warn.default', pl: '6', textStyle: 'meta' })}>
-                  costs: {flag.consequence}
-                </span>
-              ) : null}
-            </label>
-          ))}
+                  well as on stderr — as the checkbox's note, so the price reads
+                  as belonging to that flag rather than competing with its name. */}
+              {data.compatFlags.map((flag) => (
+                <Checkbox
+                  key={flag.id}
+                  checked={Boolean(compat[flag.id])}
+                  onChange={(v) => put('compat', { ...compat, [flag.id]: v })}
+                  label={<Mono>{flag.id}</Mono>}
+                  note={flag.consequence ? `costs: ${flag.consequence}` : undefined}
+                  noteTone="warn"
+                />
+              ))}
+            </Stack>
+          </Stack>
         </Panel>
 
-        <div className={css({ display: 'flex', gap: '2', mb: '10' })}>
+        <FormActions>
           <Button variant="primary" onClick={() => void save(editing)} disabled={!editing.trim()}>
             {isNew ? 'Create agent profile' : 'Save changes'}
           </Button>
           <Button onClick={() => setEditing(null)}>Cancel</Button>
-        </div>
+        </FormActions>
       </>
     )
   }
 
   return (
     <>
-      <div className={css({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: '5' })}>
-        <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>Agent profiles</h1>
-        <Button variant="primary" onClick={() => open(null)}>
-          New agent profile
-        </Button>
-      </div>
+      <PageHeader
+        title="Agent profiles"
+        meta={`${agentProfiles.length} setup${agentProfiles.length === 1 ? '' : 's'}`}
+        description="What runs, with no credential attached — a coding CLI, the model for each tier, and how it should behave. One setup can back several profiles, which is why the list marks the shared ones: editing one changes every profile that uses it."
+        actions={
+          <Button variant="primary" onClick={() => open(null)}>
+            New agent profile
+          </Button>
+        }
+      />
       {error ? <Banner tone="danger">{error}</Banner> : null}
       {warnings.map((w) => (
         <Banner key={w} tone="warn">
@@ -247,51 +312,60 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
         </Banner>
       ))}
 
-      <Panel title={`${agentProfiles.length} setup${agentProfiles.length === 1 ? '' : 's'}`}>
+      <Panel flush>
         {agentProfiles.length === 0 ? (
-          <Empty>None yet. An agent profile is a coding CLI plus how it should behave.</Empty>
+          <Empty>No agent profiles yet. An agent profile is a coding CLI plus how it should behave.</Empty>
         ) : (
-          agentProfiles.map(([name, ap]) => {
-            const users = usersOf(name)
-            const pinned = data.tiers.filter((t) => ap.models?.[t]).length
-            return (
-              <div
-                key={name}
-                className={css({
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '3',
-                  py: '2.5',
-                  borderBottom: '[1px solid]',
-                  borderColor: 'border.subtle',
-                  _last: { borderBottom: 'none' },
-                })}
-              >
-                <Dot tone={users.length > 0 ? 'ok' : 'neutral'} />
-                <div className={css({ flex: '1', minW: '0' })}>
-                  <div className={css({ textStyle: 'body', fontWeight: 'medium' })}>
-                    {name}
-                    {users.length > 1 ? (
-                      <span className={css({ color: 'warn.default', fontWeight: 'normal', ml: '2', textStyle: 'meta' })}>
-                        shared
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
-                    {ap.agent ?? 'claude-code'}
-                    {' · '}
-                    {pinned > 0 ? `${pinned}/${data.tiers.length} tiers pinned` : 'provider defaults'}
-                    {' · '}
-                    {users.length > 0 ? `used by ${users.join(', ')}` : 'unused'}
-                  </div>
-                </div>
-                <Button onClick={() => open(name)}>Edit</Button>
-                <Button variant="danger" onClick={() => void remove(name)}>
-                  Delete
-                </Button>
-              </div>
-            )
-          })
+          <DataList>
+            {agentProfiles.map(([name, ap]) => {
+              const users = usersOf(name)
+              const pinned = data.tiers.filter((t) => ap.models?.[t]).length
+              return (
+                <DataRow
+                  key={name}
+                  align="start"
+                  leading={<Dot tone={users.length > 0 ? 'ok' : 'neutral'} />}
+                  title={
+                    <Inline gap="2" align="baseline" wrap>
+                      <span>{name}</span>
+                      {users.length > 1 ? <Badge tone="warn">shared</Badge> : null}
+                    </Inline>
+                  }
+                  /*
+                    A `KeyValueList`, the same as Profiles, because this row is
+                    the same shape: several facts about one entity that do not
+                    say what they are on their own. "2/4 tiers pinned" was prose
+                    doing a label's job, and a middot run made the reader parse
+                    where each fact started. Labelled, they share one column down
+                    the list and the eye finds the same fact on every row.
+                  */
+                  meta={
+                    <KeyValueList>
+                      <KeyValue label="Agent" mono>
+                        {ap.agent ?? 'claude-code'}
+                      </KeyValue>
+                      <KeyValue label="Models">
+                        {pinned > 0
+                          ? `${pinned} of ${data.tiers.length} tiers pinned`
+                          : 'provider defaults'}
+                      </KeyValue>
+                      <KeyValue label="Used by" tone={users.length > 0 ? 'default' : 'neutral'}>
+                        {users.length > 0 ? users.join(', ') : 'nothing yet'}
+                      </KeyValue>
+                    </KeyValueList>
+                  }
+                  actions={
+                    <>
+                      <Button onClick={() => open(name)}>Edit</Button>
+                      <Button variant="danger" onClick={() => void remove(name)}>
+                        Delete
+                      </Button>
+                    </>
+                  }
+                />
+              )
+            })}
+          </DataList>
         )}
       </Panel>
     </>

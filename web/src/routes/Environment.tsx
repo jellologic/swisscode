@@ -1,7 +1,24 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { css } from '../../styled-system/css'
 import { ApiError, api, type ClaudeEnvCatalog, type ClaudeEnvKind, type ClaudeEnvVar } from '../api'
-import { Banner, Button, Empty, Panel, inputStyle } from '../ui'
+import {
+  Badge,
+  Banner,
+  Code,
+  CopyButton,
+  DataList,
+  DataRow,
+  Dot,
+  Empty,
+  Inline,
+  Mono,
+  PageHeader,
+  Panel,
+  SearchInput,
+  ToggleChip,
+  Toolbar,
+} from '../ui'
 import type { Tone } from '../ui'
 
 /**
@@ -20,12 +37,23 @@ import type { Tone } from '../ui'
  * A screen that hid that distinction would be actively harmful: someone would
  * set an unreleased feature codename in a profile and wonder why nothing
  * happened — or why it stopped working after an agent update.
+ *
+ * That is also why the classification is carried TWICE and in two registers:
+ * once as a legend in the panel header, where each active filter states its
+ * caveat in words, and once per row as the leading `Dot` in the same tone. A
+ * 495-row list is scanned, not read, and a colour with a legend above it
+ * survives scanning where a sentence repeated 338 times does not.
  */
 
-const KIND_COPY: Record<ClaudeEnvKind, { label: string; blurb: string; tone: Tone }> = {
+const KIND_COPY: Record<ClaudeEnvKind, { label: string; blurb: ReactNode; tone: Tone }> = {
   documented: {
     label: 'Documented',
-    blurb: 'Described from Anthropic’s docs, `claude --help`, or swisscode’s own adapter. Safe to act on.',
+    blurb: (
+      <>
+        Described from Anthropic’s docs, <Code>claude --help</Code>, or swisscode’s own adapter.
+        Safe to act on.
+      </>
+    ),
     tone: 'ok',
   },
   undocumented: {
@@ -41,6 +69,18 @@ const KIND_COPY: Record<ClaudeEnvKind, { label: string; blurb: string; tone: Ton
     tone: 'neutral',
   },
 }
+
+/** Filter and legend order. Fixed, so the legend cannot reshuffle as filters toggle. */
+const KINDS = Object.keys(KIND_COPY) as ClaudeEnvKind[]
+
+const emphasis = css({ color: 'content.primary' })
+
+// The legend renders inside `Panel description`, which is a <p> — a <div> there
+// is invalid nesting, so the lines are spans that happen to lay out as a column.
+// Keeping it in the panel header rather than above the panel is the point: three
+// paragraphs of caveat stacked over a toolbar pushed all 495 rows off the screen.
+const legendList = css({ display: 'flex', flexDirection: 'column', gap: '1.5' })
+const legendLine = css({ display: 'flex', gap: '2', alignItems: 'baseline' })
 
 export function Environment() {
   const [data, setData] = useState<ClaudeEnvCatalog | null>(null)
@@ -86,135 +126,142 @@ export function Environment() {
       return next
     })
 
+  const active = KINDS.filter((kind) => kinds.has(kind))
+
   return (
     <>
-      <div className={css({ display: 'flex', alignItems: 'baseline', gap: '3', mb: '2' })}>
-        <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>Environment</h1>
-        {data ? (
-          <span className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
-            {data.variables.length} variables · extracted from {data.source.agent}{' '}
-            {data.source.version}
-          </span>
-        ) : null}
-      </div>
-
-      <p className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '4', maxW: 'content' })}>
-        Every environment variable this Claude Code build references. Set any of them on a profile’s{' '}
-        <code>env</code> block, which is applied last and can override anything the provider sets.{' '}
-        <strong className={css({ color: 'content.primary' })}>The list is extracted from the binary</strong>, so
-        it is complete on names and silent on meaning — which is what the filters below are for.
-      </p>
+      <PageHeader
+        title="Environment"
+        meta={
+          data ? (
+            <>
+              {data.variables.length} variables · extracted from{' '}
+              <Mono>
+                {data.source.agent} {data.source.version}
+              </Mono>
+            </>
+          ) : undefined
+        }
+        description={
+          <>
+            Every environment variable this Claude Code build references. Set any of them on a
+            profile’s <Code>env</Code> block, which is applied last and can override anything the
+            provider sets. <strong className={emphasis}>The list is extracted from the binary</strong>
+            , so it is complete on names and silent on meaning — which is what the filters below are
+            for.
+          </>
+        }
+      />
 
       {error ? <Banner tone="danger">{error}</Banner> : null}
 
-      <div className={css({ display: 'flex', gap: '2', mb: '3', flexWrap: 'wrap' })}>
-        <input
-          className={inputStyle}
-          placeholder="search name or description"
+      <Toolbar>
+        <SearchInput
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={setQuery}
+          placeholder="search name or description"
+          label="Search environment variables"
         />
-      </div>
-
-      <div className={css({ display: 'flex', gap: '2', mb: '4', flexWrap: 'wrap' })}>
-        {(Object.keys(KIND_COPY) as ClaudeEnvKind[]).map((kind) => (
-          <Button key={kind} variant={kinds.has(kind) ? 'primary' : undefined} onClick={() => toggle(kind)}>
-            {KIND_COPY[kind].label} ({counts[kind] ?? 0})
-          </Button>
+        {/*
+          Chips, not buttons: these three filters combine, and three filled
+          accent buttons in a row would claim the screen has three primary
+          actions. The count rides along so the cost of enabling one is visible
+          before it is enabled.
+        */}
+        {KINDS.map((kind) => (
+          <ToggleChip
+            key={kind}
+            pressed={kinds.has(kind)}
+            count={counts[kind] ?? 0}
+            onClick={() => toggle(kind)}
+          >
+            {KIND_COPY[kind].label}
+          </ToggleChip>
         ))}
-      </div>
+      </Toolbar>
 
-      {[...kinds].map((kind) => (
-        <p
-          key={kind}
-          className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '2', maxW: 'content' })}
-        >
-          <strong className={css({ color: KIND_COPY[kind].tone === 'warn' ? 'warn.default' : 'content.tertiary' })}>
-            {KIND_COPY[kind].label}:
-          </strong>{' '}
-          {KIND_COPY[kind].blurb}
-        </p>
-      ))}
-
-      <Panel title={`${rows.length} shown`}>
+      <Panel
+        title={`${rows.length} shown`}
+        description={
+          active.length > 0 ? (
+            <span className={legendList}>
+              {active.map((kind) => (
+                <span key={kind} className={legendLine}>
+                  <Badge tone={KIND_COPY[kind].tone}>{KIND_COPY[kind].label}</Badge>
+                  <span>{KIND_COPY[kind].blurb}</span>
+                </span>
+              ))}
+            </span>
+          ) : undefined
+        }
+        flush
+      >
         {!data && !error ? <Empty>Loading…</Empty> : null}
         {data && rows.length === 0 ? (
           <Empty>Nothing matches. Try a different search, or enable another category above.</Empty>
         ) : null}
-        {rows.map((v) => (
-          <Row key={v.name} variable={v} />
-        ))}
+        <DataList>
+          {rows.map((v) => (
+            <Row key={v.name} variable={v} />
+          ))}
+        </DataList>
       </Panel>
     </>
   )
 }
 
+// Why an internal name is internal ("test hook", "unreleased feature codename")
+// is a qualifier on the name, not a description of the variable, so it stays on
+// the identifier line at `micro` rather than competing with real prose below it.
+const rowWhy = css({ textStyle: 'micro', color: 'content.tertiary' })
+
+// A real description gets the readable step: `content.secondary`, measure-limited.
+const rowDescription = css({ display: 'block', maxW: 'content', color: 'content.secondary' })
+
+// The absence of one gets the step below, at `micro`. It is the same sentence on
+// 338 consecutive rows, and it was previously set in italics — which pulls the
+// eye to the one thing on the row that carries no information. The legend in the
+// panel header now makes the claim once, in words; this line is the reminder.
+const rowUnknown = css({ display: 'block', textStyle: 'micro', color: 'content.tertiary' })
+
 function Row({ variable }: { variable: ClaudeEnvVar }) {
-  const [copied, setCopied] = useState(false)
   return (
-    <div
-      className={css({
-        py: '2.5',
-        borderBottom: '[1px solid]',
-        borderColor: 'border.subtle',
-        _last: { borderBottom: 'none' },
-      })}
-    >
-      <div className={css({ display: 'flex', alignItems: 'baseline', gap: '2', flexWrap: 'wrap' })}>
-        <code className={css({ fontFamily: 'mono', textStyle: 'meta', color: 'content.primary' })}>
-          {variable.name}
-        </code>
-        {/*
-          "swisscode sets this" is the most useful badge on the screen: it tells
-          someone the knob is already wired to a profile field, so hand-setting
-          it in `env` would fight the launcher rather than configure it.
-        */}
-        {variable.managed ? (
-          <span className={css({ textStyle: 'micro', color: 'ok.default' })}>swisscode sets this</span>
-        ) : null}
-        {variable.category ? (
-          <span className={css({ textStyle: 'micro', color: 'content.tertiary', fontFamily: 'mono' })}>
-            {variable.category}
+    <DataRow
+      align="start"
+      leading={<Dot tone={KIND_COPY[variable.kind].tone} />}
+      title={
+        <Inline gap="2" align="baseline" wrap>
+          <Mono>{variable.name}</Mono>
+          {/*
+            "swisscode sets this" is the most useful badge on the screen: it tells
+            someone the knob is already wired to a profile field, so hand-setting
+            it in `env` would fight the launcher rather than configure it. It is
+            the only coloured thing on the row besides the classification dot.
+          */}
+          {variable.managed ? <Badge tone="ok">swisscode sets this</Badge> : null}
+          {variable.category ? <Badge>{variable.category}</Badge> : null}
+          {variable.kind === 'internal' ? (
+            <span className={rowWhy}>{variable.why}</span>
+          ) : null}
+        </Inline>
+      }
+      meta={
+        variable.description ? (
+          <span className={rowDescription}>{variable.description}</span>
+        ) : (
+          /*
+            An explicit blank, not an empty cell. The absence is the finding: we
+            know the name exists and we do not know what it does, and saying so is
+            the honest version of a catalog built by reading a binary.
+          */
+          <span className={rowUnknown}>
+            {variable.kind === 'internal'
+              ? 'Not a user-facing setting.'
+              : 'No description — swisscode does not know what this does.'}
           </span>
-        ) : null}
-        {variable.kind === 'internal' ? (
-          <span className={css({ textStyle: 'micro', color: 'content.tertiary' })}>{variable.why}</span>
-        ) : null}
-        <button
-          onClick={() => {
-            void navigator.clipboard?.writeText(variable.name)
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1200)
-          }}
-          className={css({
-            ml: 'auto',
-            textStyle: 'micro',
-            color: 'content.tertiary',
-            cursor: 'pointer',
-            bg: 'transparent',
-            border: 'none',
-            _hover: { color: 'content.primary' },
-          })}
-        >
-          {copied ? 'copied' : 'copy'}
-        </button>
-      </div>
-      {variable.description ? (
-        <div className={css({ textStyle: 'meta', color: 'content.tertiary', mt: '1', maxW: 'content' })}>
-          {variable.description}
-        </div>
-      ) : (
-        /*
-          An explicit blank, not an empty cell. The absence is the finding: we
-          know the name exists and we do not know what it does, and saying so is
-          the honest version of a catalog built by reading a binary.
-        */
-        <div className={css({ textStyle: 'meta', color: 'content.tertiary', mt: '1', fontStyle: 'italic' })}>
-          {variable.kind === 'internal'
-            ? 'Not a user-facing setting.'
-            : 'No description — swisscode does not know what this does.'}
-        </div>
-      )}
-    </div>
+        )
+      }
+      actions={<CopyButton value={variable.name} />}
+    />
   )
 }
