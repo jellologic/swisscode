@@ -11,6 +11,31 @@
       cannot be read by anyone else.
     -->
     <meta name="swisscode-token" content="__SWISSCODE_TOKEN__" />
+    <!--
+      Resolve the theme BEFORE first paint.
+      Inline and synchronous on purpose: doing this in React means the browser
+      paints the default theme first and then repaints, which is the white flash
+      every dark app has when it defers this to a component. Mirrors
+      src/theme.ts; kept tiny so the duplication stays obviously correct.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('swisscode-theme')
+          var pref = stored === 'light' || stored === 'dark' ? stored : 'system'
+          var theme =
+            pref === 'system'
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : pref
+          document.documentElement.setAttribute('data-theme', theme)
+          document.documentElement.style.colorScheme = theme
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'light')
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

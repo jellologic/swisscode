@@ -146,7 +146,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
       <>
         <div className={css({ display: 'flex', alignItems: 'center', gap: '3', mb: '5' })}>
           <Button onClick={() => setEditing(null)}>← Back</Button>
-          <h1 className={css({ fontSize: '15px', fontWeight: 600 })}>
+          <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>
             {isNew ? 'New account' : `Account · ${editing}`}
           </h1>
         </div>
@@ -237,7 +237,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
                 directory.
               </Banner>
               {!isNew && data.logins ? (
-                <div className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono' })}>
+                <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
                   currently: {data.logins[editing] ?? 'not logged in'}
                 </div>
               ) : null}
@@ -287,7 +287,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
   return (
     <>
       <div className={css({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: '5' })}>
-        <h1 className={css({ fontSize: '15px', fontWeight: 600 })}>Accounts</h1>
+        <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>Accounts</h1>
         <div className={css({ display: 'flex', gap: '2' })}>
           {/*
             Measuring is a BUTTON rather than something the page does on load.
@@ -316,7 +316,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
         </Banner>
       ) : null}
       {usage?.checkedAt ? (
-        <div className={css({ fontSize: '11.5px', color: 'faint', mb: '4', lineHeight: 1.5 })}>
+        <div className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '4'})}>
           Measured {new Date(usage.checkedAt).toLocaleTimeString()}. “% left” is the tighter of the two
           windows, never their average — an account at 5% of its 5-hour window and 95% of its weekly
           one has almost nothing left. Profiles using the <code>usage</code> strategy now select on
@@ -343,8 +343,8 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
                   alignItems: 'center',
                   gap: '3',
                   py: '2.5',
-                  borderBottom: '1px solid',
-                  borderColor: 'line',
+                  borderBottom: '[1px solid]',
+                  borderColor: 'border.subtle',
                   _last: { borderBottom: 'none' },
                 })}
               >
@@ -354,17 +354,17 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
                   looks identical in config.json and fails only after execve, so
                   the dot tracks the login rather than the field.
                 */}
-                <Dot tone={ready(a, login) ? 'ok' : 'faint'} />
-                <div className={css({ flex: 1, minW: 0 })}>
-                  <div className={css({ fontSize: '13px', fontWeight: 500 })}>
+                <Dot tone={ready(a, login) ? 'ok' : 'neutral'} />
+                <div className={css({ flex: '1', minW: '0' })}>
+                  <div className={css({ textStyle: 'body', fontWeight: 'medium' })}>
                     {name}
                     {a.label ? (
-                      <span className={css({ color: 'faint', fontWeight: 400, ml: '2', fontSize: '11.5px' })}>
+                      <span className={css({ color: 'content.tertiary', fontWeight: 'normal', ml: '2', textStyle: 'meta' })}>
                         {a.label}
                       </span>
                     ) : null}
                   </div>
-                  <div className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono' })}>
+                  <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
                     {a.provider}
                     {' · '}
                     {credentialLine(a, login)}
@@ -372,7 +372,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
                     {usedBy.length > 0 ? `used by ${usedBy.join(', ')}` : 'unused'}
                   </div>
                   {measured ? (
-                    <div className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono', mt: '1' })}>
+                    <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono', mt: '1' })}>
                       {measured.mode === 'key'
                         ? 'key account — no subscription window'
                         : measured.remaining === null

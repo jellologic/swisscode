@@ -85,7 +85,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
       <>
         <div className={css({ display: 'flex', alignItems: 'center', gap: '3', mb: '5' })}>
           <Button onClick={() => setEditing(null)}>← Back</Button>
-          <h1 className={css({ fontSize: '15px', fontWeight: 600 })}>
+          <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>
             {isNew ? 'New agent profile' : `Agent profile · ${editing}`}
           </h1>
         </div>
@@ -134,7 +134,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
         </Panel>
 
         <Panel title="Models">
-          <p className={css({ fontSize: '12px', color: 'faint', mb: '3', lineHeight: 1.55 })}>
+          <p className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '3'})}>
             All four tiers, from one table. Claude Code reads the extended-context marker per
             variable, so a tier left out is the bug where three run wide and the fourth silently
             does not. Blank inherits the provider default.
@@ -155,7 +155,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
             </Field>
           ))}
           {!provider ? (
-            <p className={css({ fontSize: '11.5px', color: 'faint', lineHeight: 1.55 })}>
+            <p className={css({ textStyle: 'meta', color: 'content.tertiary'})}>
               No profile uses this setup yet, so there is no provider to browse a catalog from.
               Type ids by hand, or attach it to a profile first.
             </p>
@@ -189,7 +189,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
         </Panel>
 
         <Panel title="Behaviour">
-          <label className={css({ display: 'flex', gap: '2', alignItems: 'center', mb: '4', fontSize: '13px' })}>
+          <label className={css({ display: 'flex', gap: '2', alignItems: 'center', mb: '4', textStyle: 'body' })}>
             <input
               type="checkbox"
               checked={Boolean(draft.skipPermissions)}
@@ -198,23 +198,23 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
             Skip permission prompts (--dangerously-skip-permissions)
           </label>
 
-          <div className={css({ fontSize: '12px', fontWeight: 500, color: 'dim', mb: '2' })}>
+          <div className={css({ textStyle: 'meta', fontWeight: 'medium', color: 'content.secondary', mb: '2' })}>
             Gateway compatibility
           </div>
           {data.compatFlags.map((flag) => (
-            <label key={flag.id} className={css({ display: 'block', mb: '2.5', fontSize: '12.5px', lineHeight: 1.5 })}>
+            <label key={flag.id} className={css({ display: 'block', mb: '2.5', textStyle: 'meta'})}>
               <span className={css({ display: 'flex', gap: '2', alignItems: 'center' })}>
                 <input
                   type="checkbox"
                   checked={Boolean(compat[flag.id])}
                   onChange={(e) => put('compat', { ...compat, [flag.id]: e.target.checked })}
                 />
-                <code className={css({ fontFamily: 'mono', fontSize: '12px' })}>{flag.id}</code>
+                <code className={css({ fontFamily: 'mono', textStyle: 'meta' })}>{flag.id}</code>
               </span>
               {/* A flag that trades something away says what it costs, here as
                   well as on stderr. */}
               {flag.consequence ? (
-                <span className={css({ display: 'block', color: 'warn', pl: '6', fontSize: '11.5px' })}>
+                <span className={css({ display: 'block', color: 'warn.default', pl: '6', textStyle: 'meta' })}>
                   costs: {flag.consequence}
                 </span>
               ) : null}
@@ -235,7 +235,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
   return (
     <>
       <div className={css({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: '5' })}>
-        <h1 className={css({ fontSize: '15px', fontWeight: 600 })}>Agent profiles</h1>
+        <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>Agent profiles</h1>
         <Button variant="primary" onClick={() => open(null)}>
           New agent profile
         </Button>
@@ -262,22 +262,22 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
                   alignItems: 'center',
                   gap: '3',
                   py: '2.5',
-                  borderBottom: '1px solid',
-                  borderColor: 'line',
+                  borderBottom: '[1px solid]',
+                  borderColor: 'border.subtle',
                   _last: { borderBottom: 'none' },
                 })}
               >
-                <Dot tone={users.length > 0 ? 'ok' : 'faint'} />
-                <div className={css({ flex: 1, minW: 0 })}>
-                  <div className={css({ fontSize: '13px', fontWeight: 500 })}>
+                <Dot tone={users.length > 0 ? 'ok' : 'neutral'} />
+                <div className={css({ flex: '1', minW: '0' })}>
+                  <div className={css({ textStyle: 'body', fontWeight: 'medium' })}>
                     {name}
                     {users.length > 1 ? (
-                      <span className={css({ color: 'warn', fontWeight: 400, ml: '2', fontSize: '11.5px' })}>
+                      <span className={css({ color: 'warn.default', fontWeight: 'normal', ml: '2', textStyle: 'meta' })}>
                         shared
                       </span>
                     ) : null}
                   </div>
-                  <div className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono' })}>
+                  <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
                     {ap.agent ?? 'claude-code'}
                     {' · '}
                     {pinned > 0 ? `${pinned}/${data.tiers.length} tiers pinned` : 'provider defaults'}

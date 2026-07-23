@@ -26,15 +26,15 @@ export function Settings({ data, reload }: { data: Bootstrap; reload: () => Prom
 
   return (
     <>
-      <h1 className={css({ fontSize: '15px', fontWeight: 600, mb: '5' })}>Settings</h1>
+      <h1 className={css({ textStyle: 'heading', fontWeight: 'title', mb: '5' })}>Settings</h1>
       {error ? <Banner tone="danger">{error}</Banner> : null}
 
       <Panel title="Output">
-        <label className={css({ display: 'flex', gap: '2', alignItems: 'center', fontSize: '13px' })}>
+        <label className={css({ display: 'flex', gap: '2', alignItems: 'center', textStyle: 'body' })}>
           <input type="checkbox" checked={quiet} onChange={(e) => setQuiet(e.target.checked)} />
           Quiet — suppress warnings and the profile banner
         </label>
-        <p className={css({ fontSize: '11.5px', color: 'faint', mt: '2', lineHeight: 1.55 })}>
+        <p className={css({ textStyle: 'meta', color: 'content.tertiary', mt: '2'})}>
           swisscode writes to stderr only; stdout belongs to the agent. A clean environment
           already prints nothing, which is what makes the lines it does print worth reading.
         </p>
@@ -51,7 +51,7 @@ export function Settings({ data, reload }: { data: Bootstrap; reload: () => Prom
 
       <div className={css({ display: 'flex', gap: '3', alignItems: 'center' })}>
         <Button variant="primary" onClick={() => void save()}>Save settings</Button>
-        {saved ? <span className={css({ fontSize: '12px', color: 'ok' })}>saved</span> : null}
+        {saved ? <span className={css({ textStyle: 'meta', color: 'ok.default' })}>saved</span> : null}
       </div>
     </>
   )

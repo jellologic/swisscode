@@ -74,7 +74,7 @@ export function Providers({ data, reload }: { data: Bootstrap; reload: () => Pro
       <>
         <div className={css({ display: 'flex', alignItems: 'center', gap: '3', mb: '5' })}>
           <Button onClick={() => setEditing(null)}>← Back</Button>
-          <h1 className={css({ fontSize: '15px', fontWeight: 600 })}>
+          <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>
             {isNew ? 'New provider' : `Provider · ${editing}`}
           </h1>
         </div>
@@ -131,7 +131,7 @@ export function Providers({ data, reload }: { data: Bootstrap; reload: () => Pro
               ))}
             </select>
           </Field>
-          <label className={css({ display: 'flex', gap: '2', alignItems: 'center', mb: '4', fontSize: '13px' })}>
+          <label className={css({ display: 'flex', gap: '2', alignItems: 'center', mb: '4', textStyle: 'body' })}>
             <input
               type="checkbox"
               checked={Boolean(draft.credentialOptional)}
@@ -142,7 +142,7 @@ export function Providers({ data, reload }: { data: Bootstrap; reload: () => Pro
         </Panel>
 
         <Panel title="Default models">
-          <p className={css({ fontSize: '12px', color: 'faint', mb: '3', lineHeight: 1.55 })}>
+          <p className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '3'})}>
             Optional. A profile can override any of these. Do not type an extended-context
             marker — that suffix is derived from a verified capability, and an id the endpoint
             does not recognise fails hard.
@@ -171,7 +171,7 @@ export function Providers({ data, reload }: { data: Bootstrap; reload: () => Pro
   return (
     <>
       <div className={css({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: '5' })}>
-        <h1 className={css({ fontSize: '15px', fontWeight: 600 })}>Providers</h1>
+        <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>Providers</h1>
         <Button variant="primary" onClick={() => open(null)}>
           New provider
         </Button>
@@ -196,15 +196,15 @@ export function Providers({ data, reload }: { data: Bootstrap; reload: () => Pro
                 alignItems: 'center',
                 gap: '3',
                 py: '2.5',
-                borderBottom: '1px solid',
-                borderColor: 'line',
+                borderBottom: '[1px solid]',
+                borderColor: 'border.subtle',
                 _last: { borderBottom: 'none' },
               })}
             >
               <Dot tone="ok" />
-              <div className={css({ flex: 1, minW: 0 })}>
-                <div className={css({ fontSize: '13px', fontWeight: 500 })}>{p.label}</div>
-                <div className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono' })}>
+              <div className={css({ flex: '1', minW: '0' })}>
+                <div className={css({ textStyle: 'body', fontWeight: 'medium' })}>{p.label}</div>
+                <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
                   {id} · {p.baseUrl}
                 </div>
               </div>
@@ -218,7 +218,7 @@ export function Providers({ data, reload }: { data: Bootstrap; reload: () => Pro
       </Panel>
 
       <Panel title="Shipped presets">
-        <p className={css({ fontSize: '12px', color: 'faint', mb: '3', lineHeight: 1.55 })}>
+        <p className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '3'})}>
           Read-only. These are constants in swisscode's source, checked by tests that a config
           file cannot reach — including verified extended-context claims.
         </p>
@@ -230,19 +230,19 @@ export function Providers({ data, reload }: { data: Bootstrap; reload: () => Pro
               alignItems: 'center',
               gap: '3',
               py: '2',
-              borderBottom: '1px solid',
-              borderColor: 'line',
+              borderBottom: '[1px solid]',
+              borderColor: 'border.subtle',
               _last: { borderBottom: 'none' },
             })}
           >
-            <div className={css({ flex: 1, minW: 0 })}>
-              <div className={css({ fontSize: '13px' })}>{p.label}</div>
-              <div className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono' })}>
+            <div className={css({ flex: '1', minW: '0' })}>
+              <div className={css({ textStyle: 'body' })}>{p.label}</div>
+              <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
                 {p.baseUrl ?? 'agent default'}
               </div>
             </div>
             {p.catalogId ? (
-              <span className={css({ fontSize: '11px', color: 'faint' })}>browsable catalog</span>
+              <span className={css({ textStyle: 'micro', color: 'content.tertiary' })}>browsable catalog</span>
             ) : null}
           </div>
         ))}

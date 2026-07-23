@@ -1,12 +1,54 @@
 @layer reset, base, tokens, recipes, utilities;
 
+/*
+ * The base layer only does what a token cannot: page-level typography, the
+ * scrollbar, and the focus ring. Everything with a colour names a semantic
+ * token, so light mode needs nothing here.
+ */
 html, body, #root { height: 100% }
+
 body {
   margin: 0;
-  background: var(--colors-bg);
-  color: var(--colors-text);
+  background: var(--colors-surface-canvas);
+  color: var(--colors-content-primary);
   font-family: var(--fonts-sans);
   font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: -0.006em;
+  /* Antialiasing matters most in dark mode, where unhinted text looks heavy. */
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
-input, select, button { font-family: inherit }
+
+input, select, button, textarea { font-family: inherit; font-size: inherit }
+
+/*
+ * ONE focus ring for the whole app, and only for keyboard users. `:focus-visible`
+ * rather than `:focus` is what stops a ring appearing on every mouse click while
+ * keeping it for anyone navigating by keyboard.
+ */
+:focus-visible {
+  outline: 2px solid var(--colors-accent-default);
+  outline-offset: 2px;
+  border-radius: var(--radii-xs);
+}
+
+/* Match the scrollbar to the theme; an unstyled one is a white gutter in dark mode. */
+* { scrollbar-color: var(--colors-border-strong) transparent }
+::-webkit-scrollbar { width: 10px; height: 10px }
+::-webkit-scrollbar-thumb {
+  background: var(--colors-border-strong);
+  border-radius: var(--radii-full);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-clip: content-box; background-color: var(--colors-content-tertiary) }
+::-webkit-scrollbar-track { background: transparent }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

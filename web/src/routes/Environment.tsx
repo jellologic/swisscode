@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { css } from '../../styled-system/css'
 import { ApiError, api, type ClaudeEnvCatalog, type ClaudeEnvKind, type ClaudeEnvVar } from '../api'
 import { Banner, Button, Empty, Panel, inputStyle } from '../ui'
+import type { Tone } from '../ui'
 
 /**
  * Every environment variable Claude Code references.
@@ -21,7 +22,7 @@ import { Banner, Button, Empty, Panel, inputStyle } from '../ui'
  * happened — or why it stopped working after an agent update.
  */
 
-const KIND_COPY: Record<ClaudeEnvKind, { label: string; blurb: string; tone: string }> = {
+const KIND_COPY: Record<ClaudeEnvKind, { label: string; blurb: string; tone: Tone }> = {
   documented: {
     label: 'Documented',
     blurb: 'Described from Anthropic’s docs, `claude --help`, or swisscode’s own adapter. Safe to act on.',
@@ -37,7 +38,7 @@ const KIND_COPY: Record<ClaudeEnvKind, { label: string; blurb: string; tone: str
     label: 'Internal',
     blurb:
       'Test hooks, profiling switches, third-party cloud auth, and unreleased feature codenames. Listed for completeness; not knobs to set.',
-    tone: 'faint',
+    tone: 'neutral',
   },
 }
 
@@ -88,19 +89,19 @@ export function Environment() {
   return (
     <>
       <div className={css({ display: 'flex', alignItems: 'baseline', gap: '3', mb: '2' })}>
-        <h1 className={css({ fontSize: '15px', fontWeight: 600 })}>Environment</h1>
+        <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>Environment</h1>
         {data ? (
-          <span className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono' })}>
+          <span className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
             {data.variables.length} variables · extracted from {data.source.agent}{' '}
             {data.source.version}
           </span>
         ) : null}
       </div>
 
-      <p className={css({ fontSize: '12px', color: 'faint', mb: '4', lineHeight: 1.6, maxW: '46rem' })}>
+      <p className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '4', maxW: 'content' })}>
         Every environment variable this Claude Code build references. Set any of them on a profile’s{' '}
         <code>env</code> block, which is applied last and can override anything the provider sets.{' '}
-        <strong className={css({ color: 'text' })}>The list is extracted from the binary</strong>, so
+        <strong className={css({ color: 'content.primary' })}>The list is extracted from the binary</strong>, so
         it is complete on names and silent on meaning — which is what the filters below are for.
       </p>
 
@@ -126,9 +127,9 @@ export function Environment() {
       {[...kinds].map((kind) => (
         <p
           key={kind}
-          className={css({ fontSize: '11.5px', color: 'faint', mb: '2', lineHeight: 1.5, maxW: '46rem' })}
+          className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '2', maxW: 'content' })}
         >
-          <strong className={css({ color: KIND_COPY[kind].tone === 'warn' ? 'warn' : 'faint' })}>
+          <strong className={css({ color: KIND_COPY[kind].tone === 'warn' ? 'warn.default' : 'content.tertiary' })}>
             {KIND_COPY[kind].label}:
           </strong>{' '}
           {KIND_COPY[kind].blurb}
@@ -154,13 +155,13 @@ function Row({ variable }: { variable: ClaudeEnvVar }) {
     <div
       className={css({
         py: '2.5',
-        borderBottom: '1px solid',
-        borderColor: 'line',
+        borderBottom: '[1px solid]',
+        borderColor: 'border.subtle',
         _last: { borderBottom: 'none' },
       })}
     >
       <div className={css({ display: 'flex', alignItems: 'baseline', gap: '2', flexWrap: 'wrap' })}>
-        <code className={css({ fontFamily: 'mono', fontSize: '12px', color: 'text' })}>
+        <code className={css({ fontFamily: 'mono', textStyle: 'meta', color: 'content.primary' })}>
           {variable.name}
         </code>
         {/*
@@ -169,15 +170,15 @@ function Row({ variable }: { variable: ClaudeEnvVar }) {
           it in `env` would fight the launcher rather than configure it.
         */}
         {variable.managed ? (
-          <span className={css({ fontSize: '10.5px', color: 'ok' })}>swisscode sets this</span>
+          <span className={css({ textStyle: 'micro', color: 'ok.default' })}>swisscode sets this</span>
         ) : null}
         {variable.category ? (
-          <span className={css({ fontSize: '10.5px', color: 'faint', fontFamily: 'mono' })}>
+          <span className={css({ textStyle: 'micro', color: 'content.tertiary', fontFamily: 'mono' })}>
             {variable.category}
           </span>
         ) : null}
         {variable.kind === 'internal' ? (
-          <span className={css({ fontSize: '10.5px', color: 'faint' })}>{variable.why}</span>
+          <span className={css({ textStyle: 'micro', color: 'content.tertiary' })}>{variable.why}</span>
         ) : null}
         <button
           onClick={() => {
@@ -187,19 +188,19 @@ function Row({ variable }: { variable: ClaudeEnvVar }) {
           }}
           className={css({
             ml: 'auto',
-            fontSize: '10.5px',
-            color: 'faint',
+            textStyle: 'micro',
+            color: 'content.tertiary',
             cursor: 'pointer',
             bg: 'transparent',
             border: 'none',
-            _hover: { color: 'text' },
+            _hover: { color: 'content.primary' },
           })}
         >
           {copied ? 'copied' : 'copy'}
         </button>
       </div>
       {variable.description ? (
-        <div className={css({ fontSize: '11.5px', color: 'faint', mt: '1', lineHeight: 1.5, maxW: '44rem' })}>
+        <div className={css({ textStyle: 'meta', color: 'content.tertiary', mt: '1', maxW: 'content' })}>
           {variable.description}
         </div>
       ) : (
@@ -208,7 +209,7 @@ function Row({ variable }: { variable: ClaudeEnvVar }) {
           know the name exists and we do not know what it does, and saying so is
           the honest version of a catalog built by reading a binary.
         */
-        <div className={css({ fontSize: '11.5px', color: 'faint', mt: '1', fontStyle: 'italic' })}>
+        <div className={css({ textStyle: 'meta', color: 'content.tertiary', mt: '1', fontStyle: 'italic' })}>
           {variable.kind === 'internal'
             ? 'Not a user-facing setting.'
             : 'No description — swisscode does not know what this does.'}

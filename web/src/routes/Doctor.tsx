@@ -2,8 +2,17 @@ import { useState } from 'react'
 import { css } from '../../styled-system/css'
 import { ApiError, api, type DoctorReport } from '../api'
 import { Banner, Button, Dot, Empty, Panel } from '../ui'
+import type { Tone } from '../ui'
 
-const TONE = { ok: 'ok', warn: 'warn', error: 'danger', skip: 'faint' } as const
+// `satisfies` rather than a bare `as const`: it pins the map to the Tone union,
+// so a status that gains a tone with no matching colour fails here rather than
+// rendering an invisible dot.
+const TONE = {
+  ok: 'ok',
+  warn: 'warn',
+  error: 'danger',
+  skip: 'neutral',
+} as const satisfies Record<string, Tone>
 
 /**
  * The doctor, on demand.
@@ -34,7 +43,7 @@ export function Doctor() {
 
   return (
     <>
-      <h1 className={css({ fontSize: '15px', fontWeight: 600, mb: '5' })}>Doctor</h1>
+      <h1 className={css({ textStyle: 'heading', fontWeight: 'title', mb: '5' })}>Doctor</h1>
       {error ? <Banner tone="danger">{error}</Banner> : null}
 
       <Panel
@@ -50,7 +59,7 @@ export function Doctor() {
           </span>
         }
       >
-        <p className={css({ fontSize: '12px', color: 'faint', lineHeight: 1.6 })}>
+        <p className={css({ textStyle: 'meta', color: 'content.tertiary'})}>
           Offline checks read your config, resolve the agent binary and inspect the environment.
           Live probes additionally send a real request to the endpoint — at most one per distinct
           model plus one tool-calling probe — which your provider will bill you for.
@@ -72,21 +81,21 @@ export function Doctor() {
                   gap: '3',
                   alignItems: 'flex-start',
                   py: '2',
-                  borderBottom: '1px solid',
-                  borderColor: 'line',
+                  borderBottom: '[1px solid]',
+                  borderColor: 'border.subtle',
                   _last: { borderBottom: 'none' },
                 })}
               >
                 <span className={css({ mt: '1.5' })}>
                   <Dot tone={TONE[c.status]} />
                 </span>
-                <div className={css({ flex: 1, minW: 0 })}>
-                  <div className={css({ fontSize: '12.5px', fontWeight: 500 })}>{c.title}</div>
-                  <div className={css({ fontSize: '12px', color: 'dim', lineHeight: 1.55 })}>
+                <div className={css({ flex: '1', minW: '0' })}>
+                  <div className={css({ textStyle: 'meta', fontWeight: 'medium' })}>{c.title}</div>
+                  <div className={css({ textStyle: 'meta', color: 'content.secondary'})}>
                     {c.detail}
                   </div>
                   {c.fix ? (
-                    <div className={css({ fontSize: '11.5px', color: 'warn', mt: '1' })}>
+                    <div className={css({ textStyle: 'meta', color: 'warn.default', mt: '1' })}>
                       ↳ {c.fix}
                     </div>
                   ) : null}
@@ -95,7 +104,7 @@ export function Doctor() {
             ))
           )}
           {report.notes.map((n) => (
-            <p key={n} className={css({ fontSize: '11.5px', color: 'faint', mt: '3', lineHeight: 1.55 })}>
+            <p key={n} className={css({ textStyle: 'meta', color: 'content.tertiary', mt: '3'})}>
               {n}
             </p>
           ))}

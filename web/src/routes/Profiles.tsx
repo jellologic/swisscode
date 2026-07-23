@@ -85,7 +85,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
       <>
         <div className={css({ display: 'flex', alignItems: 'center', gap: '3', mb: '5' })}>
           <Button onClick={() => setEditing(null)}>← Back</Button>
-          <h1 className={css({ fontSize: '15px', fontWeight: 600 })}>
+          <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>
             {isNew ? 'New profile' : `Profile · ${editing}`}
           </h1>
         </div>
@@ -128,7 +128,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
         </Panel>
 
         <Panel title="Accounts">
-          <p className={css({ fontSize: '12px', color: 'faint', mb: '3', lineHeight: 1.55 })}>
+          <p className={css({ textStyle: 'meta', color: 'content.tertiary', mb: '3'})}>
             Who pays, in preference order. Attach more than one to rotate or to pick by remaining
             capacity.
           </p>
@@ -138,7 +138,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
             return (
               <label
                 key={n}
-                className={css({ display: 'flex', gap: '2', alignItems: 'baseline', mb: '2', fontSize: '13px' })}
+                className={css({ display: 'flex', gap: '2', alignItems: 'baseline', mb: '2', textStyle: 'body' })}
               >
                 <input
                   type="checkbox"
@@ -149,7 +149,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
                 />
                 <span>
                   {n}
-                  <span className={css({ color: 'faint', fontSize: '11.5px', ml: '2', fontFamily: 'mono' })}>
+                  <span className={css({ color: 'content.tertiary', textStyle: 'meta', ml: '2', fontFamily: 'mono' })}>
                     {a.provider}
                     {a.hasKey || a.apiKeyFromEnv ? '' : '  · no key'}
                   </span>
@@ -158,7 +158,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
             )
           })}
           {accounts.length === 0 ? (
-            <p className={css({ fontSize: '11.5px', color: 'danger', mt: '2' })}>
+            <p className={css({ textStyle: 'meta', color: 'danger.default', mt: '2' })}>
               A profile with no account has nothing to authenticate with and will not launch.
             </p>
           ) : null}
@@ -167,7 +167,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
         {accounts.length > 1 ? (
           <Panel title="Selection">
             {STRATEGIES.map((s) => (
-              <label key={s.id} className={css({ display: 'block', mb: '3', fontSize: '13px' })}>
+              <label key={s.id} className={css({ display: 'block', mb: '3', textStyle: 'body' })}>
                 <span className={css({ display: 'flex', gap: '2', alignItems: 'center' })}>
                   <input
                     type="radio"
@@ -178,7 +178,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
                   {s.label}
                 </span>
                 <span
-                  className={css({ display: 'block', color: 'faint', pl: '6', fontSize: '11.5px', lineHeight: 1.55 })}
+                  className={css({ display: 'block', color: 'content.tertiary', pl: '6', textStyle: 'meta'})}
                 >
                   {s.note}
                 </span>
@@ -204,7 +204,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
   return (
     <>
       <div className={css({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: '5' })}>
-        <h1 className={css({ fontSize: '15px', fontWeight: 600 })}>Profiles</h1>
+        <h1 className={css({ textStyle: 'heading', fontWeight: 'title' })}>Profiles</h1>
         <Button variant="primary" onClick={() => open(null)}>
           New profile
         </Button>
@@ -232,22 +232,22 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
                   alignItems: 'center',
                   gap: '3',
                   py: '2.5',
-                  borderBottom: '1px solid',
-                  borderColor: 'line',
+                  borderBottom: '[1px solid]',
+                  borderColor: 'border.subtle',
                   _last: { borderBottom: 'none' },
                 })}
               >
                 <Dot tone={broken ? 'danger' : 'ok'} />
-                <div className={css({ flex: 1, minW: 0 })}>
-                  <div className={css({ fontSize: '13px', fontWeight: 500 })}>
+                <div className={css({ flex: '1', minW: '0' })}>
+                  <div className={css({ textStyle: 'body', fontWeight: 'medium' })}>
                     {name}
                     {isDefault ? (
-                      <span className={css({ color: 'faint', fontWeight: 400, ml: '2', fontSize: '11.5px' })}>
+                      <span className={css({ color: 'content.tertiary', fontWeight: 'normal', ml: '2', textStyle: 'meta' })}>
                         default
                       </span>
                     ) : null}
                   </div>
-                  <div className={css({ fontSize: '11.5px', color: 'faint', fontFamily: 'mono' })}>
+                  <div className={css({ textStyle: 'meta', color: 'content.tertiary', fontFamily: 'mono' })}>
                     {broken
                       ? 'broken reference — open to repair'
                       : `${p.agentProfile} · ${first} → ${account!.provider}` +

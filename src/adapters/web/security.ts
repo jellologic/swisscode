@@ -20,6 +20,8 @@
  * the attacker's page is forbidden by the same-origin policy from reading our
  * response body to learn it.
  */
+import { createHash } from 'node:crypto'
+
 export type WebSecurityOptions = {
   token: string
   /** the port the server actually bound, needed to validate Host exactly */
@@ -168,6 +170,52 @@ export function guardDocumentRequest(
  * `Cache-Control: no-store` because the document carries the session token, and
  * a token in a disk cache outlives the server that issued it.
  */
+/**
+ * The CSP for a document, with the hashes of the inline scripts it contains.
+ *
+ * WHY HASHES AND NOT `unsafe-inline`. The page needs exactly one inline script:
+ * the theme resolver, which must run BEFORE first paint or every dark-mode user
+ * gets a white flash on load. Deferring it to React is what causes that flash,
+ * and moving it to a file makes the document depend on a second request to look
+ * right. So it stays inline — and the CSP names its exact bytes.
+ *
+ * This is TIGHTER than it looks, not a loosening. `unsafe-inline` would allow
+ * any injected script to run; a hash allows one specific script and nothing
+ * else, so an attacker who manages to inject a `<script>` into this document
+ * still gets it blocked. The hash is computed from the HTML actually being
+ * served, so the two can never disagree — and if the document is tampered with
+ * in transit, the hash stops matching and the script stops running, which is
+ * the behaviour you want.
+ */
+export function documentSecurityHeaders(html: string): Readonly<Record<string, string>> {
+  const hashes = inlineScriptHashes(html)
+  const scriptSrc = ["'self'", ...hashes.map((h) => `'${h}'`)].join(' ')
+  return Object.freeze({
+    ...SECURITY_HEADERS,
+    'content-security-policy': SECURITY_HEADERS['content-security-policy']!.replace(
+      "script-src 'self'",
+      `script-src ${scriptSrc}`,
+    ),
+  })
+}
+
+/**
+ * sha256 of each inline `<script>` body, base64, CSP-shaped.
+ *
+ * Only scripts with NO `src` attribute: an external one is governed by `'self'`
+ * and hashing it would be meaningless. The regex is deliberately narrow, and it
+ * runs over our own build output rather than user input.
+ */
+export function inlineScriptHashes(html: string): string[] {
+  const hashes: string[] = []
+  for (const match of html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)) {
+    const body = match[1] ?? ''
+    if (body.trim() === '') continue
+    hashes.push(`sha256-${createHash('sha256').update(body, 'utf8').digest('base64')}`)
+  }
+  return hashes
+}
+
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'content-security-policy':
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +

@@ -9,6 +9,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   SECURITY_HEADERS,
+  documentSecurityHeaders,
+  inlineScriptHashes,
   TOKEN_HEADER,
   allowedHosts,
   checkHost,
@@ -565,4 +567,43 @@ test('contextWindows accepts measured integers and drops anything else', () => {
   )
   assert.notEqual(typeof parsed, 'string')
   assert.deepEqual((parsed as { contextWindows: unknown }).contextWindows, { good: 200000 })
+})
+
+// ── the document's own CSP ──
+
+test('the document CSP allows its inline script by HASH, not by unsafe-inline', () => {
+  // The page needs exactly one inline script — the theme resolver, which must
+  // run before first paint or every dark-mode user gets a white flash. Allowing
+  // it with `unsafe-inline` would allow ANY injected script; a hash allows
+  // those exact bytes and nothing else, so this is tighter than the alternative
+  // rather than a concession.
+  const html = '<html><head><script>document.documentElement.dataset.theme="dark"</script></head></html>'
+  const csp = documentSecurityHeaders(html)['content-security-policy']!
+  assert.match(csp, /script-src 'self' 'sha256-[A-Za-z0-9+/=]+'/)
+  assert.doesNotMatch(csp, /unsafe-inline[^;]*script/)
+  // Everything else about the policy is untouched.
+  assert.match(csp, /default-src 'self'/)
+  assert.match(csp, /frame-ancestors 'none'/)
+})
+
+test('a different script body produces a different hash — tampering breaks it', () => {
+  // The property that makes this safe: the hash is computed from the document
+  // actually being served, so an injected script cannot match it.
+  const a = documentSecurityHeaders('<script>one()</script>')['content-security-policy']!
+  const b = documentSecurityHeaders('<script>two()</script>')['content-security-policy']!
+  assert.notEqual(a, b)
+})
+
+test('external scripts are governed by \'self\' and are not hashed', () => {
+  // Hashing a `src` script would be meaningless — the hash applies to inline
+  // bodies. The bundle is loaded this way and must stay covered by 'self'.
+  assert.deepEqual(inlineScriptHashes('<script src="/app.js"></script>'), [])
+  assert.deepEqual(inlineScriptHashes('<script type="module" src="/x.js"></script>'), [])
+  assert.equal(inlineScriptHashes('<script>  </script>').length, 0, 'an empty script needs no hash')
+})
+
+test('a document with no inline script gets the plain strict policy', () => {
+  const csp = documentSecurityHeaders('<html></html>')['content-security-policy']!
+  assert.match(csp, /script-src 'self';/)
+  assert.doesNotMatch(csp, /sha256/)
 })
