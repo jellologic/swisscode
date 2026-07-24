@@ -44,6 +44,7 @@ import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
 import {
   COLLISION_REASON,
   CONFLICT_REASON,
+  accountsUsedBy,
   credentialSource,
   identityCollisions,
 } from '../core/account.ts'
@@ -396,6 +397,31 @@ export async function runDoctor({
       }
     }
   }
+
+  // Accounts nothing can launch.
+  //
+  // CONFIG-WIDE, like the duplicate check below. An account no profile
+  // references is not idle, it is unreachable: `swisscode <account-name>` does
+  // not select it (a positional names a PROFILE), so the credential sits there
+  // paying for nothing. `config accounts login` now links one automatically, so
+  // this catches the leftovers — hand-edited configs, `--no-profile`, and every
+  // account created before that fix existed.
+  const orphans = Object.keys(loaded.state.providerAccounts ?? {}).filter(
+    (name) => accountsUsedBy(loaded.state.profiles, name).length === 0,
+  )
+  checks.push(
+    orphans.length === 0
+      ? makeCheck('account-orphan', 'accounts reachable', OK, 'every account is used by a profile')
+      : makeCheck(
+          'account-orphan',
+          'accounts reachable',
+          WARN,
+          `no profile uses ${orphans.join(', ')} — nothing can launch ${
+            orphans.length === 1 ? 'it' : 'them'
+          }`,
+          { fix: `swisscode config ${orphans[0]}` },
+        ),
+  )
 
   // Accounts that are secretly one subscription.
   //

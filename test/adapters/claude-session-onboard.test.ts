@@ -210,12 +210,56 @@ test('the default directory earns no permissions warning — swisscode did not c
   assert.doesNotMatch(h.err.join('\n'), /readable by other users/)
 })
 
-test('the recorded config is exactly one account and nothing else', () => {
+test('login makes the account LAUNCHABLE, not merely recorded', () => {
+  // THE BUG THIS REPLACES. The old assertion was "exactly one account and
+  // nothing else", which is what left users with an account they could not
+  // launch — `swisscode <account-name>` sent the name to the agent as a prompt,
+  // because a positional names a PROFILE and none referenced the account.
   const h = harness({ profiles: { p: { setup: 'a', accounts: [] } } } as Partial<State>)
   h.run({ ...base(h), name: 'personal' })
   const saved = h.saved.at(-1)!
   assert.deepEqual(Object.keys(saved.providerAccounts ?? {}), ['personal'])
-  assert.deepEqual(Object.keys(saved.profiles ?? {}), ['p'], 'existing config is preserved')
+  // The 1:1:1 shape the wizard mints, so a new install is in one arrangement.
+  assert.deepEqual(saved.profiles!.personal, {
+    setup: 'personal',
+    accounts: ['personal'],
+    strategy: 'single',
+  })
+  assert.deepEqual(saved.setups!.personal, {})
+  assert.ok(saved.profiles!.p, 'an unrelated existing profile is preserved')
+  assert.match(h.out.join('\n'), /swisscode personal/, 'and it says how to launch it')
+})
+
+test('--no-profile records the account alone, and says it cannot be launched', () => {
+  const h = harness()
+  h.run({ ...base(h), name: 'personal', noProfile: true })
+  const saved = h.saved.at(-1)!
+  assert.deepEqual(Object.keys(saved.providerAccounts ?? {}), ['personal'])
+  assert.deepEqual(Object.keys(saved.profiles ?? {}), [])
+  // The claim has to match reality — saying "ready to use" here was the bug.
+  assert.match(h.out.join('\n'), /cannot be launched yet/)
+})
+
+test('an existing profile already naming the account is reused, not duplicated', () => {
+  const h = harness({
+    profiles: { mine: { setup: 's', accounts: ['personal'] } },
+    setups: { s: {} },
+  } as Partial<State>)
+  h.run({ ...base(h), name: 'personal' })
+  const saved = h.saved.at(-1)!
+  assert.deepEqual(Object.keys(saved.profiles ?? {}), ['mine'], 'no second profile invented')
+  assert.match(h.out.join('\n'), /swisscode mine/, 'it names the profile that already works')
+})
+
+test('a name that cannot be a profile records the account and explains', () => {
+  // `fix` is a legal ACCOUNT name but a profile called `fix` would swallow
+  // `swisscode fix the login bug`. Refuse the profile, keep the account, say so.
+  const h = harness()
+  h.run({ ...base(h), name: 'fix' })
+  const saved = h.saved.at(-1)!
+  assert.deepEqual(Object.keys(saved.providerAccounts ?? {}), ['fix'])
+  assert.deepEqual(Object.keys(saved.profiles ?? {}), [], 'no prompt-shadowing profile')
+  assert.match(h.out.join('\n'), /cannot be launched yet/)
 })
 
 test('the created directory is empty — swisscode writes no credential into it', () => {

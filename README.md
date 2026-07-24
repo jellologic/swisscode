@@ -375,9 +375,15 @@ swisscode config accounts login personal --dir ~/.claude   # adopt the login you
 swisscode config accounts                     # who each account is, no keychain prompt
 ```
 
-`login` creates `~/.config/swisscode/accounts/<name>` at `0700`, then runs the
-agent there so you can complete `/login` once. After that the account is a
-normal thing profiles can reference.
+`login` creates `~/.config/swisscode/accounts/<name>` at `0700`, mints a profile
+of the same name so there is something to launch, then runs the agent there so
+you can complete `/login` once.
+
+The profile matters: an account says *who pays*, and `swisscode <name>` selects
+a **profile**. Without one the account is unreachable — which is why `config
+accounts` and `config doctor` both flag an account no profile uses. Pass
+`--no-profile` if you mean to wire it into an existing multi-account profile
+yourself.
 
 > **A new directory does not start logged out — it starts as a copy of the login
 > you already have.** Claude Code seeds a fresh `CLAUDE_CONFIG_DIR` from your

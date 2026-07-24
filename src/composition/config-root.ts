@@ -110,7 +110,9 @@ const USAGE = `swisscode config — manage profiles and directory bindings
 
   swisscode config accounts           provider accounts, and which profiles use each
   swisscode config accounts login <name>   adopt a Claude subscription: makes a session
-                 [--dir <path>]             directory and runs the agent so you can /login
+                 [--dir <path>]             directory, a profile you can launch, and runs
+                 [--no-profile]             the agent so you can /login (--no-profile skips
+                                            the profile, leaving it unlaunchable)
   swisscode config accounts usage     how much of each subscription is left, and cache it
   swisscode config upgrade            check npm for a newer swisscode and install it
     [--dry-run]                         (--dry-run only prints the command)
@@ -1187,7 +1189,13 @@ function accountsCommand({
     const i = rest.indexOf(name)
     return i >= 0 ? rest[i + 1] : undefined
   }
-  const positional = rest.filter((a, i) => !a.startsWith('--') && !rest[i - 1]?.startsWith('--'))
+  // ONLY these consume the token after them. The previous version treated every
+  // `--flag` as value-taking, so adding one boolean would have silently eaten
+  // the account name in `login --no-profile personal`.
+  const VALUE_FLAGS = ['--dir', '--provider']
+  const positional = rest.filter(
+    (a, i) => !a.startsWith('--') && !VALUE_FLAGS.includes(rest[i - 1] ?? ''),
+  )
 
   const options = {
     name: positional[0],
@@ -1203,6 +1211,7 @@ function accountsCommand({
     ...options,
     ...(dir !== undefined ? { dir } : {}),
     ...(provider !== undefined ? { provider } : {}),
+    ...(rest.includes('--no-profile') ? { noProfile: true } : {}),
   })
 }
 
@@ -1286,7 +1295,14 @@ function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
       // still a fingerprint and this output gets pasted into bug reports.
       out(`    key        ${credentialOrigin(a)}`)
     }
-    out(`    used by    ${usedBy.length > 0 ? usedBy.join(', ') : '— nothing'}`)
+    // "used by — nothing" understated it: an account no profile names cannot be
+    // launched at all, which is a broken state rather than an idle one.
+    if (usedBy.length > 0) {
+      out(`    used by    ${usedBy.join(', ')}`)
+    } else {
+      out('    used by    — NOTHING CAN LAUNCH THIS. An account says who pays; a profile is')
+      out(`               what you launch. Make one: \`swisscode config ${name}\``)
+    }
   }
 
   // The explanation goes ONCE, at the end, with the fix. Repeating the full
