@@ -1,0 +1,16 @@
+# Everything the image regenerates from source, plus host cruft that must never
+# cross into a Linux image. node_modules is the critical one: the host's is
+# built for the host platform, and copying it in would shadow the `npm ci` the
+# Dockerfile runs to build the right one.
+node_modules
+**/node_modules
+dist
+web/styled-system
+.git
+.github
+.playwright-mcp
+*.log
+.DS_Store
+bun.lock
+bun.lockb
+profiles.png

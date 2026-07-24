@@ -13,6 +13,9 @@ npm run typecheck                     # tsc --noEmit over src/ and test/
 node --test "test/core/**/*.test.ts"  # ~0.3s, no build needed
 node --test test/golden.test.ts       # one file
 node --test --test-name-pattern "binding walk" "test/**/*.test.ts"
+
+npm run test:e2e                      # Tier A: the REAL binary vs a recorder
+npm run test:e2e:real                 # Tier B: vs the REAL CLIs (Docker; see below)
 ```
 
 **Most suites need no build.** Node executes `.ts` directly, and `dist/` is
@@ -38,6 +41,8 @@ affecting anything else.
 | `test/registry.test.ts` | Invariant | Descriptor rules every provider must satisfy. |
 | `test/ui.test.ts`, `picker`, `profiles-ui` | End-to-end | The Ink wizard, driven with synthetic keystrokes. |
 | `test/config-commands.test.ts`, `launch-overrides.test.ts` | Integration | Subcommand dispatch and the override pipeline through a composition root. |
+| `test/e2e/*.e2e.ts` | End-to-end (hermetic) | The **real** `bin/swisscode.js`, launched against a recorder. See below. |
+| `test/e2e/*.real.ts` | End-to-end (real CLIs) | The real binary vs the real coding CLIs, in Docker. See below. |
 | `test/support/fixtures.ts` | Helper | Typed constructors for deliberately incomplete domain objects. |
 
 ### The four that are unusual
@@ -154,22 +159,70 @@ a temp directory; never let a test touch the real `~/.config/swisscode`.
   property: `an unknown positional falls through, an unknown flag does not`,
   `no launch inherits a stale ANTHROPIC_API_KEY it did not ask for`.
 
+## The end-to-end harness
+
+Everything above asserts on the launch **plan** — the in-memory object
+`planLaunch` / `buildEnvPlan` produce. Nothing there runs the real binary and
+observes what it launches. The e2e harness closes that gap, in two tiers, both
+under `test/e2e/`.
+
+**Tier A — hermetic (`*.e2e.ts`, `npm run test:e2e`, every PR).** The three
+`SWISSCODE_*_BIN` overrides are pointed at `recorder.mjs` — a tiny fake agent
+that writes down its own argv, env and cwd, then exits. The harness seeds a temp
+config, runs the real `bin/swisscode.js`, and reads that capture. So the whole
+pipeline runs for real — argv parsing, config load, resolution, env lowering,
+the `execve` handoff — with no network, no credential and full determinism.
+
+The assertion a plan test cannot make: for a third-party provider, the stale
+`ANTHROPIC_API_KEY` from the polluted ambient env is **absent from the launched
+child**. Present in `plan.unset` is not the same as gone from the process; only a
+real launch shows the difference. This is `test/golden.test.ts`'s claim, verified
+one layer further out.
+
+The recorder is **copied** into a temp dir, never symlinked or run from inside
+the repo, because swisscode's recursion guard resolves candidates with
+`realpathSync` and rejects anything under its own install directory — a symlink
+resolves back into the repo and is (correctly) refused. A copy under `/tmp` is
+accepted exactly as a real agent would be. The recorder exiting immediately is
+also why this is not the "do not launch for real" hazard `CLAUDE.md` warns
+about: it is the safe launch that warning leaves room for.
+
+**Tier B — real CLIs (`*.real.ts`, `npm run test:e2e:real`, manual only).** A
+Docker image (`test/e2e/Dockerfile`) installs the three actual CLIs at pinned
+versions and runs swisscode against them. It forwards only `--version`, which
+every CLI answers before any auth — non-billable, no secret, no cost. It cannot
+be deterministic (it depends on upstream), so it never gates a PR; it catches an
+upstream flag rename or a rejected env var when someone runs it:
+
+```sh
+docker build -f test/e2e/Dockerfile -t swisscode-e2e .
+docker run --rm swisscode-e2e
+```
+
+The `.real.ts` extension is deliberate: `test:e2e` globs `*.e2e.ts` and
+`npm test` globs `*.test.ts`, so the three sets are disjoint and a PR that has
+not installed the real CLIs stays green.
+
 ## CI
 
-`.github/workflows/ci.yml` runs `npm test` on every push to `main` and every pull
-request, across Node 22 and 24 on ubuntu and macOS.
+`.github/workflows/ci.yml` runs `npm test` and then `npm run test:e2e` on every
+push to `main` and every pull request, across Node 22 and 24 on ubuntu and macOS.
+`.github/workflows/e2e-real.yml` runs Tier B, on manual dispatch only.
 
 Node 22 is not there for symmetry — it is the floor `engines` promises, and the
 version where the toolchain assumptions have to hold: type stripping is what lets
 the suite run straight from `.ts`, and `tsc`'s emit is equivalent to that stripped
 program only because `target: es2023` downlevels nothing there.
 
-One thing it does **not** buy, despite being the version where `process.execve`
-does not exist: extra coverage of the spawn fallback. `spawnFallback` is called
-directly with an injected `SignalHost`, so it is exercised on every version, and
-nothing asserts on the dispatch inside `createNodeProcess().replace()` — taking
-the `execve` branch would replace the test process. The runtime difference is
-real; the test difference is not.
+The `execve` dispatch inside `createNodeProcess().replace()` is now covered — by
+the e2e harness, which runs the real binary in a child process, lets it `execve`
+into the recorder, and reads back what landed. Taking that branch replaces the
+*child*, not the test runner, which is what makes it observable. (Even Node 22.23
+backported `process.execve`, so both supported versions take the `execve` branch;
+the `spawn` fallback fires only where execve is truly absent — Windows and
+Node < 23.11 — and stays unit-tested via `spawnFallback` with an injected
+`SignalHost`. Running the e2e under both Node versions is defence in depth, not
+two different dispatches.)
 
 Windows is deliberately not in the matrix. `execve` does not exist there, the
 POSIX mode bits the config store asserts are meaningless, and nobody has verified
