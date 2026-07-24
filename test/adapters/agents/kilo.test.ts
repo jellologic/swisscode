@@ -68,3 +68,35 @@ test('capabilities describe a single model slot', () => {
   assert.equal(kilo.binary.name, 'kilo')
   assert.equal(kilo.binary.overrideEnv, 'SWISSCODE_KILO_BIN')
 })
+
+test('a gateway compat flag on a Kilo profile is flagged as ignored — the safety net', () => {
+  // The UI now hides the compat section for Kilo, but a hand-edited or
+  // agent-switched config can still carry a flag. Compat is Claude-Code-only,
+  // so Kilo warns rather than silently doing nothing — the one mismatch that
+  // previously had no net at edit, launch, or doctor.
+  const input: TranslateInput = {
+    intent: intent(),
+    profile: makeProfile({ provider: 'zai', compat: { disableAdaptiveThinking: true } }),
+    provider: null,
+    passthrough: [],
+    ambient: {},
+  }
+  const w = kilo.translate(input).warnings.find((x) => x.code === 'compat-ignored')
+  assert.ok(w, 'Kilo should warn that a compat flag is ignored')
+  assert.match(w.message, /disableAdaptiveThinking/)
+  assert.match(w.message, /Kilo/)
+})
+
+test('a Kilo profile with no compat flags emits no compat-ignored warning', () => {
+  const input: TranslateInput = {
+    intent: intent(),
+    profile: makeProfile({ provider: 'zai' }),
+    provider: null,
+    passthrough: [],
+    ambient: {},
+  }
+  assert.equal(
+    kilo.translate(input).warnings.find((x) => x.code === 'compat-ignored'),
+    undefined,
+  )
+})

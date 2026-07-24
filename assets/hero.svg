@@ -14,10 +14,12 @@
   <rect width="1200" height="380" fill="url(#glow)"/>
   <rect x="0.5" y="0.5" width="1199" height="379" rx="0" fill="none" stroke="#1c2330"/>
 
-  <!-- Swiss-cross mark -->
+  <!-- Prompt mark: a terminal chevron + cursor on the red handle (no cross). -->
   <rect x="64" y="60" width="76" height="76" rx="17" fill="#da291c"/>
-  <rect x="96" y="78" width="12" height="40" rx="3" fill="#ffffff"/>
-  <rect x="82" y="92" width="40" height="12" rx="3" fill="#ffffff"/>
+  <g transform="translate(64,60) scale(0.76)">
+    <path d="M30 34 L54 50 L30 66" fill="none" stroke="#ffffff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="62" y="41" width="13" height="18" rx="3" fill="#ffffff"/>
+  </g>
 
   <!-- Wordmark -->
   <text x="158" y="112" font-size="58" font-weight="800" letter-spacing="-1.5">

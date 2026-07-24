@@ -8,6 +8,7 @@ import {
   type ThemePreference,
 } from './theme'
 import { ApiError, api, type Bootstrap } from './api'
+import { BrandMark } from './Brand'
 import { Banner, Dot, SegmentedControl } from './ui'
 import { Profiles } from './routes/Profiles'
 import { Accounts } from './routes/Accounts'
@@ -140,12 +141,7 @@ export function App() {
         })}
       >
         <div className={css({ px: '2', py: '2', mb: '3' })}>
-          <div className={css({ textStyle: 'body', fontWeight: 'title' })}>
-            swisscode
-          </div>
-          <div className={css({ textStyle: 'micro', color: 'content.tertiary', mt: '0.5' })}>
-            local configuration
-          </div>
+          <BrandMark subtitle="local configuration" />
         </div>
 
         <nav className={css({ display: 'flex', flexDirection: 'column', gap: '0.5' })}>
