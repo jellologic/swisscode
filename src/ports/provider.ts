@@ -104,6 +104,21 @@ export type ProviderDescriptor = {
   credentialEnv: ClaudeCodeCredentialEnv
   credentialOptional?: boolean
   /**
+   * Whether an account on this provider may authenticate with a SESSION —
+   * a directory holding a login the agent performed itself — instead of a key.
+   *
+   * DECLARED, not inferred. The browser worked this out as
+   * `baseUrl === null && !askBaseUrl`, which is true of Anthropic today and is
+   * an accident of the descriptor rather than a statement about it. The wizard
+   * needed the same answer, and account validation is a third caller — three
+   * private copies of a rule is exactly the divergence `core/account.ts` was
+   * written to end, so the descriptor states it once.
+   *
+   * Absent means false: a session directory holds an OAuth login to
+   * api.anthropic.com, and pointing one at a gateway authenticates nothing.
+   */
+  sessionCapable?: boolean
+  /**
    * The credential to send when the profile carries none.
    *
    * For endpoints that require the field to be POPULATED but do not check it —

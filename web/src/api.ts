@@ -31,6 +31,8 @@ export type ProviderInfo = {
   baseUrl: string | null
   askBaseUrl: boolean
   credentialOptional: boolean
+  /** whether an account here may authenticate with a session directory */
+  sessionCapable: boolean
   defaultModels: Record<string, string>
   catalogId: string | null
   hints: { keyHint?: string; modelHint?: string; note?: string }

@@ -223,10 +223,11 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
     const isNew = !data.state.providerAccounts?.[editing]
     const provider = data.providers.find((p) => p.id === draft.provider)
     const stored = data.state.providerAccounts?.[editing]
-    // Session mode belongs to the first-party Anthropic endpoint: a provider
-    // with no baseUrl of its own that is not the custom "ask me" one. A gateway
-    // (baseUrl set) or a custom endpoint cannot read a ~/.claude login.
-    const sessionCapable = Boolean(provider && provider.baseUrl === null && !provider.askBaseUrl)
+    // DECLARED by the provider, not inferred from the shape of its descriptor.
+    // This used to read `baseUrl === null && !askBaseUrl`, which is true of
+    // Anthropic by accident rather than by statement — and the wizard needed the
+    // same answer, which would have made it two copies of a guess.
+    const sessionCapable = Boolean(provider?.sessionCapable)
     const mode: 'key' | 'session' =
       draft.configDir && sessionCapable ? 'session' : 'key'
     return (
@@ -258,7 +259,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
               onChange={(e) => {
                 const nextId = e.target.value
                 const next = data.providers.find((p) => p.id === nextId)
-                const nextSessionCapable = Boolean(next && next.baseUrl === null && !next.askBaseUrl)
+                const nextSessionCapable = Boolean(next?.sessionCapable)
                 setDraft((d) => ({
                   ...d,
                   provider: nextId,

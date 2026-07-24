@@ -336,6 +336,7 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
         baseUrl: p.baseUrl,
         askBaseUrl: Boolean(p.askBaseUrl),
         credentialOptional: Boolean(p.credentialOptional),
+        sessionCapable: Boolean(p.sessionCapable),
         defaultModels: p.defaultModels,
         catalogId: p.catalogId ?? null,
         hints: p.hints ?? {},

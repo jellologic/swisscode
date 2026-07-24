@@ -369,6 +369,11 @@ key — it is a **login**, stored by Claude Code in your keychain and pointed at
 An account is one or the other, never both; a config naming a key *and* a
 session directory is refused rather than resolved by precedence.
 
+The terminal wizard covers this too — pick **Anthropic (direct)** in
+`swisscode config <name>` and it asks how the account pays, offering a
+subscription kept separate from your other logins, the login you already use, or
+an API key. Or do it directly:
+
 ```sh
 swisscode config accounts login work          # make a session dir, run /login inside
 swisscode config accounts login personal --dir ~/.claude   # adopt the login you already have
