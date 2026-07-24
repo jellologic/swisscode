@@ -16,8 +16,10 @@
   <!-- Logo + wordmark, centered -->
   <g transform="translate(410,120)">
     <rect x="0" y="0" width="120" height="120" rx="27" fill="#da291c"/>
-    <rect x="50" y="28" width="20" height="64" rx="5" fill="#ffffff"/>
-    <rect x="28" y="50" width="64" height="20" rx="5" fill="#ffffff"/>
+    <g transform="scale(1.2)">
+      <path d="M30 34 L54 50 L30 66" fill="none" stroke="#ffffff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="62" y="41" width="13" height="18" rx="3" fill="#ffffff"/>
+    </g>
     <text x="150" y="90" font-size="96" font-weight="800" letter-spacing="-3">
       <tspan fill="#f0f6fc">swiss</tspan><tspan fill="#ff5a4d">code</tspan>
     </text>

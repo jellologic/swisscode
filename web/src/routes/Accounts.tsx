@@ -24,6 +24,7 @@ import {
   monoInput,
   selectStyle,
 } from '../ui'
+import { EmptyState } from '../Brand'
 // The SAME decisions the CLI and the API make, imported rather than restated.
 // core/ is pure — no I/O, no node builtins — so it bundles into the browser as
 // happily as it compiles for the launch path.
@@ -222,7 +223,12 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
     const isNew = !data.state.providerAccounts?.[editing]
     const provider = data.providers.find((p) => p.id === draft.provider)
     const stored = data.state.providerAccounts?.[editing]
-    const mode: 'key' | 'session' = draft.configDir ? 'session' : 'key'
+    // Session mode belongs to the first-party Anthropic endpoint: a provider
+    // with no baseUrl of its own that is not the custom "ask me" one. A gateway
+    // (baseUrl set) or a custom endpoint cannot read a ~/.claude login.
+    const sessionCapable = Boolean(provider && provider.baseUrl === null && !provider.askBaseUrl)
+    const mode: 'key' | 'session' =
+      draft.configDir && sessionCapable ? 'session' : 'key'
     return (
       <>
         <PageHeader
@@ -249,7 +255,20 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
             <select
               className={selectStyle}
               value={String(draft.provider ?? '')}
-              onChange={(e) => put('provider', e.target.value)}
+              onChange={(e) => {
+                const nextId = e.target.value
+                const next = data.providers.find((p) => p.id === nextId)
+                const nextSessionCapable = Boolean(next && next.baseUrl === null && !next.askBaseUrl)
+                setDraft((d) => ({
+                  ...d,
+                  provider: nextId,
+                  // A session login belongs to the first-party Anthropic
+                  // endpoint; switching to a gateway must not leave a stale
+                  // configDir that would send the ~/.claude token to a foreign
+                  // host. Drop it, reverting the account to key mode.
+                  ...(nextSessionCapable ? {} : { configDir: '' }),
+                }))
+              }}
             >
               {data.providers.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -291,16 +310,27 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
                 naming nothing.
               */}
               <SectionLabel id={MODE_LABEL_ID}>How this account authenticates</SectionLabel>
-              <SegmentedControl
-                labelledBy={MODE_LABEL_ID}
-                options={CREDENTIAL_MODES}
-                value={mode}
-                onChange={(id) => put('configDir', id === 'session' ? '~/.claude' : '')}
-              />
-              <Note>
-                A key, or a login the agent already performed. Never both — the server refuses that
-                rather than picking one.
-              </Note>
+              {sessionCapable ? (
+                <>
+                  <SegmentedControl
+                    labelledBy={MODE_LABEL_ID}
+                    options={CREDENTIAL_MODES}
+                    value={mode}
+                    onChange={(id) => put('configDir', id === 'session' ? '~/.claude' : '')}
+                  />
+                  <Note>
+                    A key, or a login the agent already performed. Never both — the server refuses
+                    that rather than picking one.
+                  </Note>
+                </>
+              ) : (
+                // Session mode is a subscription login held in ~/.claude, which
+                // only the first-party Anthropic endpoint reads. A gateway or a
+                // custom endpoint authenticates with a key, so the choice is not
+                // offered — it could only build an account that ships the wrong
+                // token to the wrong host.
+                <Note>{provider?.label ?? 'This provider'} authenticates with an API key.</Note>
+              )}
             </Stack>
 
             {/*
@@ -442,7 +472,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
         }
       >
         {accounts.length === 0 ? (
-          <Empty>No accounts yet. An account is a provider plus the credential that pays for it.</Empty>
+          <EmptyState>No accounts yet. An account is a provider plus the credential that pays for it.</EmptyState>
         ) : (
           <DataList>
             {accounts.map(([name, a]) => {

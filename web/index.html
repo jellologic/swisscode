@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>swisscode</title>
     <!--
+      The Swiss-cross mark, served same-origin from web/public/ (Vite copies it
+      to the asset root, swisscode's server hands it back as image/svg+xml). A
+      file rather than a data: URI so it is cacheable and the CSP stays 'self'.
+    -->
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <!-- Match the browser chrome to whichever theme is active. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#08090a" />
+    <!--
       The server rewrites this placeholder with a per-run token before serving.
       A meta tag rather than a cookie: a cookie rides along on cross-origin
       requests automatically, a value the page must read out of its own HTML
