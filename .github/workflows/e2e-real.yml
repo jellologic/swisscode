@@ -1,0 +1,35 @@
+name: E2E (real CLIs)
+
+# Tier B: swisscode against the actual @anthropic-ai/claude-code, @kilocode/cli
+# and opencode-ai. Manual dispatch ONLY — building on every PR would tie the
+# merge gate to three third-party packages being installable, and the value
+# (catching an upstream flag rename) does not need per-PR frequency. Run it when
+# verifying against a new CLI release, or on a whim.
+#
+# Non-billable: the suite forwards only `--version`, which every CLI answers
+# before auth. No secret is needed and none is referenced.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real:
+    name: real CLI handoff
+    runs-on: ubuntu-latest
+    steps:
+      # SHA-pinned, matching ci.yml and publish.yml, so Dependabot bumps all
+      # three in one reviewable PR.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # The whole point is the image: it installs the three real CLIs at pinned
+      # versions and runs the handoff suite as its default command. Building and
+      # running it here is a faithful copy of the documented local command, so a
+      # green run means the documented command works.
+      - name: Build the real-CLI image
+        run: docker build -f test/e2e/Dockerfile -t swisscode-e2e .
+
+      - name: Run the real-CLI handoff suite
+        run: docker run --rm swisscode-e2e

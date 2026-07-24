@@ -73,6 +73,16 @@ jobs:
       - name: Test
         run: npm test
 
+      # The end-to-end harness (Tier A): run the REAL bin/swisscode.js against a
+      # recorder and assert on the process it actually launched — the execve
+      # handoff, the argv it forwarded, and the stale env it removed at the OS
+      # level. Hermetic (no network, no credential, no real CLI), so it belongs
+      # on every PR. Runs in every matrix cell, which is how both supported Node
+      # versions exercise it. `npm test` already built dist/, but the script
+      # rebuilds to stay self-contained if this step is ever reordered.
+      - name: End-to-end (hermetic)
+        run: npm run test:e2e
+
       # What users actually download. Shipping the web UI means everyone gets a
       # React bundle they may never open; the budget keeps that a decision that
       # is re-made on every PR rather than one that drifts. One cell is enough —
