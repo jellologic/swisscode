@@ -148,6 +148,21 @@ If the first word isn't a profile name it's passed straight to `claude`, so
 `swisscode fix the login bug` still works. To be explicit either way, use
 `--cc-profile work` — an unknown name there is an error rather than a prompt.
 
+One exception to that fallthrough: a first word that names an **account** or an
+**agent profile** is refused rather than sent as a prompt, because it is far
+likelier to be a mis-aimed selection than the start of a sentence.
+
+```
+$ swisscode personal
+swisscode: "personal" is an account, not a profile — accounts say who pays, and
+a profile is the pairing you launch. Known profiles: work. Make one that uses it
+with `swisscode config <name>`, or send this word to the agent as a prompt with
+`swisscode -- personal …`.
+```
+
+It only fires on an exact match against a name in your own config, so ordinary
+prompts are untouched — and `swisscode -- personal …` sends it through verbatim.
+
 Profile names must start with a letter or digit and contain only letters,
 digits, `.`, `_` or `-`. Names that would collide with a subcommand, or with a
 word you're likely to start a prompt with (`fix`, `test`, `run`, …), are

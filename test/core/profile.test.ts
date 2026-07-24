@@ -162,3 +162,69 @@ test('a profile named after a subcommand is still selectable by flag', () => {
   const shadowed = makeState({ providerAccounts: { list: { provider: 'zai' } }, agentProfiles: { list: {} }, profiles: { list: { agentProfile: 'list', accounts: ['list'] } }, defaultProfile: null })
   assert.equal(resolveProfile(shadowed, { profileFlag: 'list' }).name, 'list')
 })
+
+// A name that is a config concept, but not the one the positional selects.
+//
+// `orphan` has an account and an agent profile that NO profile pairs — the
+// state you are in immediately after `config accounts login`, and the one that
+// made `swisscode ezra.spero` fire the account name at the default profile as
+// a prompt.
+
+const orphan = {
+  version: 2,
+  providerAccounts: { z: { provider: 'zai' }, spare: { provider: 'anthropic' } },
+  agentProfiles: { z: {}, solo: {} },
+  profiles: { z: { agentProfile: 'z', accounts: ['z'] } },
+  defaultProfile: 'z',
+  bindings: {},
+  settings: {},
+}
+
+test('an account name given positionally is refused, not sent as a prompt', () => {
+  const sel = resolveProfile(orphan, { cwd: '/x', positional: 'spare' })
+  assert.equal(sel.profile, null)
+  assert.equal(sel.name, null, 'nothing may launch')
+  assert.match(sel.error!, /"spare" is an account, not a profile/)
+  assert.match(sel.error!, /accounts say who pays/)
+  // Both ways forward, because the user meant one of exactly two things.
+  assert.match(sel.error!, /Known profiles: z\./)
+  assert.match(sel.error!, /swisscode config <name>/)
+  assert.match(sel.error!, /swisscode -- spare/)
+})
+
+test('an agent-profile name is refused the same way, in its own words', () => {
+  const sel = resolveProfile(orphan, { cwd: '/x', positional: 'solo' })
+  assert.match(sel.error!, /"solo" is an agent profile, not a profile/)
+  assert.match(sel.error!, /agent profiles say what runs/)
+})
+
+test('an ordinary prompt word is UNTOUCHED by the account check', () => {
+  // THE REGRESSION THAT WOULD BREAK THE PRODUCT. `swisscode fix this bug` is a
+  // supported invocation; the check above must fire on an exact match against
+  // this config's own names and on nothing else.
+  for (const word of ['fix', 'why', 'refactor', 'spares', 'z-ish']) {
+    const sel = resolveProfile(orphan, { cwd: '/x', positional: word })
+    assert.equal(sel.error, null, `"${word}" was refused`)
+    assert.equal(sel.name, 'z', `"${word}" must still reach the default profile`)
+    assert.equal(sel.consumedPositional, false, `"${word}" must still reach claude`)
+  }
+})
+
+test('a name that is BOTH a profile and an account still selects the profile', () => {
+  // `z` is an account, an agent profile and a profile. Tier 1a matches first, so
+  // the check never sees it — a launch that already worked must keep working.
+  const sel = resolveProfile(orphan, { cwd: '/x', positional: 'z' })
+  assert.equal(sel.error, null)
+  assert.equal(sel.name, 'z')
+  assert.equal(sel.source, 'positional')
+  assert.equal(sel.consumedPositional, true)
+})
+
+test('the escape hatch works because `--` leaves no positional at all', () => {
+  // `swisscode -- spare …` parses to positional: null (argv[0] starts with `-`),
+  // so the words reach claude verbatim. Asserted here as the contract the error
+  // message promises, since a suggested fix that does not work is worse than none.
+  const sel = resolveProfile(orphan, { cwd: '/x', positional: null })
+  assert.equal(sel.error, null)
+  assert.equal(sel.name, 'z')
+})
