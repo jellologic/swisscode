@@ -126,14 +126,43 @@ need to pass a reserved token through literally, put it after `--`:
 swisscode -- --cc-profile   # claude receives "--cc-profile"
 ```
 
+## The four things
+
+Four concepts, and only the last one is a thing you launch.
+
+| | What it is | Optional? |
+|---|---|---|
+| **Provider** | An endpoint dialect — base URL, which credential variable, default models, compatibility flags. Eight ship built in | No. Every account names one. *Adding your own* is the optional part |
+| **Account** | **Who pays.** One provider plus one credential: an API key, an env var, or a Claude subscription login | No |
+| **Setup** | **What runs.** Which CLI (`claude-code`, `kilo`, `opencode`), which model per tier, permissions, env | No. Every profile names one |
+| **Profile** | **The pairing.** One setup + one or more accounts + how to choose between them | No — this is what `swisscode <name>` launches |
+
+```
+swisscode work
+  └── profile "work"
+       ├── setup "cc"                        claude-code, opus/sonnet/haiku
+       └── accounts ["personal", "team"]     strategy: usage
+            └── account "personal"  →  provider "anthropic"  →  subscription login
+```
+
+Why split at all: they vary independently. One setup ("Claude Code, yolo, GLM on
+every tier") can be pointed at several accounts, and one account can back several
+setups. A profile naming more than one account is how rotation works.
+
+Two mistakes the tool now catches for you, because both used to fail silently:
+an **account with no profile** cannot be launched (`swisscode <account-name>`
+selects a *profile*, so the name would go to the agent as a prompt), and **two
+accounts that are the same subscription** share one quota while looking like two.
+
 ## Profiles
 
-A profile is a named provider + key + models. Name one after each account,
-client or experiment.
+Name one after each account, client or experiment.
 
 ```sh
 swisscode config work           # create or edit the "work" profile
 swisscode config list           # every profile (keys are never printed)
+swisscode config setups         # what runs, and which profiles share each
+swisscode config accounts       # who pays, and which profiles use each
 swisscode config default work   # used when nothing else applies
 swisscode config rm old         # deletes it, and any bindings to it
 ```

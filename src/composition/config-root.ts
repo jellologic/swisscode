@@ -102,6 +102,12 @@ const SUBCOMMANDS = Object.freeze([
 
 const USAGE = `swisscode config — manage profiles and directory bindings
 
+  provider  an endpoint dialect — 8 ship built in; adding one is optional
+  account   WHO PAYS: a provider plus a key, an env var, or a Claude login
+  setup     WHAT RUNS: which CLI, which model per tier, permissions
+  profile   THE PAIRING of a setup with one or more accounts — and the only
+            one of the four that \`swisscode <name>\` launches
+
   swisscode config                    edit the active profile, or pick one
   swisscode config <name>             create or edit a named profile
   swisscode config list               every profile, with its provider and models

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { css, cva } from '../../styled-system/css'
 import { ApiError, api, type Bootstrap, type SelectionStrategy } from '../api'
 import {
@@ -113,6 +113,75 @@ function Ref({
 // `Checkbox` renders its label into a <span>, so this is inline-flex rather
 // than an `Inline` — whose <div> would be invalid markup in that slot.
 const choiceLabelRow = css({ display: 'inline-flex', alignItems: 'baseline', gap: '2' })
+
+/* ------------------------------------------------------- the four concepts */
+
+/**
+ * What the four screens in the sidebar actually are, and how they relate.
+ *
+ * COLLAPSED BY DEFAULT, because it is onboarding rather than working state and
+ * the people who need it need it once. Each screen already carries its own
+ * one-line description ("who pays", "what runs"); what was missing — and what
+ * users got wrong — is the RELATIONSHIP between them, which no single screen is
+ * in a position to state.
+ */
+const conceptRow = css({
+  display: 'grid',
+  gridTemplateColumns: '[6rem 1fr]',
+  columnGap: '4',
+  rowGap: '1',
+  alignItems: 'baseline',
+  '& > *': { minW: '0' },
+})
+const conceptTerm = css({ textStyle: 'code', color: 'content.primary' })
+const conceptDef = css({ textStyle: 'meta', color: 'content.secondary' })
+const conceptTree = css({
+  textStyle: 'code',
+  color: 'content.tertiary',
+  whiteSpace: 'pre',
+  overflowX: 'auto',
+  mt: '3',
+})
+
+const CONCEPTS: { term: string; def: string }[] = [
+  { term: 'provider', def: 'an endpoint dialect — eight ship built in; adding your own is optional' },
+  { term: 'account', def: 'WHO PAYS. One provider plus a key, an env var, or a Claude subscription login' },
+  { term: 'setup', def: 'WHAT RUNS. Which CLI, which model per tier, permissions' },
+  {
+    term: 'profile',
+    def: 'THE PAIRING of a setup with one or more accounts — and the only one of the four you launch',
+  },
+]
+
+const CONCEPT_TREE = `swisscode work
+  └── profile "work"
+       ├── setup "cc"                     claude-code, opus/sonnet/haiku
+       └── accounts ["personal", "team"]  strategy: usage
+            └── account "personal" → provider "anthropic" → subscription login`
+
+function HowTheseFit() {
+  const [open, setOpen] = useState(false)
+  return (
+    <Panel
+      title="How these fit together"
+      action={<Button onClick={() => setOpen((v) => !v)}>{open ? 'Hide' : 'Show'}</Button>}
+    >
+      {open ? (
+        <>
+          <div className={conceptRow}>
+            {CONCEPTS.map((c) => (
+              <React.Fragment key={c.term}>
+                <div className={conceptTerm}>{c.term}</div>
+                <div className={conceptDef}>{c.def}</div>
+              </React.Fragment>
+            ))}
+          </div>
+          <div className={conceptTree}>{CONCEPT_TREE}</div>
+        </>
+      ) : null}
+    </Panel>
+  )
+}
 
 export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Promise<void> }) {
   const names = Object.keys(data.state.profiles ?? {})
@@ -304,6 +373,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
         }
       />
       {error ? <Banner tone="danger">{error}</Banner> : null}
+      <HowTheseFit />
 
       <Panel flush>
         {names.length === 0 ? (
