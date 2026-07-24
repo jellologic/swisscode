@@ -5,7 +5,7 @@
 // most of what is asserted here is about what they write and what they refuse.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runConfigCommand } from '../src/composition/config-root.ts'
@@ -13,7 +13,7 @@ import { registry } from '../src/adapters/providers/registry.ts'
 import { registry as agents } from '../src/adapters/agents/registry.ts'
 import type { OpenUi } from '../src/composition/config-root.ts'
 import type { State } from '../src/ports/config-store.ts'
-import { makeProfile } from './support/fixtures.ts'
+import { makeAccount, makeProfile } from './support/fixtures.ts'
 
 // Annotated `State` rather than left to inference: the tests below read
 // profiles these commands CREATE — `.fix`, `.old`, `.third` — which a literal
@@ -478,6 +478,58 @@ test('config accounts lists who pays, and the reverse index of who uses them', a
   // Presence and origin only — never any part of the value.
   assert.match(text, /stored in config\.json/)
   assert.ok(!text.includes('sk-or-B'), 'an account key reached the terminal')
+})
+
+test('config accounts names two accounts that are secretly one subscription', async (t) => {
+  // REAL DIRECTORIES, because the identity comes off disk. The situation is the
+  // measured one: `config accounts login spare` creates a directory, Claude Code
+  // seeds it from the login already in use, and exiting without `/login` leaves
+  // two names for one quota. Both directories exist and differ; only the
+  // `.claude.json` inside them shows it.
+  const root = mkdtempSync(join(tmpdir(), 'swisscode-dup-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const seed = (name: string, uuid: string, email: string): string => {
+    const dir = join(root, name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, '.claude.json'),
+      JSON.stringify({ oauthAccount: { accountUuid: uuid, emailAddress: email } }),
+    )
+    return dir
+  }
+
+  const state = STATE()
+  // personal and spare are the SAME login in two directories; work is genuinely
+  // separate and must stay unflagged.
+  state.providerAccounts.personal = makeAccount({
+    provider: 'anthropic',
+    configDir: seed('personal', 'u-1', 'me@x.com'),
+  })
+  state.providerAccounts.spare = makeAccount({
+    provider: 'anthropic',
+    configDir: seed('spare', 'u-1', 'me@x.com'),
+  })
+  state.providerAccounts.work = makeAccount({
+    provider: 'anthropic',
+    configDir: seed('work', 'u-2', 'work@x.com'),
+  })
+
+  const h = harness({ state })
+  assert.equal(await h.run(['accounts']), 0)
+  const text = h.text()
+
+  assert.match(text, /DUPLICATE\s+same subscription as spare/)
+  assert.match(text, /DUPLICATE\s+same subscription as personal/)
+  assert.match(text, /personal and spare are the same Anthropic account/)
+  // The fix has to name `/login`, since "delete one" is the wrong advice —
+  // the user wanted two subscriptions and still has one.
+  assert.match(text, /`\/login` as a\n\s+DIFFERENT account/)
+  // A genuinely separate account must NOT be swept in. Firing on real setups is
+  // how a warning gets trained out of existence.
+  assert.ok(
+    !/work.*DUPLICATE/s.test(text.slice(text.indexOf('  work'), text.indexOf('PROBLEM'))),
+    'a distinct account was reported as a duplicate',
+  )
 })
 
 test('config agents marks a shared agent profile as shared', async () => {

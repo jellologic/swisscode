@@ -32,12 +32,20 @@ import { TIERS } from '../core/tiers.ts'
 import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
 import { describeIdentity, readSessionIdentity } from '../adapters/claude-session/identity.ts'
+import type { SessionIdentity } from '../adapters/claude-session/identity.ts'
+import type { IdentityCollision } from '../core/account.ts'
 import { accountLogin } from '../adapters/claude-session/onboard.ts'
 import { swapCredential } from '../adapters/claude-session/swap.ts'
 import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { CONFLICT_REASON, accountsUsedBy, credentialSource } from '../core/account.ts'
+import {
+  COLLISION_REASON,
+  CONFLICT_REASON,
+  accountsUsedBy,
+  credentialSource,
+  identityCollisions,
+} from '../core/account.ts'
 import { isNewer } from '../core/version.ts'
 import {
   createFsVersionStore,
@@ -1206,6 +1214,31 @@ function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
     return 0
   }
 
+  // Identities are read UP FRONT rather than inside the loop, because the
+  // duplicate-subscription check below needs every account's identity before the
+  // first one is printed. Still exactly one read apiece — `.claude.json` is a
+  // 200 kB file on a well-used account and this command runs constantly.
+  const identities = new Map<string, SessionIdentity | null>()
+  for (const name of names) {
+    const dir = state.providerAccounts[name]!.configDir
+    if (dir) identities.set(name, readSessionIdentity(dir))
+  }
+  const collisions = identityCollisions(
+    names.map((name) => {
+      const identity = identities.get(name)
+      return {
+        name,
+        ...(state.providerAccounts[name]!.configDir
+          ? { configDir: state.providerAccounts[name]!.configDir }
+          : {}),
+        ...(identity?.accountUuid ? { accountUuid: identity.accountUuid } : {}),
+        ...(identity?.email ? { email: identity.email } : {}),
+      }
+    }),
+  )
+  const collidingWith = (name: string): string[] =>
+    collisions.flatMap((c) => (c.names.includes(name) ? c.names.filter((n) => n !== name) : []))
+
   for (const name of names) {
     // `!` — read off Object.keys of this very object.
     const a = state.providerAccounts[name]!
@@ -1229,12 +1262,17 @@ function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
       // instead. The email is the thing the user recognises — "which of my
       // three accounts is this?" is the question, and a path does not answer it.
       // Reads `.claude.json` only; no credential, no prompt, no network.
-      // Read ONCE — `.claude.json` is a 200 kB file on a well-used account.
-      const identity = readSessionIdentity(a.configDir)
+      const identity = identities.get(name) ?? null
       out(`    login      ${describeIdentity(identity)}`)
       out(`    session    ${a.configDir}`)
       if (!identity) {
         out(`               run \`swisscode config accounts login ${name}\` and \`/login\` inside`)
+      }
+      // Named on the account itself as well as in the summary below, because
+      // this is read one account at a time and a footnote is easy to scroll past.
+      const twins = collidingWith(name)
+      if (twins.length > 0) {
+        out(`    DUPLICATE  same subscription as ${twins.join(', ')} — see below`)
       }
     } else {
       // Presence and ORIGIN only, exactly as `config list` does: a masked key is
@@ -1243,7 +1281,32 @@ function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
     }
     out(`    used by    ${usedBy.length > 0 ? usedBy.join(', ') : '— nothing'}`)
   }
+
+  // The explanation goes ONCE, at the end, with the fix. Repeating the full
+  // reason under every colliding account would bury the listing it belongs to.
+  for (const c of collisions) {
+    out('')
+    out(`  PROBLEM  ${c.names.join(' and ')} ${WHY_MATCHED[c.matchedOn]} ${c.value}`)
+    out(`           ${COLLISION_REASON}.`)
+    if (c.matchedOn === 'configDir') {
+      out('           Point one at a directory of its own, then `/login` there as the other account.')
+    } else {
+      // `?? c.names[0]` only to satisfy noUncheckedIndexedAccess — a collision
+      // always names at least two accounts.
+      const second = c.names[1] ?? c.names[0]
+      out(`           Run \`swisscode config accounts login ${second}\` and \`/login\` as a`)
+      out('           DIFFERENT account — a new session directory starts out cloned from the')
+      out('           login you already have, so skipping `/login` leaves you with a copy.')
+    }
+  }
   return 0
+}
+
+/** How each key reads in a sentence, so the three call sites cannot drift. */
+const WHY_MATCHED: Record<IdentityCollision['matchedOn'], string> = {
+  configDir: 'share one session directory:',
+  accountUuid: 'are the same Anthropic account:',
+  email: 'are both logged in as',
 }
 
 /**

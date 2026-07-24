@@ -364,6 +364,15 @@ swisscode config accounts                     # who each account is, no keychain
 agent there so you can complete `/login` once. After that the account is a
 normal thing profiles can reference.
 
+> **A new directory does not start logged out — it starts as a copy of the login
+> you already have.** Claude Code seeds a fresh `CLAUDE_CONFIG_DIR` from your
+> current session, so if you exit without running `/login` as a *different*
+> account, you end up with two names for one subscription: both report their own
+> email and plan, both work, and neither adds any capacity. `config accounts`
+> marks them `DUPLICATE` and `config doctor` fails the `distinct accounts` check,
+> because a `usage` profile would otherwise count that single quota twice and
+> rotate between two halves of the same thing.
+
 > **Naming `~/.claude` means *unsetting* `CLAUDE_CONFIG_DIR`, not setting it to
 > that path.** Claude Code chooses its keychain item on whether the variable is
 > *set*, not on its value — so `CLAUDE_CONFIG_DIR="$HOME/.claude"` is a

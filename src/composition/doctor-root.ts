@@ -41,7 +41,12 @@ import {
   sessionDirLooksInitialised,
 } from '../adapters/claude-session/identity.ts'
 import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
-import { CONFLICT_REASON, credentialSource } from '../core/account.ts'
+import {
+  COLLISION_REASON,
+  CONFLICT_REASON,
+  credentialSource,
+  identityCollisions,
+} from '../core/account.ts'
 import type { MeasureOptions } from '../adapters/usage/measure.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import { createOllamaIntrospect, interpretOllamaContext } from '../adapters/doctor/ollama.ts'
@@ -387,6 +392,61 @@ export async function runDoctor({
             verdict.detail,
             verdict.fix ? { fix: verdict.fix } : {},
           ),
+        )
+      }
+    }
+  }
+
+  // Accounts that are secretly one subscription.
+  //
+  // CONFIG-WIDE, unlike the session check above, which can only see the profile
+  // being diagnosed. Being the same account as another one is not a property an
+  // account has on its own, so no per-profile check could ever find it.
+  //
+  // Costs one `.claude.json` read per session account — no credential, no
+  // Keychain, no network — so it runs under `--offline` with the static checks.
+  const sessionAccounts = Object.entries(loaded.state.providerAccounts ?? {}).filter(
+    ([, a]) => a.configDir,
+  )
+  if (sessionAccounts.length < 2) {
+    checks.push(
+      makeCheck(
+        'account-duplicate',
+        'distinct accounts',
+        SKIP,
+        'skipped: fewer than two subscription accounts to compare',
+      ),
+    )
+  } else {
+    const collisions = identityCollisions(
+      sessionAccounts.map(([name, a]) => {
+        const identity = a.configDir ? readSessionIdentity(a.configDir) : null
+        return {
+          name,
+          ...(a.configDir ? { configDir: a.configDir } : {}),
+          ...(identity?.accountUuid ? { accountUuid: identity.accountUuid } : {}),
+          ...(identity?.email ? { email: identity.email } : {}),
+        }
+      }),
+    )
+    if (collisions.length === 0) {
+      checks.push(
+        makeCheck(
+          'account-duplicate',
+          'distinct accounts',
+          OK,
+          `${sessionAccounts.length} subscription accounts, all different`,
+        ),
+      )
+    } else {
+      for (const c of collisions) {
+        checks.push(
+          makeCheck('account-duplicate', 'distinct accounts', WARN, `${c.names.join(' and ')} — ${COLLISION_REASON}`, {
+            fix:
+              c.matchedOn === 'configDir'
+                ? `they share the session directory ${c.value} — give one its own`
+                : `\`swisscode config accounts login ${c.names[1] ?? c.names[0]}\`, then \`/login\` as a different account`,
+          }),
         )
       }
     }

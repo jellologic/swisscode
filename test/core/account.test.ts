@@ -10,6 +10,7 @@ import {
   CONFLICT_REASON,
   accountsUsedBy,
   credentialSource,
+  identityCollisions,
   validateAccount,
 } from '../../src/core/account.ts'
 
@@ -87,4 +88,109 @@ test('a missing or empty profile map is not a crash', () => {
   assert.deepEqual(accountsUsedBy(undefined, 'x'), [])
   assert.deepEqual(accountsUsedBy(null, 'x'), [])
   assert.deepEqual(accountsUsedBy({}, 'x'), [])
+})
+
+// Duplicate subscriptions.
+//
+// THE CASE THAT MOTIVATED THIS IS THE FIRST ONE, and it is a measured
+// behaviour: a fresh session directory comes up already logged in as the
+// account you were using, so `config accounts login spare` followed by exiting
+// without `/login` produces two names for one quota. Both directories are real
+// and different; only the identity inside them gives it away.
+
+test('two directories logged in as one account are reported as one subscription', () => {
+  const found = identityCollisions([
+    { name: 'personal', configDir: '/accounts/personal', accountUuid: 'uuid-1', email: 'a@b.c' },
+    { name: 'spare', configDir: '/accounts/spare', accountUuid: 'uuid-1', email: 'a@b.c' },
+  ])
+  assert.equal(found.length, 1)
+  // accountUuid over email: it survives an email change, so it is the honest key.
+  assert.deepEqual(found[0], {
+    names: ['personal', 'spare'],
+    matchedOn: 'accountUuid',
+    value: 'uuid-1',
+  })
+})
+
+test('genuinely separate subscriptions collide with nothing', () => {
+  assert.deepEqual(
+    identityCollisions([
+      { name: 'personal', configDir: '/accounts/personal', accountUuid: 'uuid-1', email: 'a@b.c' },
+      { name: 'work', configDir: '/accounts/work', accountUuid: 'uuid-2', email: 'd@e.f' },
+    ]),
+    [],
+  )
+})
+
+test('accounts nobody has logged into yet never collide with each other', () => {
+  // THE REGRESSION THAT WOULD MAKE THIS FEATURE USELESS. Two fresh directories
+  // both read back as "no identity", and treating absent-equals-absent as a
+  // match would fire on every pair the moment they were created — training
+  // people to ignore the one warning that matters.
+  assert.deepEqual(
+    identityCollisions([
+      { name: 'a', configDir: '/accounts/a' },
+      { name: 'b', configDir: '/accounts/b' },
+    ]),
+    [],
+  )
+})
+
+test('one shared directory is caught before anyone has logged in', () => {
+  // No identity to compare, but the same directory IS the same login by
+  // construction — the only variant an identity check cannot see.
+  const found = identityCollisions([
+    { name: 'a', configDir: '/accounts/shared' },
+    // Trailing slash: a hand-edited config is exactly how this arises.
+    { name: 'b', configDir: '/accounts/shared/' },
+  ])
+  assert.equal(found.length, 1)
+  assert.deepEqual(found[0], {
+    names: ['a', 'b'],
+    matchedOn: 'configDir',
+    value: '/accounts/shared',
+  })
+})
+
+test('one pair is reported once, by its strongest evidence', () => {
+  // Same directory AND same identity: three passes all match, but the user has
+  // one problem and gets one line. Reporting it three ways would read as three
+  // separate faults.
+  const found = identityCollisions([
+    { name: 'a', configDir: '/shared', accountUuid: 'uuid-1', email: 'a@b.c' },
+    { name: 'b', configDir: '/shared', accountUuid: 'uuid-1', email: 'a@b.c' },
+  ])
+  assert.equal(found.length, 1)
+  assert.equal(found[0]?.matchedOn, 'configDir')
+})
+
+test('email catches a duplicate that predates the uuid being recorded', () => {
+  const found = identityCollisions([
+    { name: 'a', configDir: '/a', email: 'a@b.c' },
+    { name: 'b', configDir: '/b', email: 'a@b.c' },
+  ])
+  assert.deepEqual(found[0], { names: ['a', 'b'], matchedOn: 'email', value: 'a@b.c' })
+})
+
+test('a wider identity group is still reported when a narrower one exists', () => {
+  // a+b share a directory; all three are the same Anthropic account. Both facts
+  // are true and separately actionable — c is not fixed by splitting a and b.
+  const found = identityCollisions([
+    { name: 'a', configDir: '/shared', accountUuid: 'uuid-1' },
+    { name: 'b', configDir: '/shared', accountUuid: 'uuid-1' },
+    { name: 'c', configDir: '/c', accountUuid: 'uuid-1' },
+  ])
+  assert.equal(found.length, 2)
+  assert.deepEqual(found.map((f) => f.matchedOn), ['configDir', 'accountUuid'])
+  assert.deepEqual(found[1]?.names, ['a', 'b', 'c'])
+})
+
+test('names come back sorted, and one account alone is never a collision', () => {
+  const found = identityCollisions([
+    { name: 'zebra', configDir: '/z', accountUuid: 'uuid-1' },
+    { name: 'alpha', configDir: '/a', accountUuid: 'uuid-1' },
+  ])
+  assert.deepEqual(found[0]?.names, ['alpha', 'zebra'])
+  assert.deepEqual(identityCollisions([{ name: 'only', configDir: '/o', email: 'a@b.c' }]), [])
+  assert.deepEqual(identityCollisions([]), [])
 })

@@ -221,6 +221,20 @@ export function accountLogin({
 
   out('')
   out('Starting Claude Code in that directory. Run `/login` inside it, then exit.')
+  // SAY THIS BEFORE IT HAPPENS, because afterwards there is nobody left to say
+  // it — this process execve's away, and the surprise lands inside someone
+  // else's UI. A new directory does NOT come up logged out: Claude Code seeds it
+  // from the login you already have (measured — a fresh directory held a full
+  // identity, and a Keychain item under its hashed service name, within a minute
+  // of first use and with no `/login` performed). Exit without switching and you
+  // have two names for one subscription. `config accounts` and `config doctor`
+  // both catch that afterwards, but not being caught by it is better.
+  if (!isDefault) {
+    out('')
+    out('  NOTE  it will already show a login — a new directory starts out cloned from')
+    out('        the account you are using now. `/login` as the OTHER account, or this')
+    out('        one ends up a duplicate that shares the same quota.')
+  }
   out('')
 
   // Setting the variable to the default path would send the agent to a

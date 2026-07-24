@@ -13,6 +13,7 @@ import { validateProfileName } from '../../core/migrate.ts'
 import { toCustomProvider, validateCustomProvider } from '../../core/provider-def.ts'
 import { TIERS } from '../../core/tiers.ts'
 import { accountsUsedBy, validateAccount } from '../../core/account.ts'
+import type { IdentityCollision } from '../../core/account.ts'
 import { COMPAT_ENV, CREDENTIAL_ENVS } from '../agents/claude-code/env.ts'
 import { CATALOG_SOURCE, CLAUDE_ENV_CATALOG } from '../agents/claude-code/env-catalog.ts'
 import type {
@@ -66,7 +67,16 @@ export type ApiDeps = {
    * Optional, and absent rather than empty when unwired: `{}` would be
    * indistinguishable from "every account is logged out".
    */
-  identities?: () => Record<string, string | null>
+  identities?: () => {
+    logins: Record<string, string | null>
+    /**
+     * Accounts that are really one subscription. Computed where the store is
+     * read, from the SAME `core/account.ts` rule the CLI and the doctor use —
+     * the browser must not re-derive it by comparing the `logins` strings, which
+     * is the private-fourth-copy failure that module was written to end.
+     */
+    collisions: IdentityCollision[]
+  }
 }
 
 /** One agent CLI, as found (or not) on this machine. */
@@ -309,6 +319,10 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
   // subsequent write must quote back.
   if (resource === 'bootstrap' && req.method === 'GET') {
     const loaded = store.load()
+    // ONCE. Each call reads every session account's `.claude.json`, which is a
+    // 200 kB file apiece on a well-used account, and both fields below come from
+    // the same walk.
+    const identities = deps.identities ? deps.identities() : null
     return json(200, {
       state: redactState(loaded.state),
       revision: store.revision ? store.revision() : null,
@@ -349,7 +363,10 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       // Who each session account is logged in as. Same "never faked" rule as
       // `installedAgents`: null when unwired, never an empty map that would read
       // as "all logged out".
-      logins: deps.identities ? deps.identities() : null,
+      logins: identities ? identities.logins : null,
+      // Absent-vs-empty matters here too: `[]` is a real answer ("checked, all
+      // distinct"), so null has to mean "nobody looked".
+      loginCollisions: identities ? identities.collisions : null,
       // Custom providers are returned SEPARATELY from `providers` even though
       // the registry already merges them: the UI has to know which ones it may
       // edit, and a merged list cannot say.

@@ -139,8 +139,25 @@ export type Bootstrap = {
    * accounts are simply absent from it.
    */
   logins: Record<string, string | null> | null
+  /**
+   * Accounts that are really one subscription.
+   *
+   * COMPUTED ON THE SERVER, by the same `core/account.ts` rule the CLI and the
+   * doctor use. Do not rediscover it here by comparing `logins` strings: two
+   * accounts can share a subscription and still describe differently, and a
+   * fourth private copy of the rule is the exact failure that module exists to
+   * prevent. Null means nobody looked; `[]` means they were compared and differ.
+   */
+  loginCollisions: IdentityCollision[] | null
   customProviders: Record<string, CustomProvider>
   reservedProviderIds: string[]
+}
+
+/** Mirrors `IdentityCollision` in src/core/account.ts. */
+export type IdentityCollision = {
+  names: string[]
+  matchedOn: 'configDir' | 'accountUuid' | 'email'
+  value: string
 }
 
 /** One window of a subscription, as the endpoint publishes it. */
