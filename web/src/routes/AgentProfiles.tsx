@@ -82,11 +82,18 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [picking, setPicking] = useState<string | null>(null)
+  // The provider whose catalog the Browse buttons search. `null` means "derive a
+  // sensible default" — see the editor. It is a LENS, never stored: a model id
+  // pinned here is a bare, provider-agnostic string, so which catalog you
+  // browsed it from is not part of the saved setup.
+  const [browseProviderId, setBrowseProviderId] = useState<string | null>(null)
 
   const open = (name: string | null) => {
     setError(null)
     setWarnings([])
     setEditing(name ?? '')
+    // Re-derive the browse default for whichever profile just opened.
+    setBrowseProviderId(null)
     setDraft(name ? { ...data.state.agentProfiles[name] } : { models: {}, compat: {} })
   }
 
@@ -130,13 +137,54 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
   if (editing !== null) {
     const isNew = !data.state.agentProfiles?.[editing]
     const users = usersOf(editing)
-    // Borrow a provider from a profile that uses this setup, purely so the
-    // picker has a catalog to browse.
-    const viaProfile = users.map((n) => data.state.profiles[n]).find(Boolean)
-    const viaAccount = viaProfile?.accounts?.[0]
-      ? data.state.providerAccounts?.[viaProfile.accounts[0]]
-      : undefined
-    const provider = data.providers.find((p) => p.id === viaAccount?.provider)
+
+    // The agent decides how many model slots exist and which behaviour applies —
+    // `data.tiers` is Claude Code's four, but Kilo runs one model and OpenCode a
+    // primary + a small. Reading capabilities here is what stops the editor
+    // offering inputs and flags the selected agent silently ignores.
+    const agentId = (draft.agent as string) || 'claude-code'
+    const agentInfo = data.agents.find((a) => a.id === agentId)
+    const modelShape = agentInfo?.capabilities.models ?? 'tiers'
+    const supportsCompat = agentInfo?.capabilities.compatFlags ?? true
+    const usesExtendedContext = agentInfo?.capabilities.extendedContextSuffix ?? true
+    // The slots to show, mapped onto the tier keys the adapters actually read:
+    // Kilo reads `opus`; OpenCode reads `opus` (primary) + `haiku` (small);
+    // Claude Code reads all four. Hidden tiers keep their stored value.
+    const visibleSlots: { tier: string; label: string }[] =
+      modelShape === 'single'
+        ? [{ tier: 'opus', label: 'model' }]
+        : modelShape === 'primary+small'
+          ? [
+              { tier: 'opus', label: 'primary' },
+              { tier: 'haiku', label: 'small' },
+            ]
+          : data.tiers.map((t) => ({ tier: t, label: t }))
+
+    // The catalog LENS: browse against a chosen provider rather than an implicit
+    // borrow. Default to the provider a downstream profile pairs this setup with,
+    // then the default profile's provider, then any browsable one — but let the
+    // user change it, and never store the choice.
+    const borrowedProviderId = (() => {
+      const viaProfile = users.map((n) => data.state.profiles[n]).find(Boolean)
+      const acc = viaProfile?.accounts?.[0]
+        ? data.state.providerAccounts?.[viaProfile.accounts[0]]
+        : undefined
+      return acc?.provider
+    })()
+    const defaultProfileProviderId = (() => {
+      const dp = data.state.defaultProfile ? data.state.profiles?.[data.state.defaultProfile] : null
+      const acc = dp?.accounts?.[0] ? data.state.providerAccounts?.[dp.accounts[0]] : undefined
+      return acc?.provider
+    })()
+    const firstBrowsableId = data.providers.find((p) => p.catalogId)?.id
+    const activeBrowseId =
+      browseProviderId ??
+      borrowedProviderId ??
+      defaultProfileProviderId ??
+      firstBrowsableId ??
+      data.providers[0]?.id ??
+      null
+    const provider = data.providers.find((p) => p.id === activeBrowseId) ?? null
     const browsable = Boolean(provider?.catalogId)
 
     return (
@@ -192,20 +240,48 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
         <Panel
           title="Models"
           description={
-            'All four tiers, from one table. Claude Code reads the extended-context marker per ' +
-            'variable, so a tier left out is the bug where three run wide and the fourth silently ' +
-            'does not. Blank inherits the provider default.'
+            (modelShape === 'single'
+              ? `${agentInfo?.label ?? 'This agent'} runs a single model. `
+              : modelShape === 'primary+small'
+                ? `${agentInfo?.label ?? 'This agent'} runs a primary model and a small one for background work. `
+                : 'Claude Code runs a model per tier. ') +
+            (usesExtendedContext
+              ? 'It reads the extended-context marker per variable, so a tier left blank is the bug where the others run wide and it silently does not. '
+              : 'Each runs at the endpoint’s own context window. ') +
+            'Blank inherits the provider default.'
           }
         >
           <Stack gap="4">
+            {/* The catalog lens. Browsing needs a provider and this setup names
+                none of its own, so choose which one to browse against — it only
+                drives the Browse buttons and the default-model placeholders, and
+                is never saved onto the agent profile. */}
+            <Field
+              label="Browse models against"
+              hint="Which provider’s catalog the Browse buttons search. A model id is stored bare, so this choice is not part of the setup."
+            >
+              <select
+                className={selectStyle}
+                value={activeBrowseId ?? ''}
+                onChange={(e) => setBrowseProviderId(e.target.value)}
+              >
+                {data.providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                    {p.catalogId ? '' : '  — no catalog'}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
             {/* The label is not wrapped around its input the way `Field` wraps
                 one, because the two live in different grid columns — hence the
                 explicit htmlFor, which buys back the click target. */}
             <div className={modelGrid({ browsable })}>
-              {data.tiers.map((tier) => (
+              {visibleSlots.map(({ tier, label }) => (
                 <Fragment key={tier}>
                   <label className={tierLabel} htmlFor={`model-${tier}`}>
-                    {tier}
+                    {label}
                   </label>
                   <input
                     id={`model-${tier}`}
@@ -218,11 +294,8 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
                 </Fragment>
               ))}
             </div>
-            {!provider ? (
-              <Note>
-                No profile uses this setup yet, so there is no provider to browse a catalog from.
-                Type ids by hand, or attach it to a profile first.
-              </Note>
+            {provider && !browsable ? (
+              <Note>{provider.label} publishes no browsable catalog — type ids by hand.</Note>
             ) : null}
           </Stack>
         </Panel>
@@ -258,29 +331,49 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
             <Checkbox
               checked={Boolean(draft.skipPermissions)}
               onChange={(v) => put('skipPermissions', v)}
+              // Neutral wording: every agent supports skipping prompts, but each
+              // lowers it differently (Claude Code's --dangerously-skip-permissions,
+              // OpenCode's --auto, Kilo's config permission block), so the concrete
+              // flag is shown only for the agent that actually receives it.
               label={
-                <>
-                  Skip permission prompts <Code>--dangerously-skip-permissions</Code>
-                </>
+                agentId === 'claude-code' ? (
+                  <>
+                    Skip permission prompts <Code>--dangerously-skip-permissions</Code>
+                  </>
+                ) : (
+                  <>Skip permission prompts</>
+                )
               }
             />
 
-            <Stack gap="2">
-              <SectionLabel>Gateway compatibility</SectionLabel>
-              {/* A flag that trades something away says what it costs, here as
-                  well as on stderr — as the checkbox's note, so the price reads
-                  as belonging to that flag rather than competing with its name. */}
-              {data.compatFlags.map((flag) => (
-                <Checkbox
-                  key={flag.id}
-                  checked={Boolean(compat[flag.id])}
-                  onChange={(v) => put('compat', { ...compat, [flag.id]: v })}
-                  label={<Mono>{flag.id}</Mono>}
-                  note={flag.consequence ? `costs: ${flag.consequence}` : undefined}
-                  noteTone="warn"
-                />
-              ))}
-            </Stack>
+            {/* Gateway compat is a Claude-Code-only mechanism (capabilities.compatFlags).
+                For an agent that does not consume it, a checked box would be a
+                pure silent no-op — nothing catches it at launch or in the doctor —
+                so the section is hidden, and a note explains any flags a previous
+                Claude Code setup left behind rather than dropping them. */}
+            {supportsCompat ? (
+              <Stack gap="2">
+                <SectionLabel>Gateway compatibility</SectionLabel>
+                {/* A flag that trades something away says what it costs, here as
+                    well as on stderr — as the checkbox's note, so the price reads
+                    as belonging to that flag rather than competing with its name. */}
+                {data.compatFlags.map((flag) => (
+                  <Checkbox
+                    key={flag.id}
+                    checked={Boolean(compat[flag.id])}
+                    onChange={(v) => put('compat', { ...compat, [flag.id]: v })}
+                    label={<Mono>{flag.id}</Mono>}
+                    note={flag.consequence ? `costs: ${flag.consequence}` : undefined}
+                    noteTone="warn"
+                  />
+                ))}
+              </Stack>
+            ) : Object.values(compat).some(Boolean) ? (
+              <Note tone="warn">
+                {agentInfo?.label ?? 'This agent'} does not use gateway compatibility flags; the ones
+                set here are kept but ignored until this setup runs Claude Code again.
+              </Note>
+            ) : null}
           </Stack>
         </Panel>
 
@@ -320,7 +413,21 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
           <DataList>
             {agentProfiles.map(([name, ap]) => {
               const users = usersOf(name)
-              const pinned = data.tiers.filter((t) => ap.models?.[t]).length
+              // Count only the slots this agent actually reads — a Kilo setup
+              // with an opus id is "1 model", not "1 of 4 tiers".
+              const shape = data.agents.find((a) => a.id === (ap.agent ?? 'claude-code'))?.capabilities
+                .models
+              const slots =
+                shape === 'single' ? ['opus'] : shape === 'primary+small' ? ['opus', 'haiku'] : data.tiers
+              const pinned = slots.filter((t) => ap.models?.[t]).length
+              const modelsLabel =
+                shape === 'single'
+                  ? pinned > 0
+                    ? '1 model'
+                    : 'provider default'
+                  : pinned > 0
+                    ? `${pinned} of ${slots.length} ${shape === 'primary+small' ? 'models' : 'tiers'} pinned`
+                    : 'provider defaults'
               return (
                 <DataRow
                   key={name}
@@ -345,11 +452,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
                       <KeyValue label="Agent" mono>
                         {ap.agent ?? 'claude-code'}
                       </KeyValue>
-                      <KeyValue label="Models">
-                        {pinned > 0
-                          ? `${pinned} of ${data.tiers.length} tiers pinned`
-                          : 'provider defaults'}
-                      </KeyValue>
+                      <KeyValue label="Models">{modelsLabel}</KeyValue>
                       <KeyValue label="Used by" tone={users.length > 0 ? 'default' : 'neutral'}>
                         {users.length > 0 ? users.join(', ') : 'nothing yet'}
                       </KeyValue>
