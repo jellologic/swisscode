@@ -25,6 +25,7 @@ import {
   inputStyle,
   selectStyle,
 } from '../ui'
+import { EmptyState } from '../Brand'
 
 /**
  * Profiles — the pairing, and the only screen that expresses MULTIPLE accounts.
@@ -296,7 +297,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
 
       <Panel flush>
         {names.length === 0 ? (
-          <Empty>No profiles yet. A profile pairs an agent profile with one or more accounts.</Empty>
+          <EmptyState>No profiles yet. A profile pairs an agent profile with one or more accounts.</EmptyState>
         ) : (
           <DataList>
             {names.map((name) => {

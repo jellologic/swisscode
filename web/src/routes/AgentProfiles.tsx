@@ -27,6 +27,7 @@ import {
   monoInput,
   selectStyle,
 } from '../ui'
+import { EmptyState } from '../Brand'
 import { ModelPicker } from './ModelPicker'
 
 /**
@@ -314,7 +315,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
 
       <Panel flush>
         {agentProfiles.length === 0 ? (
-          <Empty>No agent profiles yet. An agent profile is a coding CLI plus how it should behave.</Empty>
+          <EmptyState>No agent profiles yet. An agent profile is a coding CLI plus how it should behave.</EmptyState>
         ) : (
           <DataList>
             {agentProfiles.map(([name, ap]) => {
