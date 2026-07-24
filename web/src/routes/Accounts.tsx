@@ -24,6 +24,7 @@ import {
   monoInput,
   selectStyle,
 } from '../ui'
+import { EmptyState } from '../Brand'
 // The SAME decisions the CLI and the API make, imported rather than restated.
 // core/ is pure — no I/O, no node builtins — so it bundles into the browser as
 // happily as it compiles for the launch path.
@@ -442,7 +443,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
         }
       >
         {accounts.length === 0 ? (
-          <Empty>No accounts yet. An account is a provider plus the credential that pays for it.</Empty>
+          <EmptyState>No accounts yet. An account is a provider plus the credential that pays for it.</EmptyState>
         ) : (
           <DataList>
             {accounts.map(([name, a]) => {

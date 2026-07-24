@@ -256,6 +256,28 @@ export default defineConfig({
             default: { value: { base: '#cf222e', _dark: '#f85149' } },
             subtle: { value: { base: 'rgba(207,34,46,0.10)', _dark: 'rgba(248,81,73,0.14)' } },
           },
+
+          /**
+           * The swisscode identity, from the README hero, and RESERVED FOR IT.
+           *
+           * The red and coral are the brand — the logo mark and the "code" half
+           * of the wordmark. They are deliberately NOT the interactive accent:
+           * the README borrows GitHub's palette, where red is the identity and a
+           * separate blue carries interaction, and doing the same here keeps a
+           * brand-red button from reading as a danger button (the dark-mode
+           * danger and the coral are nearly the same hue).
+           *
+           * `mark` is the red HANDLE — a fill behind a white terminal prompt,
+           * NOT a cross (see the note in web/src/Brand.tsx on why the Swiss
+           * cross was retired). White-on-red reads on any surface, so it needs
+           * no light/dark variant. `wordmark` IS text, so light mode darkens the
+           * coral to clear the 3:1 large-text bar on a white panel (measured
+           * 4.3:1 at #d93a2b), while dark mode keeps the bright #ff5a4d (5:1).
+           */
+          brand: {
+            mark: { value: '#da291c' },
+            wordmark: { value: { base: '#d93a2b', _dark: '#ff5a4d' } },
+          },
         },
       },
 

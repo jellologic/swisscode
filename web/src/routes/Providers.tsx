@@ -19,6 +19,7 @@ import {
   monoInput,
   selectStyle,
 } from '../ui'
+import { EmptyState } from '../Brand'
 
 /**
  * Shipped presets are read-only here and say so. They are constants in source,
@@ -233,7 +234,7 @@ export function Providers({ data, reload }: { data: Bootstrap; reload: () => Pro
         flush
       >
         {custom.length === 0 ? (
-          <Empty>No custom providers yet. Add one for a gateway or a local server swisscode does not ship a preset for.</Empty>
+          <EmptyState>No custom providers yet. Add one for a gateway or a local server swisscode does not ship a preset for.</EmptyState>
         ) : (
           <DataList>
             {custom.map(([id, p]) => (
