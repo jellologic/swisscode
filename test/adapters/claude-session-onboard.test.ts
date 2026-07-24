@@ -211,7 +211,7 @@ test('the default directory earns no permissions warning — swisscode did not c
 })
 
 test('the recorded config is exactly one account and nothing else', () => {
-  const h = harness({ profiles: { p: { agentProfile: 'a', accounts: [] } } } as Partial<State>)
+  const h = harness({ profiles: { p: { setup: 'a', accounts: [] } } } as Partial<State>)
   h.run({ ...base(h), name: 'personal' })
   const saved = h.saved.at(-1)!
   assert.deepEqual(Object.keys(saved.providerAccounts ?? {}), ['personal'])

@@ -29,11 +29,11 @@ const stateWith = (providers: Record<string, unknown>): State =>
     providerAccounts: {
       p: makeProfile({ provider: 'my-gw', apiKey: 'k' }),
     },
-    agentProfiles: {
+    setups: {
       p: {},
     },
     profiles: {
-      p: { agentProfile: 'p', accounts: ['p'] },
+      p: { setup: 'p', accounts: ['p'] },
     },
     defaultProfile: 'p',
     bindings: {},

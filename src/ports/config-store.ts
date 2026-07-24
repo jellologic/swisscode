@@ -78,11 +78,11 @@ export type ProviderAccount = {
  * a documented, tested behaviour. Reshaping it is a separate decision that
  * should not ride along with a schema migration.
  */
-export type AgentProfile = {
+export type Setup = {
   /**
    * id from the agent registry — which coding CLI to launch. Absent means the
-   * default, 'claude-code'. An agent profile naming an agent this build does
-   * not know still launches the default (launch-root refuses only an explicit
+   * default, 'claude-code'. A setup naming an agent this build does not know
+   * still launches the default (launch-root refuses only an explicit
    * --cc-agent for an unknown id).
    */
   agent?: string
@@ -109,7 +109,7 @@ export type AgentProfile = {
 }
 
 /**
- * One account and one agent profile, flattened — what a launch actually needs.
+ * One account and one setup, flattened — what a launch actually needs.
  *
  * THIS IS THE SEAM THAT KEEPS THE v3 SPLIT CHEAP. It is deliberately the same
  * shape v2's `Profile` had, so everything downstream of resolution — the agent
@@ -124,7 +124,7 @@ export type AgentProfile = {
 export type ResolvedProfile = {
   /** which account was selected, so callers can report it */
   accountName: string
-  agentProfileName: string
+  setupName: string
   // ── from the provider account ──
   provider: string
   baseUrl?: string
@@ -132,7 +132,7 @@ export type ResolvedProfile = {
   apiKeyFromEnv?: string
   /** session mode: a directory holding a login the agent already performed */
   configDir?: string
-  // ── from the agent profile ──
+  // ── from the setup ──
   agent?: string
   models?: Partial<Record<Tier, string>>
   skipPermissions?: boolean
@@ -166,8 +166,8 @@ export type SelectionStrategy = 'single' | 'round-robin' | 'usage'
  */
 export type Profile = {
   label?: string
-  /** key into `State.agentProfiles` */
-  agentProfile: string
+  /** key into `State.setups` */
+  setup: string
   /**
    * keys into `State.providerAccounts`, in preference order. Never empty in a
    * valid config; an empty list is a resolution error that names the fix rather
@@ -243,7 +243,7 @@ export type State = {
   /** who pays */
   providerAccounts: Record<string, ProviderAccount>
   /** what runs */
-  agentProfiles: Record<string, AgentProfile>
+  setups: Record<string, Setup>
   /** the pairing — what `swisscode <name>` and every binding refer to */
   profiles: Record<string, Profile>
   defaultProfile: string | null
@@ -281,7 +281,7 @@ export type ConfigV1 = {
  * The v2 profile: provider, credential, agent and agent settings on ONE object.
  *
  * Kept as a type because `fromV2` still has to read it. This is the shape v3
- * splits into `ProviderAccount` + `AgentProfile` + `Profile`, and writing it
+ * splits into `ProviderAccount` + `Setup` + `Profile`, and writing it
  * down is what lets that migration be checked rather than guessed at.
  *
  * The index signature is rule M1 again, inherited from v1: unrecognized keys
@@ -313,7 +313,13 @@ export type ConfigV2 = {
   providers?: Record<string, CustomProvider>
 }
 
-export type ConfigV3 = State
+/**
+ * v3 is no longer the current shape — v4 renamed `setups` to `setups`
+ * and `Profile.setup` to `Profile.setup`. Kept as the untrusted bag the
+ * ladder reads, NOT as an alias of `State`, which is what it was while the two
+ * happened to coincide.
+ */
+export type ConfigV3 = Record<string, unknown>
 
 /**
  * What the migration ladder reports.
@@ -326,7 +332,7 @@ export type ConfigV3 = State
  */
 export type MigrateResult = {
   state: State
-  migratedFrom: 1 | 2 | null
+  migratedFrom: 1 | 2 | 3 | null
   /** the file existed but could not be understood */
   corrupt: boolean
   /** the file is a NEWER schema; every write path is disabled */

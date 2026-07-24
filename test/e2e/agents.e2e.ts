@@ -17,8 +17,8 @@ import { launch, makeConfig, resolvedAgent } from './harness.ts'
 function configForAgent(agent: string) {
   return makeConfig({
     providerAccounts: { or: { provider: 'openrouter', apiKey: 'sk-agent-KEY' } },
-    agentProfiles: { main: { agent, models: { opus: 'the-model' } } },
-    profiles: { p: { agentProfile: 'main', accounts: ['or'] } },
+    setups: { main: { agent, models: { opus: 'the-model' } } },
+    profiles: { p: { setup: 'main', accounts: ['or'] } },
   })
 }
 

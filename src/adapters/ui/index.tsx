@@ -18,7 +18,7 @@ import { frameBorder, Select, tone } from './theme.tsx'
 import type { ProfileAction } from './ProfilePicker.tsx'
 import type { Tier, TierRecord, ProviderDescriptor, ProviderRegistryPort } from '../../ports/provider.ts'
 import type {
-  AgentProfile,
+  Setup,
   ConfigStorePort,
   Profile,
   ProviderAccount,
@@ -447,7 +447,7 @@ export function App({
       ...(provider!.askBaseUrl ? { baseUrl: baseUrl.trim() } : {}),
       apiKey: apiKey.trim(),
     }
-    const agentProfile: AgentProfile = {
+    const setup: Setup = {
       models,
       ...(Object.keys(keptWindows).length > 0 ? { contextWindows: keptWindows } : {}),
       skipPermissions,
@@ -456,20 +456,20 @@ export function App({
     // the provider, exactly as before profiles existed.
     const name = editingName ?? profileNameFor(doc, providerId)
     const profile: Profile = {
-      agentProfile: name,
+      setup: name,
       accounts: [name],
       strategy: 'single',
     }
     // The existing agent selection is preserved: `config agent` writes to the
-    // agent profile, and re-running the wizard must not silently reset a
+    // setup, and re-running the wizard must not silently reset a
     // profile back to Claude Code.
-    const existingAgent = doc.agentProfiles?.[name]?.agent
-    if (existingAgent !== undefined) agentProfile.agent = existingAgent
+    const existingAgent = doc.setups?.[name]?.agent
+    if (existingAgent !== undefined) setup.agent = existingAgent
 
     const next: State = {
       ...doc,
       providerAccounts: { ...(doc.providerAccounts ?? {}), [name]: account },
-      agentProfiles: { ...(doc.agentProfiles ?? {}), [name]: agentProfile },
+      setups: { ...(doc.setups ?? {}), [name]: setup },
       profiles: { ...(doc.profiles ?? {}), [name]: profile },
       defaultProfile: doc.defaultProfile ?? name,
     }

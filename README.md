@@ -149,7 +149,7 @@ If the first word isn't a profile name it's passed straight to `claude`, so
 `--cc-profile work` — an unknown name there is an error rather than a prompt.
 
 One exception to that fallthrough: a first word that names an **account** or an
-**agent profile** is refused rather than sent as a prompt, because it is far
+**setup** is refused rather than sent as a prompt, because it is far
 likelier to be a mis-aimed selection than the start of a sentence.
 
 ```
@@ -408,7 +408,7 @@ into each one to look. It caches them, and a profile with
 `"strategy": "usage"` then launches on whichever account has the most left:
 
 ```json
-{ "agentProfile": "default", "accounts": ["personal", "work"], "strategy": "usage" }
+{ "setup": "default", "accounts": ["personal", "work"], "strategy": "usage" }
 ```
 
 Ranking uses the **tighter of the two windows, never their average**. An account
@@ -593,12 +593,12 @@ holds an API key in plaintext.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "providerAccounts": {
     "openrouter": { "provider": "openrouter", "apiKey": "sk-or-…" },
     "personal":   { "provider": "anthropic", "configDir": "/Users/me/.claude" }
   },
-  "agentProfiles": {
+  "setups": {
     "default": {
       "agent": "claude-code",
       "models": {
@@ -614,7 +614,7 @@ holds an API key in plaintext.
     }
   },
   "profiles": {
-    "work": { "agentProfile": "default", "accounts": ["openrouter"], "strategy": "single" }
+    "work": { "setup": "default", "accounts": ["openrouter"], "strategy": "single" }
   },
   "defaultProfile": "work",
   "bindings": { "/Users/me/clients/acme": "acme" },
@@ -623,12 +623,16 @@ holds an API key in plaintext.
 ```
 
 Three separate things, because they vary independently. A **provider account**
-is who pays — a key, or a subscription login. An **agent profile** is what runs
-— which CLI, which model per tier, which flags. A **profile** pairs them and
-says how to choose when it names more than one account (`single`, `round-robin`,
-or `usage`). One agent profile can be shared by several profiles that bill
-different accounts, which is the arrangement the older flat shape could not
-express.
+is who pays — a key, or a subscription login. A **setup** is what runs — which
+CLI, which model per tier, which flags. A **profile** pairs them and says how to
+choose when it names more than one account (`single`, `round-robin`, or
+`usage`). One setup can be shared by several profiles that bill different
+accounts, which is the arrangement the older flat shape could not express.
+
+> Setups were called `agentProfiles` before v4. Two things one word apart —
+> "agent profile" and "profile" — read backwards to almost everyone, so the one
+> nobody types got the new name. Existing configs migrate on first read, and
+> `config agents` still works as an alias for `config setups`.
 
 `bindings` records absolute paths, which means client names and project layout.
 That's new non-credential information in this file — worth remembering before

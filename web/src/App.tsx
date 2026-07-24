@@ -12,18 +12,18 @@ import { BrandMark } from './Brand'
 import { Banner, Dot, SegmentedControl } from './ui'
 import { Profiles } from './routes/Profiles'
 import { Accounts } from './routes/Accounts'
-import { AgentProfiles } from './routes/AgentProfiles'
+import { Setups } from './routes/Setups'
 import { Providers } from './routes/Providers'
 import { Settings } from './routes/Settings'
 import { Doctor } from './routes/Doctor'
 import { Environment } from './routes/Environment'
 
-type Tab = 'profiles' | 'accounts' | 'agentProfiles' | 'providers' | 'environment' | 'doctor' | 'settings'
+type Tab = 'profiles' | 'accounts' | 'setups' | 'providers' | 'environment' | 'doctor' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   // Ordered as the concepts compose: who pays, what runs, then the pairing.
   { id: 'accounts', label: 'Accounts' },
-  { id: 'agentProfiles', label: 'Agent profiles' },
+  { id: 'setups', label: 'Setups' },
   { id: 'profiles', label: 'Profiles' },
   { id: 'providers', label: 'Providers' },
   { id: 'environment', label: 'Environment' },
@@ -228,7 +228,7 @@ export function App() {
         ))}
 
         {tab === 'accounts' ? <Accounts data={data} reload={reload} /> : null}
-        {tab === 'agentProfiles' ? <AgentProfiles data={data} reload={reload} /> : null}
+        {tab === 'setups' ? <Setups data={data} reload={reload} /> : null}
         {tab === 'profiles' ? <Profiles data={data} reload={reload} /> : null}
         {tab === 'providers' ? <Providers data={data} reload={reload} /> : null}
         {tab === 'environment' ? <Environment /> : null}

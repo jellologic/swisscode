@@ -62,7 +62,7 @@ const modelGrid = cva({
 const tierLabel = cx(labelStyle, css({ cursor: 'pointer' }))
 
 /**
- * Agent profiles — what runs.
+ * Setups — what runs.
  *
  * Holds no credential, which is why this screen has no password field and no
  * redaction to think about. It is also the thing that can be SHARED: one setup
@@ -70,13 +70,13 @@ const tierLabel = cx(labelStyle, css({ cursor: 'pointer' }))
  * pointed at a different account. The listing says when one is shared, because
  * editing a shared setup changes every profile that uses it.
  *
- * The model picker needs a provider to browse, and an agent profile has none —
+ * The model picker needs a provider to browse, and a setup has none —
  * so it borrows one from a profile that uses this setup. When nothing does,
  * there is no catalog to offer and the fields stay plain text, which is the
  * honest answer rather than a picker over a list we cannot obtain.
  */
-export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () => Promise<void> }) {
-  const agentProfiles = Object.entries(data.state.agentProfiles ?? {})
+export function Setups({ data, reload }: { data: Bootstrap; reload: () => Promise<void> }) {
+  const setups = Object.entries(data.state.setups ?? {})
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [error, setError] = useState<string | null>(null)
@@ -94,7 +94,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
     setEditing(name ?? '')
     // Re-derive the browse default for whichever profile just opened.
     setBrowseProviderId(null)
-    setDraft(name ? { ...data.state.agentProfiles[name] } : { models: {}, compat: {} })
+    setDraft(name ? { ...data.state.setups[name] } : { models: {}, compat: {} })
   }
 
   const save = async (name: string) => {
@@ -128,14 +128,14 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
   const models = (draft.models as Record<string, string>) ?? {}
   const compat = (draft.compat as Record<string, boolean>) ?? {}
 
-  /** Which profiles use a given agent profile — the reverse index. */
+  /** Which profiles use a given setup — the reverse index. */
   const usersOf = (name: string) =>
     Object.entries(data.state.profiles ?? {})
-      .filter(([, p]) => p.agentProfile === name)
+      .filter(([, p]) => p.setup === name)
       .map(([n]) => n)
 
   if (editing !== null) {
-    const isNew = !data.state.agentProfiles?.[editing]
+    const isNew = !data.state.setups?.[editing]
     const users = usersOf(editing)
 
     // The agent decides how many model slots exist and which behaviour applies —
@@ -190,7 +190,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
     return (
       <>
         <PageHeader
-          title={isNew ? 'New agent profile' : `Agent profile · ${editing}`}
+          title={isNew ? 'New setup' : `Setup · ${editing}`}
           onBack={() => setEditing(null)}
         />
         {error ? <Banner tone="danger">{error}</Banner> : null}
@@ -255,7 +255,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
             {/* The catalog lens. Browsing needs a provider and this setup names
                 none of its own, so choose which one to browse against — it only
                 drives the Browse buttons and the default-model placeholders, and
-                is never saved onto the agent profile. */}
+                is never saved onto the setup. */}
             <Field
               label="Browse models against"
               hint="Which provider’s catalog the Browse buttons search. A model id is stored bare, so this choice is not part of the setup."
@@ -379,7 +379,7 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
 
         <FormActions>
           <Button variant="primary" onClick={() => void save(editing)} disabled={!editing.trim()}>
-            {isNew ? 'Create agent profile' : 'Save changes'}
+            {isNew ? 'Create setup' : 'Save changes'}
           </Button>
           <Button onClick={() => setEditing(null)}>Cancel</Button>
         </FormActions>
@@ -390,12 +390,12 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
   return (
     <>
       <PageHeader
-        title="Agent profiles"
-        meta={`${agentProfiles.length} setup${agentProfiles.length === 1 ? '' : 's'}`}
+        title="Setups"
+        meta={`${setups.length} setup${setups.length === 1 ? '' : 's'}`}
         description="What runs, with no credential attached — a coding CLI, the model for each tier, and how it should behave. One setup can back several profiles, which is why the list marks the shared ones: editing one changes every profile that uses it."
         actions={
           <Button variant="primary" onClick={() => open(null)}>
-            New agent profile
+            New setup
           </Button>
         }
       />
@@ -407,11 +407,11 @@ export function AgentProfiles({ data, reload }: { data: Bootstrap; reload: () =>
       ))}
 
       <Panel flush>
-        {agentProfiles.length === 0 ? (
-          <EmptyState>No agent profiles yet. An agent profile is a coding CLI plus how it should behave.</EmptyState>
+        {setups.length === 0 ? (
+          <EmptyState>No setups yet. A setup is a coding CLI plus how it should behave.</EmptyState>
         ) : (
           <DataList>
-            {agentProfiles.map(([name, ap]) => {
+            {setups.map(([name, ap]) => {
               const users = usersOf(name)
               // Count only the slots this agent actually reads — a Kilo setup
               // with an opus id is "1 model", not "1 of 4 tiers".

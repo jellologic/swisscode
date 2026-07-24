@@ -18,10 +18,10 @@ function twoProviderConfig() {
       or: { provider: 'openrouter', apiKey: 'sk-or' },
       z: { provider: 'zai', apiKey: 'sk-zai' },
     },
-    agentProfiles: { main: { agent: 'claude-code', models: { opus: 'base-opus', sonnet: 'base-sonnet' } } },
+    setups: { main: { agent: 'claude-code', models: { opus: 'base-opus', sonnet: 'base-sonnet' } } },
     profiles: {
-      p: { agentProfile: 'main', accounts: ['or'] },
-      onz: { agentProfile: 'main', accounts: ['z'] },
+      p: { setup: 'main', accounts: ['or'] },
+      onz: { setup: 'main', accounts: ['z'] },
     },
   })
 }

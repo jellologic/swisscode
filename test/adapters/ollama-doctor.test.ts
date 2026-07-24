@@ -135,11 +135,11 @@ const ollamaState = {
   providerAccounts: {
     local: makeProfile({ provider: 'ollama' }),
   },
-  agentProfiles: {
+  setups: {
     local: { models: { opus: 'qwen3:0.6b' } },
   },
   profiles: {
-    local: { agentProfile: 'local', accounts: ['local'] },
+    local: { setup: 'local', accounts: ['local'] },
   },
   defaultProfile: 'local',
   bindings: {},
@@ -210,11 +210,11 @@ test('a non-Ollama profile gets no context check at all', async () => {
     providerAccounts: {
       z: makeProfile({ provider: 'zai', apiKey: 'k' }),
     },
-    agentProfiles: {
+    setups: {
       z: { models: { opus: 'glm-5.2' } },
     },
     profiles: {
-      z: { agentProfile: 'z', accounts: ['z'] },
+      z: { setup: 'z', accounts: ['z'] },
     },
     defaultProfile: 'z',
     bindings: {},

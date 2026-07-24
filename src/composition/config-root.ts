@@ -93,6 +93,10 @@ export type RunConfigCommandOptions = {
 const SUBCOMMANDS = Object.freeze([
   'list', 'default', 'agent', 'rm', 'use', 'bind', 'unbind', 'bindings', 'doctor', 'help',
   'accounts',
+  'setups',
+  // v3's name for `setups`. Kept dispatchable so an install that scripted it
+  // does not break on upgrade; undocumented in USAGE, and it says so once when
+  // used. See the v3->v4 note in core/migrate.ts for why the word changed.
   'agents',
 ])
 
@@ -113,7 +117,7 @@ const USAGE = `swisscode config — manage profiles and directory bindings
   swisscode config accounts swap      move one account's login into another session
     --into <account-or-dir> <account>   directory — narrower than /login, which hits every
                                         running session at once
-  swisscode config agents             agent profiles, and which profiles use each
+  swisscode config setups             setups, and which profiles use each
 
   swisscode config agent              list agents and which profile uses each
   swisscode config agent <name>       show which coding CLI <name> launches
@@ -207,8 +211,11 @@ export async function runConfigCommand({
       return upgradeCommand({ deps, args: rest, out, err })
     case 'accounts':
       return accountsCommand({ deps, args: rest, out, err })
+    case 'setups':
+      return listSetups({ deps, out })
     case 'agents':
-      return listAgentProfiles({ deps, out })
+      err('swisscode: `config agents` is now `config setups`. The old name still works for now.')
+      return listSetups({ deps, out })
     default:
       break
   }
@@ -302,7 +309,7 @@ function agentCommand({
       return 0
     }
     for (const n of names) {
-      const ap = state.agentProfiles?.[state.profiles[n]?.agentProfile ?? '']
+      const ap = state.setups?.[state.profiles[n]?.setup ?? '']
       out(`  ${n} → ${ap?.agent ?? DEFAULT_AGENT_ID}`)
     }
     return 0
@@ -318,10 +325,10 @@ function agentCommand({
     return 2
   }
 
-  const agentProfileName = profile.agentProfile
-  const agentProfile = state.agentProfiles?.[agentProfileName]
+  const setupName = profile.setup
+  const setup = state.setups?.[setupName]
   if (agentId === undefined) {
-    out(`${profileName} → ${agentProfile?.agent ?? DEFAULT_AGENT_ID}`)
+    out(`${profileName} → ${setup?.agent ?? DEFAULT_AGENT_ID}`)
     return 0
   }
 
@@ -332,31 +339,31 @@ function agentCommand({
     return 2
   }
   if (loaded.readOnly) return refuseWrite(err)
-  if (!agentProfile) {
+  if (!setup) {
     err(
-      `swisscode: profile "${profileName}" uses agent profile "${agentProfileName}", which ` +
+      `swisscode: profile "${profileName}" uses setup "${setupName}", which ` +
         'does not exist. Run `swisscode config ' + profileName + '` to repair it.',
     )
     return 2
   }
   // Written to the AGENT PROFILE, not the profile: since v3 that is where the
-  // coding CLI lives, and an agent profile may back several profiles — which is
+  // coding CLI lives, and a setup may back several profiles — which is
   // the point of the split, and worth the reminder in the confirmation line.
   const next: State = {
     ...state,
-    agentProfiles: {
-      ...state.agentProfiles,
-      [agentProfileName]: { ...agentProfile, agent: agentId },
+    setups: {
+      ...state.setups,
+      [setupName]: { ...setup, agent: agentId },
     },
   }
   deps.store.save(next)
   const alsoUsing = Object.entries(state.profiles ?? {})
-    .filter(([n, pr]) => n !== profileName && pr.agentProfile === agentProfileName)
+    .filter(([n, pr]) => n !== profileName && pr.setup === setupName)
     .map(([n]) => n)
   out(
     `${profileName} now launches ${agentId}.` +
       (alsoUsing.length
-        ? ` (shared agent profile "${agentProfileName}" — also used by ${alsoUsing.join(', ')})`
+        ? ` (shared setup "${setupName}" — also used by ${alsoUsing.join(', ')})`
         : ''),
   )
   return 0
@@ -428,7 +435,7 @@ function listProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
     // Resolution warnings say what was skipped and why; swallowing them here
     // would leave a stale reference invisible until someone read the JSON.
     for (const w of resolution.warnings) out(`    ⚠ ${w}`)
-    out(`    agent      ${r.agentProfileName} → ${r.agent ?? DEFAULT_AGENT_ID}`)
+    out(`    agent      ${r.setupName} → ${r.agent ?? DEFAULT_AGENT_ID}`)
     if (r.baseUrl) out(`    baseUrl    ${r.baseUrl}`)
     // Presence and ORIGIN only. Never a prefix, never a suffix, never a length:
     // a masked key is still a fingerprint, and this output gets pasted into bug
@@ -1310,24 +1317,25 @@ const WHY_MATCHED: Record<IdentityCollision['matchedOn'], string> = {
 }
 
 /**
- * `swisscode config agents` — what runs, and who uses it.
+ * `swisscode config setups` — what runs, and who uses it.
  *
  * Named for the concept rather than the CLI: `config agent <profile> <id>`
- * already existed and still edits which coding CLI a profile launches. This
- * lists the agent PROFILES, which is the thing that can now be shared.
+ * already existed and still edits WHICH coding CLI a setup launches, so it
+ * keeps its name. This lists the setups themselves, which is the thing that can
+ * be shared between profiles.
  */
-function listAgentProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
+function listSetups({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
   const { state } = deps.store.load()
-  const names = Object.keys(state.agentProfiles ?? {}).sort()
+  const names = Object.keys(state.setups ?? {}).sort()
   if (names.length === 0) {
-    out('No agent profiles yet. Run `swisscode config` to make one.')
+    out('No setups yet. Run `swisscode config` to make one.')
     return 0
   }
 
   for (const name of names) {
-    const ap = state.agentProfiles[name]!
+    const ap = state.setups[name]!
     const usedBy = Object.entries(state.profiles ?? {})
-      .filter(([, p]) => p.agentProfile === name)
+      .filter(([, p]) => p.setup === name)
       .map(([n]) => n)
 
     out(`  ${name}${ap.label ? `  (${ap.label})` : ''}`)

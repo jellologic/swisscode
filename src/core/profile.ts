@@ -136,8 +136,8 @@ export function resolveProfile(
   if (positional) {
     const kind = has(state?.providerAccounts ?? {}, positional)
       ? ({ what: 'an account', does: 'accounts say who pays' } as const)
-      : has(state?.agentProfiles ?? {}, positional)
-        ? ({ what: 'an agent profile', does: 'agent profiles say what runs' } as const)
+      : has(state?.setups ?? {}, positional)
+        ? ({ what: 'a setup', does: 'setups say what runs' } as const)
         : null
     if (kind) {
       return {

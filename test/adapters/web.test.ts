@@ -153,11 +153,11 @@ const baseState = (): State =>
     version: 2,    providerAccounts: {
       work: makeProfile({ provider: 'zai', apiKey: 'secret' }),
     },
-    agentProfiles: {
+    setups: {
       work: { models: {} },
     },
     profiles: {
-      work: { agentProfile: 'work', accounts: ['work'] },
+      work: { setup: 'work', accounts: ['work'] },
     },
     defaultProfile: 'work',
     bindings: {},
@@ -558,7 +558,7 @@ test('deleting a provider reports orphaned profiles rather than silently repairi
     {
       method: 'PUT',
       path: '/api/agent-profiles/gw-agent',
-      body: { revision: s.revision!(), agentProfile: {} },
+      body: { revision: s.revision!(), setup: {} },
     },
     deps(s),
   )
@@ -568,7 +568,7 @@ test('deleting a provider reports orphaned profiles rather than silently repairi
       path: '/api/profiles/uses-gw',
       body: {
         revision: s.revision!(),
-        profile: { agentProfile: 'gw-agent', accounts: ['gw-acct'] },
+        profile: { setup: 'gw-agent', accounts: ['gw-acct'] },
       },
     },
     deps(s),

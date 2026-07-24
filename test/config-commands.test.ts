@@ -25,13 +25,13 @@ const STATE = (): State => ({
     z: makeProfile({ provider: 'zai', apiKey: 'zai-secret-value' }),
     or: makeProfile({ provider: 'openrouter', apiKeyFromEnv: 'OPENROUTER_KEY' }),
   },
-  agentProfiles: {
+  setups: {
     z: { models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' }, skipPermissions: true },
     or: {},
   },
   profiles: {
-    z: { agentProfile: 'z', accounts: ['z'] },
-    or: { agentProfile: 'or', accounts: ['or'] },
+    z: { setup: 'z', accounts: ['z'] },
+    or: { setup: 'or', accounts: ['or'] },
   },
   defaultProfile: 'z',
   bindings: {},
@@ -139,8 +139,8 @@ test('an existing profile with an awkward name still opens', async () => {
   // Validation applies at CREATION only; a hand-edited config keeps working.
   const state = STATE()
   state.providerAccounts.fix = { provider: 'zai' }
-  state.agentProfiles.fix = {}
-  state.profiles.fix = { agentProfile: 'fix', accounts: ['fix'] }
+  state.setups.fix = {}
+  state.profiles.fix = { setup: 'fix', accounts: ['fix'] }
   const h = harness({ state })
   assert.equal(await h.run(['fix']), 0)
   assert.equal(h.uiCalls[0]!.profileName, 'fix')
@@ -174,8 +174,8 @@ test('config list flags a profile whose provider this build does not know', asyn
   // The provider id lives on the ACCOUNT now, so an unknown one is an unknown
   // account provider — the profile itself resolves fine and still lists.
   state.providerAccounts.old = { provider: 'volcengine' }
-  state.agentProfiles.old = {}
-  state.profiles.old = { agentProfile: 'old', accounts: ['old'] }
+  state.setups.old = {}
+  state.profiles.old = { setup: 'old', accounts: ['old'] }
   const h = harness({ state })
   await h.run(['list'])
   assert.match(h.text(), /unknown provider/)
@@ -213,8 +213,8 @@ test('deleting the default profile promotes the survivor only when there is one'
 
   const three = STATE()
   three.providerAccounts.third = { provider: 'zai' }
-  three.agentProfiles.third = {}
-  three.profiles.third = { agentProfile: 'third', accounts: ['third'] }
+  three.setups.third = {}
+  three.profiles.third = { setup: 'third', accounts: ['third'] }
   const h2 = harness({ state: three })
   await h2.run(['rm', 'z'])
   // Guessing among several would silently pick an account to bill.
@@ -408,11 +408,11 @@ test('every surface that names a provider sees the custom ones', async () => {
       version: 2,      providerAccounts: {
         rig: makeProfile({ provider: 'vllm' }),
       },
-      agentProfiles: {
+      setups: {
         rig: {},
       },
       profiles: {
-        rig: { agentProfile: 'rig', accounts: ['rig'] },
+        rig: { setup: 'rig', accounts: ['rig'] },
       },
       defaultProfile: 'rig',
       bindings: {},
@@ -445,11 +445,11 @@ test('a profile on a genuinely unknown provider still says so', async () => {
       version: 2,      providerAccounts: {
         ghost: makeProfile({ provider: 'nope' }),
       },
-      agentProfiles: {
+      setups: {
         ghost: {},
       },
       profiles: {
-        ghost: { agentProfile: 'ghost', accounts: ['ghost'] },
+        ghost: { setup: 'ghost', accounts: ['ghost'] },
       },
       defaultProfile: 'ghost',
       bindings: {},
@@ -532,11 +532,11 @@ test('config accounts names two accounts that are secretly one subscription', as
   )
 })
 
-test('config agents marks a shared agent profile as shared', async () => {
+test('config agents marks a shared setup as shared', async () => {
   // Sharing is the capability the split bought; a listing that did not show it
   // would leave the user unable to tell one setup from two identical ones.
   const state = STATE()
-  state.profiles.or!.agentProfile = state.profiles.z!.agentProfile
+  state.profiles.or!.setup = state.profiles.z!.setup
   const h = harness({ state })
   assert.equal(await h.run(['agents']), 0)
   assert.match(h.text(), /used by\s+or, z\s+\(shared\)|used by\s+z, or\s+\(shared\)/)
@@ -546,7 +546,7 @@ test('both list commands cope with an empty config rather than printing nothing'
   const empty = {
     version: 3,
     providerAccounts: {},
-    agentProfiles: {},
+    setups: {},
     profiles: {},
     defaultProfile: null,
     bindings: {},
@@ -558,5 +558,5 @@ test('both list commands cope with an empty config rather than printing nothing'
 
   const b = harness({ state: empty })
   await b.run(['agents'])
-  assert.match(b.text(), /No agent profiles yet/)
+  assert.match(b.text(), /No setups yet/)
 })

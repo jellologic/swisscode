@@ -62,8 +62,8 @@ function deps(over: DepsOver = {}) {
     makeState({
       version: 3,
       providerAccounts: { z: makeAccount({ provider: 'zai', apiKey: 'k' }) },
-      agentProfiles: { z: makeAgentProfile({ models: { opus: 'glm-5.2' } }) },
-      profiles: { z: makeProfileRefs({ agentProfile: 'z', accounts: ['z'] }) },
+      setups: { z: makeAgentProfile({ models: { opus: 'glm-5.2' } }) },
+      profiles: { z: makeProfileRefs({ setup: 'z', accounts: ['z'] }) },
       defaultProfile: 'z',
       bindings: {},
       settings: {},
@@ -94,10 +94,10 @@ const sessionState = (configDir: string, over: { strategy?: SelectionStrategy } 
   makeState({
     version: 3,
     providerAccounts: { personal: makeAccount({ provider: 'anthropic', configDir }) },
-    agentProfiles: { a: makeAgentProfile({ models: { opus: 'claude-opus-4-8' } }) },
+    setups: { a: makeAgentProfile({ models: { opus: 'claude-opus-4-8' } }) },
     profiles: {
       a: makeProfileRefs({
-        agentProfile: 'a',
+        setup: 'a',
         accounts: ['personal'],
         ...(over.strategy ? { strategy: over.strategy } : {}),
       }),
@@ -219,10 +219,10 @@ test('only the accounts a usage profile NAMES are measured', async () => {
       personal: makeAccount({ provider: 'anthropic', configDir: dir }),
       unused: makeAccount({ provider: 'anthropic', configDir: other }),
     },
-    agentProfiles: { a: makeAgentProfile({ models: { opus: 'claude-opus-4-8' } }) },
+    setups: { a: makeAgentProfile({ models: { opus: 'claude-opus-4-8' } }) },
     profiles: {
-      a: makeProfileRefs({ agentProfile: 'a', accounts: ['personal'], strategy: 'usage' }),
-      b: makeProfileRefs({ agentProfile: 'a', accounts: ['unused'] }),
+      a: makeProfileRefs({ setup: 'a', accounts: ['personal'], strategy: 'usage' }),
+      b: makeProfileRefs({ setup: 'a', accounts: ['unused'] }),
     },
     defaultProfile: 'a',
     bindings: {},
@@ -270,9 +270,9 @@ test('a partly-measured set writes what it has and NAMES what it missed', async 
       one: makeAccount({ provider: 'anthropic', configDir: a }),
       two: makeAccount({ provider: 'anthropic', configDir: b }),
     },
-    agentProfiles: { p: makeAgentProfile({ models: { opus: 'claude-opus-4-8' } }) },
+    setups: { p: makeAgentProfile({ models: { opus: 'claude-opus-4-8' } }) },
     profiles: {
-      p: makeProfileRefs({ agentProfile: 'p', accounts: ['one', 'two'], strategy: 'usage' }),
+      p: makeProfileRefs({ setup: 'p', accounts: ['one', 'two'], strategy: 'usage' }),
     },
     defaultProfile: 'p',
     bindings: {},

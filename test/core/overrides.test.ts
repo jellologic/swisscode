@@ -141,7 +141,7 @@ test('retargeting cannot inherit models, because accounts do not hold any', () =
   // from whichever profile lent the credential, on the reasoning that it was
   // "already configured FOR this provider".
   //
-  // v3 removes both the ability and the need: models live on the agent profile,
+  // v3 removes both the ability and the need: models live on the setup,
   // which does not change when the provider does, and an account carries no
   // models to borrow. So the models chosen for the OLD provider are simply
   // dropped and the target's own defaults apply — which is the safer of the two

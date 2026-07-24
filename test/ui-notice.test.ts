@@ -43,10 +43,10 @@ const YELLOW = '[33m'
 const state = (): State => ({
   version: 2,
   providerAccounts: { work: { provider: 'zai', apiKey: 'k' }, personal: { provider: 'openrouter', apiKey: 'k' } },
-  agentProfiles: { work: {}, personal: {} },
+  setups: { work: {}, personal: {} },
   profiles: {
-    work: { agentProfile: 'work', accounts: ['work'] },
-    personal: { agentProfile: 'personal', accounts: ['personal'] },
+    work: { setup: 'work', accounts: ['work'] },
+    personal: { setup: 'personal', accounts: ['personal'] },
   },
   defaultProfile: 'work',
   bindings: {},

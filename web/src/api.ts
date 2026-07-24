@@ -77,7 +77,7 @@ export type ProviderAccount = {
 }
 
 /** WHAT RUNS. Holds no credential, so it crosses whole. */
-export type AgentProfile = {
+export type Setup = {
   agent?: string
   label?: string
   models?: Record<string, string>
@@ -92,7 +92,7 @@ export type SelectionStrategy = 'single' | 'round-robin' | 'usage'
 /** THE PAIRING. References plus the rule for choosing among them. */
 export type Profile = {
   label?: string
-  agentProfile: string
+  setup: string
   accounts: string[]
   strategy?: SelectionStrategy
 }
@@ -114,7 +114,7 @@ export type CustomProvider = {
 export type Bootstrap = {
   state: {
     providerAccounts: Record<string, ProviderAccount>
-    agentProfiles: Record<string, AgentProfile>
+    setups: Record<string, Setup>
     profiles: Record<string, Profile>
     defaultProfile: string | null
     bindings: Record<string, unknown>
@@ -283,10 +283,10 @@ export const api = {
       { method: 'DELETE', body: JSON.stringify({ revision }) },
     ),
 
-  saveAgentProfile: (name: string, agentProfile: unknown, revision: string | null) =>
+  saveAgentProfile: (name: string, setup: unknown, revision: string | null) =>
     call<{ revision: string }>(`/api/agent-profiles/${encodeURIComponent(name)}`, {
       method: 'PUT',
-      body: JSON.stringify({ revision, agentProfile }),
+      body: JSON.stringify({ revision, setup }),
     }),
 
   deleteAgentProfile: (name: string, revision: string | null) =>

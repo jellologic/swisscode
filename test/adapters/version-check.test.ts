@@ -153,8 +153,8 @@ function launchHarness(versionStore: ReturnType<typeof createFsVersionStore> | u
   const state = {
     version: 3,
     providerAccounts: { z: { provider: 'zai', apiKey: 'k' } },
-    agentProfiles: { z: { models: { opus: 'glm-5.2' } } },
-    profiles: { z: { agentProfile: 'z', accounts: ['z'] } },
+    setups: { z: { models: { opus: 'glm-5.2' } } },
+    profiles: { z: { setup: 'z', accounts: ['z'] } },
     defaultProfile: 'z',
     bindings: {},
     settings: {},

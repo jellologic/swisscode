@@ -199,7 +199,7 @@ export function accountLogin({
   }
 
   // Claude Code is the only agent with this flow — the login being adopted IS a
-  // Claude subscription — so this does not consult the agent profile. Kilo and
+  // Claude subscription — so this does not consult the setup. Kilo and
   // OpenCode declare `sessionDir: false` for exactly this reason.
   const agent = agents.byId('claude-code')
   if (!agent) {

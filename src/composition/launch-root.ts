@@ -153,7 +153,7 @@ export type LaunchPlan = {
   needsSetup: false
   loaded: LoadResult
   selection: ProfileSelection
-  /** the flattened account + agent profile this launch resolved to */
+  /** the flattened account + setup this launch resolved to */
   profile: ResolvedProfile
   /**
    * null is a REAL state, not a defect: a profile naming a provider this build
@@ -234,7 +234,7 @@ export function planLaunch({
   // A matched positional profile name is CONSUMED — claude never sees it.
   const args = sel.consumedPositional ? passthrough.slice(1) : passthrough
 
-  // v3: a profile is three objects. Dereference the agent profile and select
+  // v3: a profile is three objects. Dereference the setup and select
   // one account BEFORE anything else, because every step below operates on the
   // flattened view — which is deliberately the shape v2 stored, so nothing
   // downstream of here changed when the schema split.

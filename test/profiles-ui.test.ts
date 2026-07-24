@@ -44,13 +44,13 @@ const baseState = (): State => ({
     work: { provider: 'zai', apiKey: SECRET },
     personal: makeProfile({ provider: 'openrouter', apiKey: 'or-secret' }),
   },
-  agentProfiles: {
+  setups: {
     work: { models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' }, skipPermissions: true },
     personal: {},
   },
   profiles: {
-    work: { agentProfile: 'work', accounts: ['work'] },
-    personal: { agentProfile: 'personal', accounts: ['personal'] },
+    work: { setup: 'work', accounts: ['work'] },
+    personal: { setup: 'personal', accounts: ['personal'] },
   },
   defaultProfile: 'work',
   bindings: {},

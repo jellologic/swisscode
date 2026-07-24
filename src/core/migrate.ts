@@ -18,7 +18,7 @@ import type {
   State,
 } from '../ports/config-store.ts'
 
-export const SUPPORTED_VERSION = 3
+export const SUPPORTED_VERSION = 4
 
 /** Enforced at creation, never at parse — a hand-edited file is still read. */
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -86,7 +86,7 @@ export function emptyState(): State {
   return {
     version: SUPPORTED_VERSION,
     providerAccounts: {},
-    agentProfiles: {},
+    setups: {},
     profiles: {},
     defaultProfile: null,
     bindings: {},
@@ -222,7 +222,11 @@ export function fromV2(raw: ConfigV2): V3Draft {
   }
 
   const draft: V3Draft = {
-    version: SUPPORTED_VERSION,
+    // LITERAL 3, not SUPPORTED_VERSION. `fromV1` has carried this warning since
+    // before there was a v4: stamping the current version here would make the
+    // ladder skip the v3->v4 step, because `migrate` dispatches on the number.
+    // The moment SUPPORTED_VERSION became 4 this was the bug it predicted.
+    version: 3,
     providerAccounts,
     agentProfiles,
     profiles,
@@ -234,6 +238,83 @@ export function fromV2(raw: ConfigV2): V3Draft {
   // split; they pass through untouched.
   if (raw.providers !== undefined) draft.providers = raw.providers
   return draft
+}
+
+/**
+ * The v4 SHAPE. Identical to v3 but for two names, which is the whole change.
+ */
+type V4Draft = Omit<V3Draft, 'version' | 'agentProfiles'> & {
+  version: number
+  setups: Record<string, Record<string, unknown>>
+}
+
+/**
+ * v3 -> v4. Lossless, deterministic, and it repairs nothing.
+ *
+ * PURELY A RENAME: `agentProfiles` -> `setups`, and each profile's
+ * `agentProfile` -> `setup`. Nothing moves between objects and no value is
+ * rewritten, which is why this step has no rules of its own the way v1->v2 and
+ * v2->v3 do.
+ *
+ * The rename exists because "agent profile" and "profile" were two names one
+ * word apart for two different things, and users read the pair exactly
+ * backwards — "agent profiles are Claude Code setting overrides, optional".
+ * They are neither optional nor settings: a setup picks WHICH CLI RUNS, and
+ * every profile must name one. One of the two had to lose the word, and it was
+ * not going to be the one people type (`swisscode work`, `--cc-profile`,
+ * bindings, `config default`).
+ *
+ * A v3 file that already carries `setups` (written by a newer swisscode, then
+ * read back by one that stamps v3 — not a shape we produce, but cheap to
+ * survive) keeps them: the old key is merged OVER the new one only where it
+ * exists, so nothing is lost either way.
+ */
+export function fromV3(raw: Record<string, unknown>): V4Draft {
+  const setups: Record<string, Record<string, unknown>> = {
+    ...(isPlainObject(raw.setups) ? (raw.setups as Record<string, Record<string, unknown>>) : {}),
+    ...(isPlainObject(raw.agentProfiles)
+      ? (raw.agentProfiles as Record<string, Record<string, unknown>>)
+      : {}),
+  }
+
+  const profiles: Record<string, Record<string, unknown>> = {}
+  for (const [name, p] of Object.entries(isPlainObject(raw.profiles) ? raw.profiles : {})) {
+    if (!isPlainObject(p)) continue
+    const { agentProfile, ...rest } = p as Record<string, unknown>
+    // `setup` wins if both are somehow present; otherwise the v3 key becomes it.
+    // Written this way rather than as a delete so rule M1's unrecognized keys
+    // ride through untouched, exactly as they did in the earlier steps.
+    profiles[name] = {
+      ...rest,
+      ...(rest.setup !== undefined
+        ? {}
+        : agentProfile !== undefined
+          ? { setup: agentProfile }
+          : {}),
+    }
+  }
+
+  // SPREAD, then override. Rule W3: unknown top-level keys survive the ladder,
+  // so an older binary round-trips a newer file's additions instead of eating
+  // them. Rebuilding this object field-by-field silently broke that — a
+  // `somethingNewer` key written by a future swisscode vanished on the first
+  // save by this one, which is data loss disguised as a rename.
+  const { agentProfiles: _dropped, ...rest } = raw
+  return {
+    ...rest,
+    version: SUPPORTED_VERSION,
+    providerAccounts: isPlainObject(raw.providerAccounts)
+      ? (raw.providerAccounts as Record<string, Record<string, unknown>>)
+      : {},
+    setups,
+    profiles,
+    defaultProfile: typeof raw.defaultProfile === 'string' ? raw.defaultProfile : null,
+    bindings: (isPlainObject(raw.bindings) ? raw.bindings : {}) as Record<string, BindingValue>,
+    settings: (isPlainObject(raw.settings) ? raw.settings : {}) as Settings,
+    ...(raw.providers !== undefined
+      ? { providers: raw.providers as Record<string, CustomProvider> }
+      : {}),
+  }
 }
 
 /** Fill defaults, drop junk, resolve the default profile. Idempotent. */
@@ -266,7 +347,7 @@ export function normalize(raw: unknown): { state: State; warnings: string[] } {
   // The two new v3 maps, validated exactly as `profiles` is: an entry that is
   // not an object is dropped with a warning rather than reaching a consumer
   // that will read fields off a number.
-  for (const key of ['providerAccounts', 'agentProfiles'] as const) {
+  for (const key of ['providerAccounts', 'setups'] as const) {
     if (!isPlainObject(state[key])) {
       if (state[key] !== undefined) {
         warnings.push(`config.json: \`${key}\` is not an object; ignoring it.`)
@@ -370,7 +451,7 @@ export function migrate(raw: unknown): MigrateResult {
     const salvage = {
       version,
       providerAccounts: isPlainObject(raw.providerAccounts) ? raw.providerAccounts : {},
-      agentProfiles: isPlainObject(raw.agentProfiles) ? raw.agentProfiles : {},
+      setups: isPlainObject(raw.setups) ? raw.setups : {},
       profiles: isPlainObject(raw.profiles) ? raw.profiles : {},
       defaultProfile: typeof raw.defaultProfile === 'string' ? raw.defaultProfile : null,
       bindings: isPlainObject(raw.bindings) ? raw.bindings : {},
@@ -381,8 +462,13 @@ export function migrate(raw: unknown): MigrateResult {
     return { state, migratedFrom: null, corrupt: false, readOnly: true, warnings }
   }
 
+  if (version === 3) {
+    const { state, warnings } = normalize(fromV3(raw))
+    return { state, migratedFrom: 3, corrupt: false, readOnly: false, warnings }
+  }
+
   if (version === 2) {
-    const { state, warnings } = normalize(fromV2(raw as unknown as ConfigV2))
+    const { state, warnings } = normalize(fromV3(fromV2(raw as unknown as ConfigV2)))
     return { state, migratedFrom: 2, corrupt: false, readOnly: false, warnings }
   }
 
@@ -395,10 +481,14 @@ export function migrate(raw: unknown): MigrateResult {
     // reaches `fromV1`, where `raw.provider` is undefined, `NAME_RE.test(undefined)`
     // coerces to the string "undefined" and MATCHES, and rule M1 nests the
     // entire file inside a single profile named "undefined".
-    // CHAINED, not parallel. fromV1 produces a v2 draft, which fromV2 then
-    // splits — so a 0.1.0 file reaches v3 in a single read and there is exactly
-    // one implementation of each step to keep correct.
-    const { state, warnings } = normalize(fromV2(fromV1(raw as unknown as ConfigV1) as unknown as ConfigV2))
+    // CHAINED, not parallel. fromV1 produces a v2 draft, which fromV2 splits,
+    // which fromV3 renames — so a 0.1.0 file reaches v4 in a single read and
+    // there is exactly one implementation of each step to keep correct. Each
+    // step stamps its OWN output version rather than the current one, which is
+    // what lets the ladder grow without the earlier rungs quietly falling off.
+    const { state, warnings } = normalize(
+      fromV3(fromV2(fromV1(raw as unknown as ConfigV1) as unknown as ConfigV2)),
+    )
     return { state, migratedFrom: 1, corrupt: false, readOnly: false, warnings }
   }
 

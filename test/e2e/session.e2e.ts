@@ -20,8 +20,8 @@ import { launch, makeConfig } from './harness.ts'
 function sessionConfig(configDir: string, extra: Record<string, string> = {}) {
   return makeConfig({
     providerAccounts: { s: { provider: 'anthropic', configDir, ...extra } },
-    agentProfiles: { m: { agent: 'claude-code', models: { opus: 'x' } } },
-    profiles: { p: { agentProfile: 'm', accounts: ['s'] } },
+    setups: { m: { agent: 'claude-code', models: { opus: 'x' } } },
+    profiles: { p: { setup: 'm', accounts: ['s'] } },
   })
 }
 

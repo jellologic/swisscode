@@ -1,4 +1,4 @@
-// Resolution: a profile -> the one account + agent profile a launch uses.
+// Resolution: a profile -> the one account + setup a launch uses.
 //
 // This is the step that decides WHICH ACCOUNT PAYS, so it gets exhaustive
 // coverage of both the happy path and every way it can degrade. Degrading is
@@ -18,11 +18,11 @@ const state = (over: Partial<State> = {}): State =>
       backup: { provider: 'zai', apiKey: 'zai-key' },
       third: { provider: 'anthropic' },
     },
-    agentProfiles: {
+    setups: {
       main: { agent: 'kilo', models: { opus: 'm' }, skipPermissions: true },
     },
     profiles: {
-      p: { agentProfile: 'main', accounts: ['work'] },
+      p: { setup: 'main', accounts: ['work'] },
     },
     defaultProfile: 'p',
     bindings: {},
@@ -46,28 +46,28 @@ function cursorStore(initial: Record<string, number> = {}): CursorPort & { seen:
 
 // the happy path
 
-test('resolution flattens the account and the agent profile together', () => {
+test('resolution flattens the account and the setup together', () => {
   const r = resolveProfileRefs(state(), 'p')
   assert.ok(r.ok)
   // From the account…
   assert.equal(r.resolved.provider, 'openrouter')
   assert.equal(r.resolved.apiKey, 'or-key')
-  // …and from the agent profile.
+  // …and from the setup.
   assert.equal(r.resolved.agent, 'kilo')
   assert.equal(r.resolved.skipPermissions, true)
   assert.deepEqual(r.resolved.models, { opus: 'm' })
   // Both names travel with it, so a caller can REPORT which account paid.
   assert.equal(r.resolved.accountName, 'work')
-  assert.equal(r.resolved.agentProfileName, 'main')
+  assert.equal(r.resolved.setupName, 'main')
 })
 
-test('one agent profile can back several profiles', () => {
+test('one setup can back several profiles', () => {
   // The point of the split: a shared setup is expressed by reference, not by
   // duplicating models and permissions into every profile that wants them.
   const s = state({
     profiles: {
-      a: { agentProfile: 'main', accounts: ['work'] },
-      b: { agentProfile: 'main', accounts: ['backup'] },
+      a: { setup: 'main', accounts: ['work'] },
+      b: { setup: 'main', accounts: ['backup'] },
     },
   } as Partial<State>)
   const a = resolveProfileRefs(s, 'a')
@@ -80,17 +80,17 @@ test('one agent profile can back several profiles', () => {
 
 // every reference failure names the fix
 
-test('a missing agent profile is refused with the repair named', () => {
-  const s = state({ profiles: { p: { agentProfile: 'gone', accounts: ['work'] } } } as Partial<State>)
+test('a missing setup is refused with the repair named', () => {
+  const s = state({ profiles: { p: { setup: 'gone', accounts: ['work'] } } } as Partial<State>)
   const r = resolveProfileRefs(s, 'p')
   assert.equal(r.ok, false)
-  assert.match(r.reason, /agent profile "gone"/)
+  assert.match(r.reason, /setup "gone"/)
   assert.match(r.reason, /swisscode config p/, 'the message must say what to run')
 })
 
 test('a profile with no accounts is refused rather than defaulted', () => {
   // Picking "some other account" would be choosing who to bill.
-  const s = state({ profiles: { p: { agentProfile: 'main', accounts: [] } } } as Partial<State>)
+  const s = state({ profiles: { p: { setup: 'main', accounts: [] } } } as Partial<State>)
   const r = resolveProfileRefs(s, 'p')
   assert.equal(r.ok, false)
   assert.match(r.reason, /no provider account/)
@@ -100,7 +100,7 @@ test('a dangling account is skipped with a warning, not fatal', () => {
   // A profile with three accounts and one stale reference should still launch
   // on the other two.
   const s = state({
-    profiles: { p: { agentProfile: 'main', accounts: ['gone', 'backup'] } },
+    profiles: { p: { setup: 'main', accounts: ['gone', 'backup'] } },
   } as Partial<State>)
   const r = resolveProfileRefs(s, 'p')
   assert.ok(r.ok)
@@ -110,7 +110,7 @@ test('a dangling account is skipped with a warning, not fatal', () => {
 
 test('when every account is dangling it refuses and says how many', () => {
   const s = state({
-    profiles: { p: { agentProfile: 'main', accounts: ['gone', 'also-gone'] } },
+    profiles: { p: { setup: 'main', accounts: ['gone', 'also-gone'] } },
   } as Partial<State>)
   const r = resolveProfileRefs(s, 'p')
   assert.equal(r.ok, false)
