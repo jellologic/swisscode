@@ -22,6 +22,8 @@
     "dev": "node build.js && tsc -p tsconfig.build.json --watch --preserveWatchOutput",
     "typecheck": "tsc --noEmit",
     "test": "tsc --noEmit && npm run typecheck:web && node build.js && node --test \"test/**/*.test.ts\"",
+    "test:e2e": "node build.js && node --test \"test/e2e/**/*.e2e.ts\"",
+    "test:e2e:real": "node --test \"test/e2e/**/*.real.ts\"",
     "prepare": "node build.js",
     "prepublishOnly": "node build.js",
     "size": "node scripts/size-budget.js",
