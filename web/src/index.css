@@ -1,12 +1,43 @@
 @layer reset, base, tokens, recipes, utilities;
 
-html, body, #root { height: 100% }
-body {
-  margin: 0;
-  background: var(--colors-bg);
-  color: var(--colors-text);
-  font-family: var(--fonts-sans);
-  font-size: 13px;
-  -webkit-font-smoothing: antialiased;
+/*
+ * What is left here is what a token genuinely cannot express: the scrollbar's
+ * pseudo-elements, the focus ring, and the reduced-motion escape. Everything
+ * with a colour names a semantic token, so light mode needs nothing here.
+ *
+ * THE PAGE DEFAULTS ARE NOT HERE ANY MORE. `body`'s font-size, line-height and
+ * tracking used to sit below as raw CSS — a byte-for-byte copy of
+ * `textStyles.body` in panda.config.ts, in the one file `strictTokens` cannot
+ * police. They now live in that config's `globalCss` and name the composition
+ * instead, so editing the type scale cannot leave the page behind.
+ */
+
+/*
+ * ONE focus ring for the whole app, and only for keyboard users. `:focus-visible`
+ * rather than `:focus` is what stops a ring appearing on every mouse click while
+ * keeping it for anyone navigating by keyboard.
+ */
+:focus-visible {
+  outline: 2px solid var(--colors-accent-default);
+  outline-offset: 2px;
+  border-radius: var(--radii-xs);
 }
-input, select, button { font-family: inherit }
+
+/* Match the scrollbar to the theme; an unstyled one is a white gutter in dark mode. */
+* { scrollbar-color: var(--colors-border-strong) transparent }
+::-webkit-scrollbar { width: 10px; height: 10px }
+::-webkit-scrollbar-thumb {
+  background: var(--colors-border-strong);
+  border-radius: var(--radii-full);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-clip: content-box; background-color: var(--colors-content-tertiary) }
+::-webkit-scrollbar-track { background: transparent }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

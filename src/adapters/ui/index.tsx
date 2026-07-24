@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Box, Text, render, useApp, useInput } from 'ink'
-import SelectInput from 'ink-select-input'
 import TextInput from 'ink-text-input'
 import { TIERS } from '../../core/tiers.ts'
 import { NAME_RE, validateProfileName } from '../../core/migrate.ts'
@@ -15,6 +14,7 @@ import { systemClock } from '../clock/system-clock.ts'
 import { resolveProfileRefs } from '../../core/resolve.ts'
 import { ModelPicker } from './ModelPicker.tsx'
 import { ConfirmDelete, ProfileActions, ProfilePicker } from './ProfilePicker.tsx'
+import { frameBorder, Select, tone } from './theme.tsx'
 import type { ProfileAction } from './ProfilePicker.tsx'
 import type { Tier, TierRecord, ProviderDescriptor, ProviderRegistryPort } from '../../ports/provider.ts'
 import type {
@@ -46,12 +46,16 @@ const emptyModels = (): TierRecord<string> =>
 
 function Frame({ children }: { children: ReactNode }) {
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={frameBorder}
+      paddingX={2}
+      paddingY={1}
+    >
       <Box marginBottom={1}>
-        <Text color="cyan" bold>
-          swisscode
-        </Text>
-        <Text dimColor>  ·  esc to cancel</Text>
+        <Text {...tone.heading}>swisscode</Text>
+        <Text {...tone.muted}>  ·  esc to cancel</Text>
       </Box>
       {children}
     </Box>
@@ -62,9 +66,9 @@ function Row({ label, value, dim }: { label: string; value: string; dim?: boolea
   return (
     <Box>
       <Box width={12}>
-        <Text dimColor>{label}</Text>
+        <Text {...tone.muted}>{label}</Text>
       </Box>
-      <Text dimColor={!!dim}>{value}</Text>
+      <Text {...(dim ? tone.muted : {})}>{value}</Text>
     </Box>
   )
 }
@@ -135,6 +139,18 @@ type Step =
   | 'models'
   | 'perms'
   | 'saveError'
+
+/**
+ * The one-line banner above the profile list, and the tone to read it in.
+ *
+ * The tone travels WITH the text because only the site that produced the
+ * message knows which it is. `bindPath` refusing a directory puts its `reason`
+ * here, and while this was a bare string that refusal rendered in the same
+ * green as "…is now the default profile" — a failure wearing the success
+ * colour, which is the exact class of silent-wrong-answer the rest of the
+ * codebase is built to make impossible.
+ */
+type Notice = { text: string; tone: 'ok' | 'warn' }
 
 export type AppProps = {
   mode?: AppMode | undefined
@@ -256,7 +272,7 @@ export function App({
   // `undefined` is in this type deliberately: a throw carrying no `.message`
   // stores undefined. Ink renders undefined and null identically (nothing).
   const [saveError, setSaveError] = useState<string | null | undefined>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
 
   const providers = registry.all()
   const provider = registry.byId(providerId)
@@ -298,7 +314,7 @@ export function App({
       return false
     }
     setDoc(next)
-    if (message) setNotice(message)
+    if (message) setNotice({ text: message, tone: 'ok' })
     return true
   }
 
@@ -343,7 +359,7 @@ export function App({
       // writing down an existing one.
       const result = bindPath(doc, cwdKey as string, name)
       if (!result.ok) {
-        setNotice(result.reason)
+        setNotice({ text: result.reason, tone: 'warn' })
         return setStep('profiles')
       }
       persist(result.state, `${result.key} now uses "${name}".`)
@@ -468,10 +484,10 @@ export function App({
   if (step === 'saveError') {
     return (
       <Frame>
-        <Text color="red">Could not save your configuration.</Text>
-        <Text dimColor>{saveError}</Text>
+        <Text {...tone.danger}>Could not save your configuration.</Text>
+        <Text {...tone.muted}>{saveError}</Text>
         <Box marginTop={1}>
-          <Text dimColor>Press any key to close. Nothing was launched.</Text>
+          <Text {...tone.muted}>Press any key to close. Nothing was launched.</Text>
         </Box>
       </Frame>
     )
@@ -480,7 +496,7 @@ export function App({
   if (step === 'profiles') {
     return (
       <Frame>
-        {notice ? <Text color="green">{notice}</Text> : null}
+        {notice ? <Text {...tone[notice.tone]}>{notice.text}</Text> : null}
         <ProfilePicker
           state={doc}
           onPick={(name) => {
@@ -549,11 +565,11 @@ export function App({
     return (
       <Frame>
         <Text>Name for the new profile:</Text>
-        <Text dimColor>
+        <Text {...tone.muted}>
           `swisscode {newName.trim() || '<name>'}` in any directory will use it.
         </Text>
         <Box marginTop={1}>
-          <Text color="cyan">› </Text>
+          <Text {...tone.accent}>› </Text>
           <TextInput
             value={newName}
             onChange={(v) => {
@@ -564,7 +580,7 @@ export function App({
             onSubmit={submit}
           />
         </Box>
-        {nameError ? <Text color="red">{nameError}</Text> : null}
+        {nameError ? <Text {...tone.danger}>{nameError}</Text> : null}
       </Frame>
     )
   }
@@ -574,10 +590,10 @@ export function App({
     const index = Math.max(0, providers.findIndex((p) => p.id === providerId))
     return (
       <Frame>
-        {editingName ? <Text dimColor>profile: {editingName}</Text> : null}
+        {editingName ? <Text {...tone.muted}>profile: {editingName}</Text> : null}
         <Text>Which provider should Claude Code talk to?</Text>
         <Box marginTop={1}>
-          <SelectInput
+          <Select
             items={items}
             initialIndex={index}
             onSelect={(item) => chooseProvider(item.value)}
@@ -593,7 +609,7 @@ export function App({
         <Summary provider={provider} baseUrl={baseUrl} apiKey={apiKey} models={models} />
         <Text>Base URL for the Anthropic-compatible endpoint:</Text>
         <Box marginTop={1}>
-          <Text color="cyan">› </Text>
+          <Text {...tone.accent}>› </Text>
           <TextInput
             value={baseUrl}
             onChange={setBaseUrl}
@@ -614,12 +630,12 @@ export function App({
       <Frame>
         <Summary provider={provider} baseUrl={baseUrl} models={models} />
         <Text>
-          API key <Text dimColor>({provider!.credentialEnv})</Text>
+          API key <Text {...tone.muted}>({provider!.credentialEnv})</Text>
         </Text>
-        {provider!.hints?.keyHint ? <Text dimColor>{provider!.hints.keyHint}</Text> : null}
-        {provider!.hints?.note ? <Text dimColor>{provider!.hints.note}</Text> : null}
+        {provider!.hints?.keyHint ? <Text {...tone.muted}>{provider!.hints.keyHint}</Text> : null}
+        {provider!.hints?.note ? <Text {...tone.muted}>{provider!.hints.note}</Text> : null}
         <Box marginTop={1}>
-          <Text color="cyan">› </Text>
+          <Text {...tone.accent}>› </Text>
           <TextInput
             value={apiKey}
             onChange={setApiKey}
@@ -631,7 +647,7 @@ export function App({
           />
         </Box>
         <Box marginTop={1}>
-          <Text dimColor>stored at ~/.config/swisscode/config.json (chmod 600)</Text>
+          <Text {...tone.muted}>stored at ~/.config/swisscode/config.json (chmod 600)</Text>
         </Box>
       </Frame>
     )
@@ -686,9 +702,9 @@ export function App({
     return (
       <Frame>
         <Summary provider={provider} baseUrl={baseUrl} apiKey={apiKey} />
-        <Text>Pick a model per tier <Text dimColor>· enter to browse</Text></Text>
+        <Text>Pick a model per tier <Text {...tone.muted}>· enter to browse</Text></Text>
         <Box marginTop={1}>
-          <SelectInput
+          <Select
             items={items}
             onSelect={(item) => {
               if (item.value === '__done') return setStep('perms')
@@ -705,14 +721,16 @@ export function App({
     return (
       <Frame>
         <Summary provider={provider} baseUrl={baseUrl} apiKey={apiKey} />
-        <Text>Model for each tier <Text dimColor>· enter to advance</Text></Text>
+        <Text>Model for each tier <Text {...tone.muted}>· enter to advance</Text></Text>
         {/* `provider!` — same step-machine invariant as the apiKey screen. */}
-        {provider!.hints?.modelHint ? <Text dimColor>{provider!.hints.modelHint}</Text> : null}
+        {provider!.hints?.modelHint ? (
+          <Text {...tone.muted}>{provider!.hints.modelHint}</Text>
+        ) : null}
         <Box flexDirection="column" marginTop={1}>
           {TIERS.map((t, i) => (
             <Box key={t}>
               <Box width={9}>
-                <Text {...(i === tier ? { color: 'cyan' as const } : {})} dimColor={i !== tier}>
+                <Text {...(i === tier ? tone.selected : tone.muted)}>
                   {i === tier ? '› ' : '  '}
                   {t}
                 </Text>
@@ -736,9 +754,9 @@ export function App({
     <Frame>
       <Summary provider={provider} baseUrl={baseUrl} apiKey={apiKey} models={models} />
       <Text>Pass --dangerously-skip-permissions by default?</Text>
-      <Text dimColor>override per run with --safe or --yolo</Text>
+      <Text {...tone.muted}>override per run with --safe or --yolo</Text>
       <Box marginTop={1}>
-        <SelectInput
+        <Select
           items={[
             { label: 'yes — skip permission prompts', value: true },
             { label: 'no  — prompt as normal', value: false },

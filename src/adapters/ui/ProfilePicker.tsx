@@ -1,8 +1,8 @@
 import React from 'react'
 import { Box, Text } from 'ink'
-import SelectInput from 'ink-select-input'
 import { TIERS } from '../../core/tiers.ts'
 import { resolveProfileRefs } from '../../core/resolve.ts'
+import { Select, tone } from './theme.tsx'
 import type { ResolvedProfile, State } from '../../ports/config-store.ts'
 
 /**
@@ -71,21 +71,21 @@ export function ProfilePicker({ state, onPick, onNew }: ProfilePickerProps) {
 
   return (
     <Box flexDirection="column">
-      <Text>Profiles <Text dimColor>· ★ is the default · enter to open</Text></Text>
+      <Text>Profiles <Text {...tone.muted}>· ★ is the default · enter to open</Text></Text>
       <Box flexDirection="column" marginTop={1}>
         {names.map((name) => (
           <Box key={name}>
             <Box width={18}>
-              <Text dimColor>{name}</Text>
+              <Text {...tone.muted}>{name}</Text>
             </Box>
-            <Text dimColor>
+            <Text {...tone.muted}>
               {summarize(resolvedOrUndefined(state, name), bindingCounts.get(name) ?? 0)}
             </Text>
           </Box>
         ))}
       </Box>
       <Box marginTop={1}>
-        <SelectInput
+        <Select
           items={items}
           onSelect={(item) => (item.value === '__new' ? onNew() : onPick(item.value))}
         />
@@ -148,10 +148,10 @@ export function ProfileActions({ name, state, cwd, onAction }: ProfileActionsPro
   return (
     <Box flexDirection="column">
       <Text>
-        Profile <Text bold color="cyan">{name}</Text>
+        Profile <Text {...tone.heading}>{name}</Text>
       </Text>
       <Box marginTop={1}>
-        <SelectInput items={items} onSelect={(item) => onAction(item.value)} />
+        <Select items={items} onSelect={(item) => onAction(item.value)} />
       </Box>
     </Box>
   )
@@ -172,15 +172,15 @@ export type ConfirmDeleteProps = {
 export function ConfirmDelete({ name, bindings, onConfirm, onCancel }: ConfirmDeleteProps) {
   return (
     <Box flexDirection="column">
-      <Text color="red">Delete profile "{name}"?</Text>
-      <Text dimColor>Its API key is removed from config.json and cannot be recovered.</Text>
+      <Text {...tone.danger}>Delete profile "{name}"?</Text>
+      <Text {...tone.muted}>Its API key is removed from config.json and cannot be recovered.</Text>
       {bindings.length > 0 ? (
-        <Text dimColor>
+        <Text {...tone.muted}>
           {bindings.length} directory binding{bindings.length === 1 ? '' : 's'} will be removed too.
         </Text>
       ) : null}
       <Box marginTop={1}>
-        <SelectInput
+        <Select
           items={[
             { label: 'no — keep it', value: false },
             { label: `yes — delete "${name}"`, value: true },

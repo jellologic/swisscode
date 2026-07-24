@@ -14,6 +14,7 @@ import { handleApi, type ApiDeps } from './api.ts'
 import { handleAsyncApi, type AsyncApiDeps } from './api-async.ts'
 import {
   SECURITY_HEADERS,
+  documentSecurityHeaders,
   TOKEN_HEADER,
   guardApiRequest,
   guardDocumentRequest,
@@ -80,10 +81,19 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   })
 }
 
-function send(res: ServerResponse, status: number, body: unknown, type = 'application/json'): void {
+function send(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  type = 'application/json',
+  // Defaults to the strict constant. The DOCUMENT passes a variant carrying the
+  // hash of its own inline script; every other response keeps `script-src 'self'`
+  // with no hashes at all, because no other response contains a script.
+  headers: Readonly<Record<string, string>> = SECURITY_HEADERS,
+): void {
   const payload = type.startsWith('application/json') ? JSON.stringify(body) : String(body)
   res.writeHead(status, {
-    ...SECURITY_HEADERS,
+    ...headers,
     'content-type': type,
     'content-length': Buffer.byteLength(payload),
   })
@@ -250,7 +260,10 @@ export function startWebServer(options: WebServerOptions): Promise<RunningServer
       indexPath && existsSync(indexPath)
         ? readFileSync(indexPath, 'utf8').replace('__SWISSCODE_TOKEN__', token)
         : fallbackDocument(token)
-    return send(res, 200, html, 'text/html; charset=utf-8')
+    // The document's CSP is derived from the document: the inline theme
+    // resolver is allowed by the hash of its exact bytes, and nothing else
+    // inline can run. See documentSecurityHeaders.
+    return send(res, 200, html, 'text/html; charset=utf-8', documentSecurityHeaders(html))
   }
 
   return new Promise((resolveServer, rejectServer) => {

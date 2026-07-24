@@ -14,6 +14,7 @@ import { toCustomProvider, validateCustomProvider } from '../../core/provider-de
 import { TIERS } from '../../core/tiers.ts'
 import { accountsUsedBy, validateAccount } from '../../core/account.ts'
 import { COMPAT_ENV, CREDENTIAL_ENVS } from '../agents/claude-code/env.ts'
+import { CATALOG_SOURCE, CLAUDE_ENV_CATALOG } from '../agents/claude-code/env-catalog.ts'
 import type {
   AgentProfile,
   ConfigStorePort,
@@ -355,6 +356,14 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       customProviders: loaded.state.providers ?? {},
       reservedProviderIds: providers.all().map((p) => p.id),
     })
+  }
+
+  // Every environment variable Claude Code references, for the browser to
+  // search. Its own route rather than a field on `bootstrap`: it is ~57 kB of
+  // static data that only one screen wants, and paying for it on every cold
+  // start would be a tax on people who never open that screen.
+  if (resource === 'claude-env' && req.method === 'GET') {
+    return json(200, { source: CATALOG_SOURCE, variables: CLAUDE_ENV_CATALOG })
   }
 
   if (resource === 'profiles') {

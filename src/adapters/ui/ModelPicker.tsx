@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { Box, Text, useInput } from 'ink'
 import { filterModels } from '../../core/catalog.ts'
 import { formatContext, formatPrice } from '../../core/format.ts'
+import { tone } from './theme.tsx'
 import type { Tier } from '../../ports/provider.ts'
 import type {
   CatalogCapabilities,
@@ -19,12 +20,16 @@ const LEFT_WIDTH = 40
  * publish tool support" can never be rendered as a confirmed "no".
  */
 function Badge({ state, children }: { state: boolean | null; children: ReactNode }) {
-  // Tri-state. "unknown" must not look like "no" and must not look like "yes".
+  // Tri-state. "unknown" must not look like "no" and must not look like "yes",
+  // so it gets its own ROLE as well as its own glyph: `?` in warn against a `✓`
+  // in ok and a dim `·`. The glyph used to carry that distinction alone, which
+  // meant a catalog publishing nothing looked identical to one publishing a no
+  // to anybody reading at a glance.
   if (state === null || state === undefined) {
-    return <Text dimColor>? {children} </Text>
+    return <Text {...tone.warn}>? {children} </Text>
   }
   return (
-    <Text {...(state ? { color: 'green' as const } : {})} dimColor={!state}>
+    <Text {...(state ? tone.ok : tone.muted)}>
       {state ? '✓' : '·'} {children}{' '}
     </Text>
   )
@@ -37,10 +42,10 @@ function Score({ label, value }: { label: string; value: number | null }) {
   return (
     <Box>
       <Box width={13}>
-        <Text dimColor>{label}</Text>
+        <Text {...tone.muted}>{label}</Text>
       </Box>
-      <Text color="cyan">{'█'.repeat(filled)}</Text>
-      <Text dimColor>{'░'.repeat(20 - filled)}</Text>
+      <Text {...tone.accent}>{'█'.repeat(filled)}</Text>
+      <Text {...tone.muted}>{'░'.repeat(20 - filled)}</Text>
       <Text> {value}</Text>
     </Box>
   )
@@ -60,10 +65,10 @@ function PriceRow({ label, value }: { label: string; value: number }) {
   return (
     <Box>
       <Box width={13}>
-        <Text dimColor>{label}</Text>
+        <Text {...tone.muted}>{label}</Text>
       </Box>
       <Text>{formatPrice(value)}</Text>
-      <Text dimColor> / M tokens</Text>
+      <Text {...tone.muted}> / M tokens</Text>
     </Box>
   )
 }
@@ -76,14 +81,14 @@ type DetailsProps = {
 
 function Details({ model, capabilities }: DetailsProps) {
   if (!model) {
-    return <Text dimColor>No model matches this filter.</Text>
+    return <Text {...tone.muted}>No model matches this filter.</Text>
   }
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan" wrap="truncate-end">
+      <Text {...tone.heading} wrap="truncate-end">
         {model.name}
       </Text>
-      <Text dimColor wrap="truncate-end">
+      <Text {...tone.muted} wrap="truncate-end">
         {model.id}
       </Text>
 
@@ -99,16 +104,16 @@ function Details({ model, capabilities }: DetailsProps) {
             ) : null}
           </>
         ) : (
-          <Text dimColor>pricing not published by this catalog</Text>
+          <Text {...tone.muted}>pricing not published by this catalog</Text>
         )}
         {model.context ? (
           <Box>
             <Box width={13}>
-              <Text dimColor>context</Text>
+              <Text {...tone.muted}>context</Text>
             </Box>
             <Text>{formatContext(model.context)}</Text>
             {model.maxOutput ? (
-              <Text dimColor>{`  (max out ${formatContext(model.maxOutput)})`}</Text>
+              <Text {...tone.muted}>{`  (max out ${formatContext(model.maxOutput)})`}</Text>
             ) : null}
           </Box>
         ) : null}
@@ -119,10 +124,13 @@ function Details({ model, capabilities }: DetailsProps) {
         <Badge state={model.reasoning}>reasoning</Badge>
       </Box>
       {model.tools === false ? (
-        <Text color="red">Claude Code needs tool calling — this model will not work.</Text>
+        <Text {...tone.danger}>Claude Code needs tool calling — this model will not work.</Text>
       ) : null}
+      {/* Warn, not muted: the same reasoning as the `?` badge above. An
+          unpublished capability is a caveat the user has to act on, and dimming
+          it filed it with the decoration. */}
       {model.tools === null ? (
-        <Text dimColor>
+        <Text {...tone.warn}>
           tool support is not published here; Claude Code needs it, so try a short
           prompt before relying on this model.
         </Text>
@@ -130,7 +138,7 @@ function Details({ model, capabilities }: DetailsProps) {
 
       {capabilities.benchmarks && model.benchmarks ? (
         <Box marginTop={1} flexDirection="column">
-          <Text dimColor>artificial analysis</Text>
+          <Text {...tone.muted}>artificial analysis</Text>
           <Score label="intelligence" value={model.benchmarks.intelligence} />
           <Score label="coding" value={model.benchmarks.coding} />
           <Score label="agentic" value={model.benchmarks.agentic} />
@@ -139,7 +147,7 @@ function Details({ model, capabilities }: DetailsProps) {
 
       {model.description ? (
         <Box marginTop={1}>
-          <Text dimColor wrap="wrap">
+          <Text {...tone.muted} wrap="wrap">
             {model.description.slice(0, 260).trim()}
             {model.description.length > 260 ? '…' : ''}
           </Text>
@@ -251,14 +259,14 @@ export function ModelPicker({ tier, current, catalog, onSelect, onCancel }: Mode
   })
 
   if (state.loading) {
-    return <Text dimColor>Loading models from {catalog.label}…</Text>
+    return <Text {...tone.muted}>Loading models from {catalog.label}…</Text>
   }
 
   if (state.models.length === 0) {
     return (
       <Box flexDirection="column">
-        <Text color="red">Could not reach {catalog.label}: {state.error}</Text>
-        <Text dimColor>Press esc to go back and type the model id by hand.</Text>
+        <Text {...tone.danger}>Could not reach {catalog.label}: {state.error}</Text>
+        <Text {...tone.muted}>Press esc to go back and type the model id by hand.</Text>
       </Box>
     )
   }
@@ -281,14 +289,14 @@ export function ModelPicker({ tier, current, catalog, onSelect, onCancel }: Mode
   return (
     <Box flexDirection="column">
       <Box>
-        <Text color="cyan">model for </Text>
-        <Text bold>{tier}</Text>
-        <Text dimColor>  ·  search: </Text>
+        <Text {...tone.muted}>model for </Text>
+        <Text {...tone.heading}>{tier}</Text>
+        <Text {...tone.muted}>  ·  search: </Text>
         <Text>{query}</Text>
-        <Text color="cyan">▌</Text>
+        <Text {...tone.accent}>▌</Text>
       </Box>
       <Box>
-        <Text dimColor>
+        <Text {...tone.muted}>
           {visible.length}/{state.models.length} shown
           {toolsOnly && capabilities.toolSupportKnown ? ' · tools only' : ''}
           {freeOnly && capabilities.pricing ? ' · free only' : ''}
@@ -300,17 +308,13 @@ export function ModelPicker({ tier, current, catalog, onSelect, onCancel }: Mode
       <Box marginTop={1}>
         <Box flexDirection="column" width={LEFT_WIDTH}>
           {window.length === 0 ? (
-            <Text dimColor>no matches</Text>
+            <Text {...tone.muted}>no matches</Text>
           ) : (
             window.map((m) => {
               const active = visible[cursor]?.id === m.id
               return (
                 <Box key={m.id}>
-                  <Text
-                    {...(active ? { color: 'cyan' as const } : {})}
-                    dimColor={!active}
-                    wrap="truncate-end"
-                  >
+                  <Text {...(active ? tone.selected : tone.muted)} wrap="truncate-end">
                     {active ? '› ' : '  '}
                     {m.id === current ? '● ' : ''}
                     {m.id}
@@ -326,7 +330,7 @@ export function ModelPicker({ tier, current, catalog, onSelect, onCancel }: Mode
       </Box>
 
       <Box marginTop={1}>
-        <Text dimColor>{hints.join(' · ')}</Text>
+        <Text {...tone.muted}>{hints.join(' · ')}</Text>
       </Box>
     </Box>
   )
