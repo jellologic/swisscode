@@ -26,6 +26,7 @@ import {
   selectStyle,
 } from '../ui'
 import { EmptyState } from '../Brand'
+import { credentialSource } from '../../../src/core/account'
 
 /**
  * Profiles — the pairing, and the only screen that expresses MULTIPLE accounts.
@@ -229,7 +230,16 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
                         <span className={refResolved}>
                           <Mono>{a.provider}</Mono>
                         </span>
-                        {a.hasKey || a.apiKeyFromEnv ? null : <Badge tone="warn">no key</Badge>}
+                        {/* A session account is authenticated by its login, not a
+                            key, so "no key" is only a warning for an account that
+                            carries no credential of any kind. `credentialSource`
+                            reads the redacted `hasKey`, so the browser and the
+                            server agree on what counts. */}
+                        {credentialSource(a) === 'none' ? (
+                          <Badge tone="warn">no credential</Badge>
+                        ) : credentialSource(a) === 'conflict' ? (
+                          <Badge tone="danger">key + login</Badge>
+                        ) : null}
                       </span>
                     }
                   />

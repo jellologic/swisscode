@@ -104,6 +104,35 @@ export function collapsedTierWarning(
 }
 
 /**
+ * Warn when a profile carries gateway compatibility flags that this agent does
+ * not consume.
+ *
+ * The compat mechanism is Claude-Code-only (capabilities.compatFlags). A flag
+ * toggled on for a Kilo or OpenCode setup changes nothing and, until this
+ * existed, said so NOWHERE — not at edit, not at launch, not in the doctor.
+ * That is the one capability mismatch with no net, and the
+ * capability-gap-never-silently-dropped rule the tier and session warnings
+ * already follow says it should have one. The flags are kept, not stripped, so
+ * the setup still works when it runs Claude Code again.
+ */
+export function compatIgnoredWarning(
+  compat: Record<string, boolean | undefined> | undefined,
+  agentLabel: string,
+): EnvWarning | null {
+  const active = Object.entries(compat ?? {})
+    .filter(([, on]) => on)
+    .map(([id]) => id)
+  if (active.length === 0) return null
+  return {
+    severity: 'medium',
+    code: 'compat-ignored',
+    message:
+      `${agentLabel} does not use gateway compatibility flags; these are set but ignored: ` +
+      `${active.join(', ')}.`,
+  }
+}
+
+/**
  * Warn when a 1M-capable provider is reached without Claude Code's `[1m]`
  * signal, which only Claude Code sends. The model still runs; its window is
  * whatever the endpoint serves by default.

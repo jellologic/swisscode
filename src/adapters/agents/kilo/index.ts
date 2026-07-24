@@ -19,6 +19,7 @@ import {
   ambientUnset,
   anthropicOptions,
   collapsedTierWarning,
+  compatIgnoredWarning,
   sessionUnavailableWarning,
   extendedContextWarning,
   modelRef,
@@ -57,7 +58,7 @@ export const kilo = {
   },
   binary,
   translate(input: TranslateInput): Translation {
-    const { intent, passthrough } = input
+    const { intent, passthrough, profile } = input
     const primary = intent.models.opus
 
     const config: Record<string, unknown> = {
@@ -82,6 +83,8 @@ export const kilo = {
     if (collapse) warnings.push(collapse)
     const ext = extendedContextWarning(intent, primary, 'Kilo')
     if (ext) warnings.push(ext)
+    const compat = compatIgnoredWarning(profile.compat, 'Kilo')
+    if (compat) warnings.push(compat)
 
     return { plan: { set, unset: ambientUnset(intent) }, args: [...passthrough], warnings }
   },
