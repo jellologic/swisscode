@@ -191,11 +191,11 @@ assert.ok(result, 'wizard should have produced a profile')
 // configured is read back out of the file it wrote.
 const written = JSON.parse(readFileSync(join(home, 'swisscode', 'config.json'), 'utf8'))
 const account = written.providerAccounts[(result as Profile).accounts[0]!]
-const agentProfile = written.agentProfiles[(result as Profile).agentProfile]
+const setup = written.setups[(result as Profile).setup]
 assert.equal(account.provider, 'openrouter')
-assert.equal(agentProfile.models.opus, 'anthropic/claude-opus-4.8', 'picked model must persist')
-assert.equal(agentProfile.models.sonnet, 'openrouter/fusion', 'untouched tiers keep defaults')
-assert.equal(agentProfile.models.fable, 'openrouter/fusion', 'the fable tier must not be left unset')
+assert.equal(setup.models.opus, 'anthropic/claude-opus-4.8', 'picked model must persist')
+assert.equal(setup.models.sonnet, 'openrouter/fusion', 'untouched tiers keep defaults')
+assert.equal(setup.models.fable, 'openrouter/fusion', 'the fable tier must not be left unset')
 
 // ModelScope: no prices, no benchmarks
 

@@ -15,7 +15,7 @@ test('an unknown provider exits 2 and launches nothing', () => {
   const r = launch({
     config: makeConfig({
       providerAccounts: { a: { provider: 'nonesuch', apiKey: 'k' } },
-      profiles: { p: { agentProfile: 'main', accounts: ['a'] } },
+      profiles: { p: { setup: 'main', accounts: ['a'] } },
     }),
   })
   assert.equal(r.capture, null, 'a broken config must not hand off to an agent')
@@ -49,7 +49,7 @@ test('a profile naming a missing account launches nothing', () => {
   const r = launch({
     config: makeConfig({
       providerAccounts: { real: { provider: 'openrouter', apiKey: 'k' } },
-      profiles: { p: { agentProfile: 'main', accounts: ['ghost'] } },
+      profiles: { p: { setup: 'main', accounts: ['ghost'] } },
     }),
   })
   assert.equal(r.capture, null)

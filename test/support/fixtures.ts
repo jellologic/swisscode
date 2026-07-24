@@ -32,7 +32,7 @@
 // receives, with the same identity. All they do is carry a type claim across a
 // boundary the compiler cannot see across on its own.
 import type {
-  AgentProfile,
+  Setup,
   Profile,
   ProviderAccount,
   ResolvedProfile,
@@ -42,7 +42,7 @@ import type { ProviderDescriptor } from '../../src/ports/provider.ts'
 import type { ProfileSelection } from '../../src/core/profile.ts'
 
 /**
- * A RESOLVED profile fixture — the flattened account + agent profile that
+ * A RESOLVED profile fixture — the flattened account + setup that
  * everything downstream of resolution consumes.
  *
  * Named `makeProfile` still, and deliberately: it is used by roughly twenty
@@ -51,13 +51,13 @@ import type { ProfileSelection } from '../../src/core/profile.ts'
  * have implied those tests were testing something new. They are not — that is
  * the whole point, and `test/golden.test.ts` passing unchanged is the proof.
  *
- * `accountName`/`agentProfileName` are defaulted rather than required because
+ * `accountName`/`setupName` are defaulted rather than required because
  * no consumer downstream of resolution reads them; they exist so a caller can
  * REPORT which account paid. A fixture that had to invent both every time would
  * add noise to twenty files for a field under test in none of them.
  */
 export const makeProfile = (p: Partial<ResolvedProfile>): ResolvedProfile =>
-  ({ accountName: 'acct', agentProfileName: 'agent', ...p }) as ResolvedProfile
+  ({ accountName: 'acct', setupName: 'agent', ...p }) as ResolvedProfile
 
 /** A stored `Profile` — references only. For tests about the pairing itself. */
 export const makeProfileRefs = (p: Partial<Profile>): Profile => p as Profile
@@ -65,8 +65,8 @@ export const makeProfileRefs = (p: Partial<Profile>): Profile => p as Profile
 /** A stored provider account. For tests about credentials and retargeting. */
 export const makeAccount = (a: Partial<ProviderAccount>): ProviderAccount => a as ProviderAccount
 
-/** A stored agent profile. For tests about models, permissions and compat. */
-export const makeAgentProfile = (a: Partial<AgentProfile>): AgentProfile => a as AgentProfile
+/** A stored setup. For tests about models, permissions and compat. */
+export const makeAgentProfile = (a: Partial<Setup>): Setup => a as Setup
 
 /**
  * A v3 state built from ONE profile's worth of flat v2-shaped fields.
@@ -74,7 +74,7 @@ export const makeAgentProfile = (a: Partial<AgentProfile>): AgentProfile => a as
  * The migration produces exactly this 1:1:1 arrangement, and so does the
  * wizard, so a test that just needs "a state with a working profile named N"
  * can say so without spelling three objects. Tests that are ABOUT the split —
- * multi-account profiles, shared agent profiles — build the maps explicitly.
+ * multi-account profiles, shared setups — build the maps explicitly.
  */
 export const makeSimpleState = (
   name: string,
@@ -91,7 +91,7 @@ export const makeSimpleState = (
         ...(flat.apiKeyFromEnv !== undefined ? { apiKeyFromEnv: flat.apiKeyFromEnv } : {}),
       },
     },
-    agentProfiles: {
+    setups: {
       [name]: {
         ...(flat.agent !== undefined ? { agent: flat.agent } : {}),
         ...(flat.models !== undefined ? { models: flat.models } : {}),
@@ -101,7 +101,7 @@ export const makeSimpleState = (
         ...(flat.contextWindows !== undefined ? { contextWindows: flat.contextWindows } : {}),
       },
     },
-    profiles: { [name]: { agentProfile: name, accounts: [name], strategy: 'single' } },
+    profiles: { [name]: { setup: name, accounts: [name], strategy: 'single' } },
     defaultProfile: name,
     bindings: {},
     settings: {},

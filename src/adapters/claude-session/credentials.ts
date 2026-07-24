@@ -74,11 +74,21 @@ export type CredentialResult =
  *    re-normalised spelling of it. Normalising here and not there would produce
  *    a name that is right in every test and wrong on every machine.
  *
- * The unhashed branch is VERIFIED live: the real item on this machine is
- * `Claude Code-credentials`, matching exactly. The hashed branch follows the
- * rule above but cannot be confirmed without performing a real `/login` into a
- * custom directory, so `config doctor` reports what it finds rather than
- * asserting the name is right.
+ * BOTH BRANCHES ARE NOW VERIFIED LIVE, against Claude Code v2.1.218:
+ *
+ *   unset                          ->  `Claude Code-credentials`
+ *   .../swisscode/accounts/ezra.spero  ->  `Claude Code-credentials-4e2d2019`
+ *
+ * and `sha256` of that path does begin `4e2d2019`, so the derivation above is
+ * the real rule rather than a plausible reading of it.
+ *
+ * The hashed item appeared WITHOUT A `/login` — created the same minute the
+ * agent first ran in that directory, while the default item's creation date was
+ * months old and unchanged. A new config directory is therefore seeded from the
+ * existing login rather than starting empty, which is why
+ * `core/account.ts:identityCollisions` exists. `config doctor` still reports
+ * what it finds rather than asserting a name, since one machine confirming a
+ * rule is not the same as owning it.
  */
 export function keychainService(configDir: string, env: ReadableEnv = process.env): string {
   if (isDefaultConfigDir(configDir, env)) return 'Claude Code-credentials'

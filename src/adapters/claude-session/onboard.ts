@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { describeIdentity, readSessionIdentity } from './identity.ts'
+import { validateProfileName } from '../../core/migrate.ts'
 import { isDefaultConfigDir } from '../agents/claude-code/env.ts'
 import type { ConfigStorePort, ProviderAccount, State } from '../../ports/config-store.ts'
 import type { AgentRegistryPort } from '../../ports/agent.ts'
@@ -29,6 +30,14 @@ export type LoginOptions = {
   dir?: string | undefined
   /** `--provider <id>`, defaulting to anthropic — the only one with this flow today */
   provider?: string | undefined
+  /**
+   * `--no-profile`: record the account and stop, leaving it unlaunchable.
+   *
+   * For the deliberate case — an account you are about to add to an existing
+   * multi-account profile by hand — which is the only reason to want the state
+   * this command used to leave behind by accident.
+   */
+  noProfile?: boolean | undefined
   store: ConfigStorePort
   agents: AgentRegistryPort
   proc: ProcessPort
@@ -74,11 +83,86 @@ export function validateAccountName(name: string): { ok: true } | { ok: false; r
   return { ok: true }
 }
 
+/**
+ * What linking an account to a launchable profile did, or why it did not.
+ *
+ * `profile` is the name you can actually type at `swisscode <name>` afterwards.
+ * `null` with a `reason` is a real outcome, not a failure: the account is still
+ * recorded, and the reason is what the caller prints instead of a lie.
+ */
+export type LinkResult = { state: State; profile: string | null; reason: string | null }
+
+/**
+ * Make a freshly recorded account LAUNCHABLE.
+ *
+ * WHY THIS EXISTS. `config accounts login` used to record an account, print
+ * "Nothing else to do — this account is ready to use", and stop. That sentence
+ * was false: an account is not a thing you can launch, a profile is, and nothing
+ * referenced the new account. The first thing anyone did next was type
+ * `swisscode <account-name>` and watch the name go to the agent as a prompt.
+ *
+ * So this mints the same 1:1:1 shape the wizard already produces — an account, a
+ * setup and a profile all sharing one name — which is also what the v2->v3
+ * migration produces, so there is exactly one arrangement a new install can be
+ * in rather than two.
+ *
+ * It REFUSES rather than improvises in the two cases where guessing would
+ * silently change what a launch bills:
+ *
+ *   - a profile of that name already exists and does not name this account.
+ *     Adding the account to it would change who pays for an existing setup.
+ *   - the name is not a legal profile name — an account may be called `fix`,
+ *     but a PROFILE called `fix` would swallow `swisscode fix the login bug`,
+ *     which is the exact hazard COMMON_WORD_GUARD exists to prevent.
+ *
+ * An existing setup of the same name is REUSED, never overwritten: setups are
+ * shareable by design, and clobbering one would silently re-point every profile
+ * that references it.
+ */
+export function linkAccount(state: State, name: string): LinkResult {
+  const already = Object.entries(state.profiles ?? {}).find(([, p]) =>
+    (p.accounts ?? []).includes(name),
+  )
+  if (already) return { state, profile: already[0], reason: null }
+
+  const existing = state.profiles?.[name]
+  if (existing) {
+    return {
+      state,
+      profile: null,
+      reason:
+        `a profile called "${name}" already exists and does not use this account — adding it ` +
+        'would change who pays for that profile',
+    }
+  }
+  const verdict = validateProfileName(name)
+  if (!verdict.ok) {
+    return { state, profile: null, reason: `"${name}" cannot be a profile name: ${verdict.reason}` }
+  }
+
+  return {
+    state: {
+      ...state,
+      // Reused when it exists — a setup can back several profiles.
+      setups: { ...(state.setups ?? {}), [name]: state.setups?.[name] ?? {} },
+      profiles: {
+        ...(state.profiles ?? {}),
+        [name]: { setup: name, accounts: [name], strategy: 'single' },
+      },
+      // First profile on the machine becomes the default, matching the wizard.
+      defaultProfile: state.defaultProfile ?? name,
+    },
+    profile: name,
+    reason: null,
+  }
+}
+
 /** @returns the process exit code, or does not return at all (execve). */
 export function accountLogin({
   name,
   dir,
   provider = 'anthropic',
+  noProfile = false,
   store,
   agents,
   proc,
@@ -161,15 +245,39 @@ export function accountLogin({
   }
 
   const account: ProviderAccount = { provider, configDir: target }
-  const next: State = {
+  const recorded: State = {
     ...state,
     providerAccounts: { ...(state.providerAccounts ?? {}), [name]: account },
   }
+  // An account on its own cannot be launched — only a profile can — so make one
+  // unless the user asked not to. See `linkAccount`.
+  const link = noProfile
+    ? { state: recorded, profile: null, reason: 'you passed `--no-profile`' }
+    : linkAccount(recorded, name)
   try {
-    store.save(next)
+    store.save(link.state)
   } catch (e) {
     err(`swisscode: could not record the account: ${(e as { message?: string }).message ?? e}`)
     return 2
+  }
+
+  /**
+   * The one sentence that has to be true.
+   *
+   * Printed at every exit below, because the previous version's cheerful
+   * "nothing else to do" was the whole bug: it said an account was ready when
+   * nothing could launch it.
+   */
+  const sayHowToLaunch = (): void => {
+    if (link.profile) {
+      out('')
+      out(`Launch it with:  swisscode ${link.profile}`)
+    } else {
+      out('')
+      out(`This account cannot be launched yet — ${link.reason}.`)
+      out('An account says who pays; a profile is the thing you launch. Make one with')
+      out('  swisscode config <profile-name>')
+    }
   }
 
   const env = proc.env()
@@ -182,8 +290,9 @@ export function accountLogin({
     // are already using would be busywork that risks replacing it.
     out(`Account "${name}" adopted your existing login: ${describeIdentity(already)}.`)
     out(`  ${target}  (Claude Code's default directory)`)
+    sayHowToLaunch()
     out('')
-    out('Nothing else to do — this account is ready to use. Add a second one with')
+    out('Add a second subscription with')
     out(`  swisscode config accounts login <other-name>`)
     return 0
   }
@@ -197,9 +306,10 @@ export function accountLogin({
   } else {
     out(`Account "${name}" recorded, using ${target}.`)
   }
+  sayHowToLaunch()
 
   // Claude Code is the only agent with this flow — the login being adopted IS a
-  // Claude subscription — so this does not consult the agent profile. Kilo and
+  // Claude subscription — so this does not consult the setup. Kilo and
   // OpenCode declare `sessionDir: false` for exactly this reason.
   const agent = agents.byId('claude-code')
   if (!agent) {
@@ -221,6 +331,20 @@ export function accountLogin({
 
   out('')
   out('Starting Claude Code in that directory. Run `/login` inside it, then exit.')
+  // SAY THIS BEFORE IT HAPPENS, because afterwards there is nobody left to say
+  // it — this process execve's away, and the surprise lands inside someone
+  // else's UI. A new directory does NOT come up logged out: Claude Code seeds it
+  // from the login you already have (measured — a fresh directory held a full
+  // identity, and a Keychain item under its hashed service name, within a minute
+  // of first use and with no `/login` performed). Exit without switching and you
+  // have two names for one subscription. `config accounts` and `config doctor`
+  // both catch that afterwards, but not being caught by it is better.
+  if (!isDefault) {
+    out('')
+    out('  NOTE  it will already show a login — a new directory starts out cloned from')
+    out('        the account you are using now. `/login` as the OTHER account, or this')
+    out('        one ends up a duplicate that shares the same quota.')
+  }
   out('')
 
   // Setting the variable to the default path would send the agent to a

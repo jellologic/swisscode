@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import type { Profile } from '../src/ports/config-store.ts'
+import { SUPPORTED_VERSION } from '../src/core/migrate.ts'
 
 /**
  * dist/ui.js is BUILD OUTPUT. Same treatment as src/cli.ts: tsc must not
@@ -71,19 +72,19 @@ await tick()
 
 assert.ok(result, 'wizard should have produced a profile')
 // The wizard returns the stored PROFILE — references only. What it configured
-// lives in the account and the agent profile it wrote alongside it.
-assert.equal(result.agentProfile, 'zai')
+// lives in the account and the setup it wrote alongside it.
+assert.equal(result.setup, 'zai')
 assert.deepEqual(result.accounts, ['zai'])
 
 const path = join(home, 'swisscode', 'config.json')
 const saved = JSON.parse(readFileSync(path, 'utf8'))
-assert.equal(saved.version, 3, 'wizard must write the v3 schema')
+assert.equal(saved.version, SUPPORTED_VERSION, 'wizard must write the CURRENT schema')
 
-// The settings themselves live on the agent profile the wizard minted.
-assert.equal(saved.agentProfiles.zai.skipPermissions, true)
+// The settings themselves live on the setup the wizard minted.
+assert.equal(saved.setups.zai.skipPermissions, true)
 // Four tiers, not three: [1m] is read per variable, so a tier the wizard never
 // writes is a tier that silently runs at the assumed window.
-assert.deepEqual(saved.agentProfiles.zai.models, {
+assert.deepEqual(saved.setups.zai.models, {
   opus: 'glm-5.2',
   sonnet: 'glm-5.2',
   haiku: 'glm-5.2',

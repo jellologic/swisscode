@@ -46,7 +46,7 @@ const profile = makeProfile({
 const loaded = (over: Partial<Omit<LoadResult, 'state'>> & { state?: Partial<State> } = {}): LoadResult =>
   ({
   state: {
-    version: 2,    agentProfiles: {},
+    version: 2,    setups: {},
     profiles: { z: profile },
     defaultProfile: 'z',
     bindings: {},
@@ -64,7 +64,7 @@ const loaded = (over: Partial<Omit<LoadResult, 'state'>> & { state?: Partial<Sta
 const selection = makeSelection({
   name: 'z',
   source: 'default',
-  profile: makeProfileRefs({ agentProfile: 'z', accounts: ['z'] }),
+  profile: makeProfileRefs({ setup: 'z', accounts: ['z'] }),
   overrides: {},
   warnings: [],
   error: null,
@@ -251,7 +251,7 @@ test('a profile shadowed by a subcommand is flagged with the way out', () => {
   const st = loaded()
   st.state.profiles = {
     ...st.state.profiles,
-    doctor: makeProfileRefs({ agentProfile: 'z', accounts: ['z'] }),
+    doctor: makeProfileRefs({ setup: 'z', accounts: ['z'] }),
   }
   const c = byId(run({ loaded: st }), 'shadowed-names')
   assert.equal(c!.status, 'warn')

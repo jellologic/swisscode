@@ -45,8 +45,8 @@ for (const agent of AGENTS) {
     const r = launch({
       config: makeConfig({
         providerAccounts: { a: { provider: 'openrouter', apiKey: 'sk-e2e-not-used-by-version' } },
-        agentProfiles: { m: { agent: agent.id, models: { opus: agent.model } } },
-        profiles: { p: { agentProfile: 'm', accounts: ['a'] } },
+        setups: { m: { agent: agent.id, models: { opus: agent.model } } },
+        profiles: { p: { setup: 'm', accounts: ['a'] } },
       }),
       argv: ['--version'],
       useRealBinaries: true,

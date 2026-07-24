@@ -21,15 +21,15 @@ const STATE = (): State => ({
     or: makeProfile({ provider: 'openrouter', apiKey: 'or-secret' }),
     keyless: makeProfile({ provider: 'openrouter' }),
   },
-  agentProfiles: {
+  setups: {
     z: { models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' }, skipPermissions: true },
     or: {},
     keyless: {},
   },
   profiles: {
-    z: { agentProfile: 'z', accounts: ['z'] },
-    or: { agentProfile: 'or', accounts: ['or'] },
-    keyless: { agentProfile: 'keyless', accounts: ['keyless'] },
+    z: { setup: 'z', accounts: ['z'] },
+    or: { setup: 'or', accounts: ['or'] },
+    keyless: { setup: 'keyless', accounts: ['keyless'] },
   },
   defaultProfile: 'z',
   bindings: { '/work/or-project': 'or' },

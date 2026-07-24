@@ -17,6 +17,9 @@ export const anthropic = {
   baseUrl: null,
   credentialEnv: 'ANTHROPIC_API_KEY',
   credentialOptional: true,
+  // The only provider a Claude subscription can authenticate against, because a
+  // session directory holds a login to api.anthropic.com and nowhere else.
+  sessionCapable: true,
   // No defaults: every tier variable is cleared so Claude Code uses its own.
   defaultModels: {},
   catalogId: null,

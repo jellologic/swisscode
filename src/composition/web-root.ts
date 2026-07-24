@@ -20,6 +20,8 @@ import { fetchNet } from '../adapters/net/fetch-net.ts'
 import { systemClock } from '../adapters/clock/system-clock.ts'
 import { configDir } from '../adapters/store/fs-config-store.ts'
 import { describeIdentity, readSessionIdentity } from '../adapters/claude-session/identity.ts'
+import { identityCollisions } from '../core/account.ts'
+import type { SessionAccountIdentity } from '../core/account.ts'
 import type { LaunchDeps } from './launch-root.ts'
 
 export type RunWebOptions = {
@@ -99,11 +101,22 @@ export async function runWeb({
       identities: () => {
         const { state } = deps.store.load()
         const logins: Record<string, string | null> = {}
+        // Read once, used twice: the description the UI prints, and the raw
+        // fields the collision rule needs. Re-reading for the second would
+        // double the cost of a cold start for nothing.
+        const seen: SessionAccountIdentity[] = []
         for (const [name, account] of Object.entries(state.providerAccounts ?? {})) {
           if (!account.configDir) continue
-          logins[name] = describeIdentity(readSessionIdentity(account.configDir))
+          const identity = readSessionIdentity(account.configDir)
+          logins[name] = describeIdentity(identity)
+          seen.push({
+            name,
+            configDir: account.configDir,
+            ...(identity?.accountUuid ? { accountUuid: identity.accountUuid } : {}),
+            ...(identity?.email ? { email: identity.email } : {}),
+          })
         }
-        return logins
+        return { logins, collisions: identityCollisions(seen) }
       },
       // Lazy for the same reason as the doctor, and one step further: this one
       // can raise a Keychain prompt, so it loads only when someone asks for it.

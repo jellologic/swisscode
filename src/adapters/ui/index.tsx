@@ -12,13 +12,18 @@ import { createCatalogRegistry } from '../catalog/registry.ts'
 import { fetchNet } from '../net/fetch-net.ts'
 import { systemClock } from '../clock/system-clock.ts'
 import { resolveProfileRefs } from '../../core/resolve.ts'
+// The SAME directory `config accounts login` uses, so the two ways of creating a
+// subscription account put it in one place rather than two.
+import { accountsDir } from '../claude-session/onboard.ts'
+import { join } from 'node:path'
+import { mkdirSync } from 'node:fs'
 import { ModelPicker } from './ModelPicker.tsx'
 import { ConfirmDelete, ProfileActions, ProfilePicker } from './ProfilePicker.tsx'
 import { frameBorder, Select, tone } from './theme.tsx'
 import type { ProfileAction } from './ProfilePicker.tsx'
 import type { Tier, TierRecord, ProviderDescriptor, ProviderRegistryPort } from '../../ports/provider.ts'
 import type {
-  AgentProfile,
+  Setup,
   ConfigStorePort,
   Profile,
   ProviderAccount,
@@ -133,6 +138,7 @@ type Step =
   | 'confirmDelete'
   | 'name'
   | 'provider'
+  | 'credentialKind'
   | 'baseUrl'
   | 'apiKey'
   | 'picker'
@@ -170,6 +176,16 @@ export type AppProps = {
   profileName?: string | null | undefined
   /** called exactly once, with the saved profile or null if cancelled */
   onResult: (profile: Profile | null) => void
+  /**
+   * Called when the saved account authenticates with a SESSION rather than a
+   * key, with the directory it will use.
+   *
+   * Separate from `onResult` because it is not part of the result — it is a
+   * message for AFTER Ink has unmounted. The wizard cannot print it itself: Ink
+   * owns the screen until it restores the terminal, and anything written during
+   * a render is either cleared or interleaved with it.
+   */
+  onSessionAccount?: ((configDir: string) => void) | undefined
   store?: ConfigStorePort | null | undefined
   registry?: ProviderRegistryPort | undefined
   catalogs?: CatalogRegistryPort | null | undefined
@@ -183,6 +199,7 @@ export function App({
   initial = undefined,
   profileName = null,
   onResult,
+  onSessionAccount,
   store = null,
   registry = defaultRegistry,
   catalogs = null,
@@ -260,6 +277,15 @@ export function App({
   const [providerId, setProviderId] = useState<string | null>(startProfile?.provider ?? null)
   const [baseUrl, setBaseUrl] = useState(startProfile?.baseUrl ?? '')
   const [apiKey, setApiKey] = useState(startProfile?.apiKey ?? '')
+  /**
+   * The session directory this account will authenticate with, or ''.
+   *
+   * Non-empty means SUBSCRIPTION MODE: no key is stored, and the account points
+   * at a directory the agent logs into itself. Mutually exclusive with `apiKey`
+   * by construction here, because `finish()` writes one or the other and the
+   * config schema refuses both.
+   */
+  const [sessionDir, setSessionDir] = useState(startProfile?.configDir ?? '')
   const [models, setModels] = useState<TierRecord<string>>({
     ...emptyModels(),
     ...(startProfile?.models ?? {}),
@@ -419,7 +445,11 @@ export function App({
         ? { ...emptyModels(), ...stored.models }
         : { ...emptyModels(), ...registry.byId(id)!.defaultModels },
     )
-    if (registry.byId(id)!.askBaseUrl) setStep('baseUrl')
+    // A provider that can hold a subscription login asks HOW before asking for
+    // a key, because for Claude Pro/Max the answer is "no key at all" and the
+    // key screen has no way to say that. Everything else keeps the old path.
+    if (registry.byId(id)!.sessionCapable) setStep('credentialKind')
+    else if (registry.byId(id)!.askBaseUrl) setStep('baseUrl')
     else setStep('apiKey')
   }
 
@@ -442,12 +472,15 @@ export function App({
     // multi-account profiles: rotating between accounts is a thing you set up
     // once, in the web UI or `config accounts`, not something a first-run
     // terminal flow should ask everyone about.
+    // ONE credential or the other, never both — the config schema refuses an
+    // account carrying a key AND a session directory, because "which one paid
+    // for this" must never have a subtle answer. See core/account.ts.
     const account: ProviderAccount = {
       provider: providerId!,
       ...(provider!.askBaseUrl ? { baseUrl: baseUrl.trim() } : {}),
-      apiKey: apiKey.trim(),
+      ...(sessionDir ? { configDir: sessionDir } : { apiKey: apiKey.trim() }),
     }
-    const agentProfile: AgentProfile = {
+    const setup: Setup = {
       models,
       ...(Object.keys(keptWindows).length > 0 ? { contextWindows: keptWindows } : {}),
       skipPermissions,
@@ -456,28 +489,42 @@ export function App({
     // the provider, exactly as before profiles existed.
     const name = editingName ?? profileNameFor(doc, providerId)
     const profile: Profile = {
-      agentProfile: name,
+      setup: name,
       accounts: [name],
       strategy: 'single',
     }
     // The existing agent selection is preserved: `config agent` writes to the
-    // agent profile, and re-running the wizard must not silently reset a
+    // setup, and re-running the wizard must not silently reset a
     // profile back to Claude Code.
-    const existingAgent = doc.agentProfiles?.[name]?.agent
-    if (existingAgent !== undefined) agentProfile.agent = existingAgent
+    const existingAgent = doc.setups?.[name]?.agent
+    if (existingAgent !== undefined) setup.agent = existingAgent
 
     const next: State = {
       ...doc,
       providerAccounts: { ...(doc.providerAccounts ?? {}), [name]: account },
-      agentProfiles: { ...(doc.agentProfiles ?? {}), [name]: agentProfile },
+      setups: { ...(doc.setups ?? {}), [name]: setup },
       profiles: { ...(doc.profiles ?? {}), [name]: profile },
       defaultProfile: doc.defaultProfile ?? name,
+    }
+
+    // 0700 BEFORE the agent gets there, matching `config accounts login`. Left
+    // to Claude Code the directory would be created with default permissions,
+    // and it is about to hold a login — the same reason onboard.ts does this.
+    // Best effort: a failure here is not worth losing a saved configuration
+    // over, and the launch that follows reports its own problems.
+    if (sessionDir) {
+      try {
+        mkdirSync(sessionDir, { recursive: true, mode: 0o700 })
+      } catch {
+        /* the launch will say so if the directory is genuinely unusable */
+      }
     }
 
     // A throw here would escape an Ink input handler with the tty still in raw
     // mode, leaving the terminal unusable. Surface it in-frame instead.
     if (!persist(next)) return
     onResult(profile)
+    if (sessionDir) onSessionAccount?.(sessionDir)
     exit()
   }
 
@@ -598,6 +645,54 @@ export function App({
             initialIndex={index}
             onSelect={(item) => chooseProvider(item.value)}
           />
+        </Box>
+      </Frame>
+    )
+  }
+
+  if (step === 'credentialKind') {
+    // THREE OPTIONS, AND THE FIRST TWO ARE THE POINT. "A subscription kept
+    // separate" and "the login I already use" look identical from outside and
+    // are not: the first is a directory swisscode manages, so you can hold
+    // several logins at once; the second is whatever plain `claude` uses, which
+    // there is exactly one of. Collapsing them is what made multi-account setup
+    // feel impossible — the wizard could only ever express the second, so
+    // subscription users were pushed onto the raw four-noun path in the web UI.
+    const name = editingName || newName || 'account'
+    const items = [
+      { label: 'A Claude subscription, kept separate from your other logins', value: 'session' },
+      { label: 'The Claude login I already use', value: 'ambient' },
+      { label: 'An API key', value: 'key' },
+    ]
+    return (
+      <Frame>
+        <Summary provider={provider} baseUrl={baseUrl} models={models} />
+        <Text>How does this account pay?</Text>
+        <Box marginTop={1}>
+          <Select
+            items={items}
+            onSelect={(item) => {
+              if (item.value === 'session') {
+                // The directory is only NAMED here. Nothing is created and no
+                // credential is touched: the agent makes its own files when it
+                // runs, and swisscode writing into a login directory is the one
+                // thing this design refuses to do.
+                setSessionDir(join(accountsDir(), name))
+                setApiKey('')
+                setStep('models')
+                return
+              }
+              // Both remaining answers are key-shaped; 'ambient' just leaves the
+              // key blank, which this provider permits (credentialOptional).
+              setSessionDir('')
+              setStep('apiKey')
+            }}
+          />
+        </Box>
+        <Box marginTop={1}>
+          <Text {...tone.muted}>
+            a separate subscription gets its own directory, so several can be logged in at once
+          </Text>
         </Box>
       </Frame>
     )
@@ -793,6 +888,7 @@ export async function runUi({
   profileName = null,
 }: RunUiOptions = {}) {
   let result: Profile | null = null
+  let sessionAccountDir: string | null = null
   const app = render(
     <App
       mode={mode}
@@ -802,11 +898,25 @@ export async function runUi({
       onResult={(cfg) => {
         result = cfg
       }}
+      onSessionAccount={(dir) => {
+        sessionAccountDir = dir
+      }}
     />,
     { exitOnCtrlC: false },
   )
   // Waiting for a full unmount matters: Ink has to restore the terminal (raw
   // mode, cursor) before we hand the tty over to Claude Code.
   await app.waitUntilExit()
+  // AFTER the unmount, so Ink has restored the terminal and this survives on
+  // screen. A subscription account has no credential yet — the launch that
+  // follows drops the user into the agent in this directory, which is exactly
+  // where `/login` has to be run, and nothing else would tell them that.
+  if (sessionAccountDir) {
+    console.error('')
+    console.error(`swisscode: this account uses a Claude subscription, stored in`)
+    console.error(`swisscode:   ${sessionAccountDir}`)
+    console.error('swisscode: Claude Code starts there next — run `/login` inside it, then exit.')
+    console.error('')
+  }
   return result
 }

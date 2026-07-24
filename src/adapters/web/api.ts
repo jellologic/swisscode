@@ -13,10 +13,11 @@ import { validateProfileName } from '../../core/migrate.ts'
 import { toCustomProvider, validateCustomProvider } from '../../core/provider-def.ts'
 import { TIERS } from '../../core/tiers.ts'
 import { accountsUsedBy, validateAccount } from '../../core/account.ts'
+import type { IdentityCollision } from '../../core/account.ts'
 import { COMPAT_ENV, CREDENTIAL_ENVS } from '../agents/claude-code/env.ts'
 import { CATALOG_SOURCE, CLAUDE_ENV_CATALOG } from '../agents/claude-code/env-catalog.ts'
 import type {
-  AgentProfile,
+  Setup,
   ConfigStorePort,
   Profile,
   ProviderAccount,
@@ -66,7 +67,16 @@ export type ApiDeps = {
    * Optional, and absent rather than empty when unwired: `{}` would be
    * indistinguishable from "every account is logged out".
    */
-  identities?: () => Record<string, string | null>
+  identities?: () => {
+    logins: Record<string, string | null>
+    /**
+     * Accounts that are really one subscription. Computed where the store is
+     * read, from the SAME `core/account.ts` rule the CLI and the doctor use —
+     * the browser must not re-derive it by comparing the `logins` strings, which
+     * is the private-fourth-copy failure that module was written to end.
+     */
+    collisions: IdentityCollision[]
+  }
 }
 
 /** One agent CLI, as found (or not) on this machine. */
@@ -113,10 +123,10 @@ export function redactState(state: State): unknown {
     providerAccounts: Object.fromEntries(
       Object.entries(state.providerAccounts ?? {}).map(([n, a]) => [n, redactAccount(a)]),
     ),
-    // Agent profiles and profiles hold no credential at all now, so they pass
+    // Setups and profiles hold no credential at all now, so they pass
     // through whole. That is the split paying off: only one of the three shapes
     // is security-sensitive, and it is obvious which.
-    agentProfiles: state.agentProfiles ?? {},
+    setups: state.setups ?? {},
     profiles: state.profiles ?? {},
   }
 }
@@ -220,18 +230,18 @@ export function parseAccount(
   return account
 }
 
-/** An agent profile submitted by the browser. Holds no credential. */
+/** A setup submitted by the browser. Holds no credential. */
 export function parseAgentProfile(
   input: unknown,
-  existing: AgentProfile | undefined,
-): AgentProfile | string {
-  if (!isObjectLike(input)) return 'agent profile must be an object'
-  const agentProfile: AgentProfile = { ...(existing ?? {}) }
+  existing: Setup | undefined,
+): Setup | string {
+  if (!isObjectLike(input)) return 'setup must be an object'
+  const setup: Setup = { ...(existing ?? {}) }
 
-  if (typeof input.label === 'string') agentProfile.label = input.label
-  if (typeof input.agent === 'string') agentProfile.agent = input.agent
+  if (typeof input.label === 'string') setup.label = input.label
+  if (typeof input.agent === 'string') setup.agent = input.agent
   if (typeof input.skipPermissions === 'boolean') {
-    agentProfile.skipPermissions = input.skipPermissions
+    setup.skipPermissions = input.skipPermissions
   }
 
   if (isObjectLike(input.models)) {
@@ -240,7 +250,7 @@ export function parseAgentProfile(
       const v = input.models[tier]
       if (typeof v === 'string') models[tier] = v
     }
-    agentProfile.models = models
+    setup.models = models
   }
 
   if (isObjectLike(input.compat)) {
@@ -248,7 +258,7 @@ export function parseAgentProfile(
     for (const [k, v] of Object.entries(input.compat)) {
       if (typeof v === 'boolean') compat[k] = v
     }
-    agentProfile.compat = compat as NonNullable<AgentProfile['compat']>
+    setup.compat = compat as NonNullable<Setup['compat']>
   }
 
   if (isObjectLike(input.env)) {
@@ -256,7 +266,7 @@ export function parseAgentProfile(
     for (const [k, v] of Object.entries(input.env)) {
       if (typeof v === 'string') env[k] = v
     }
-    agentProfile.env = env
+    setup.env = env
   }
 
   // Measured windows only. A non-integer or non-positive entry is dropped
@@ -267,10 +277,10 @@ export function parseAgentProfile(
     for (const [model, v] of Object.entries(input.contextWindows)) {
       if (typeof v === 'number' && Number.isInteger(v) && v > 0) windows[model] = v
     }
-    agentProfile.contextWindows = windows
+    setup.contextWindows = windows
   }
 
-  return agentProfile
+  return setup
 }
 
 /**
@@ -283,15 +293,15 @@ export function parseAgentProfile(
  */
 export function parseProfile(input: unknown, existing: Profile | undefined): Profile | string {
   if (!isObjectLike(input)) return 'profile must be an object'
-  const agentProfile = str(input.agentProfile) ?? existing?.agentProfile
-  if (!agentProfile) return 'agentProfile is required'
+  const setup = str(input.setup) ?? existing?.setup
+  if (!setup) return 'setup is required'
 
   const accounts = Array.isArray(input.accounts)
     ? input.accounts.filter((a): a is string => typeof a === 'string' && a.length > 0)
     : (existing?.accounts ?? [])
   if (accounts.length === 0) return 'a profile needs at least one provider account'
 
-  const profile: Profile = { ...(existing ?? {}), agentProfile, accounts }
+  const profile: Profile = { ...(existing ?? {}), setup, accounts }
   if (typeof input.label === 'string') profile.label = input.label
   if (input.strategy === 'single' || input.strategy === 'round-robin' || input.strategy === 'usage') {
     profile.strategy = input.strategy
@@ -309,6 +319,10 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
   // subsequent write must quote back.
   if (resource === 'bootstrap' && req.method === 'GET') {
     const loaded = store.load()
+    // ONCE. Each call reads every session account's `.claude.json`, which is a
+    // 200 kB file apiece on a well-used account, and both fields below come from
+    // the same walk.
+    const identities = deps.identities ? deps.identities() : null
     return json(200, {
       state: redactState(loaded.state),
       revision: store.revision ? store.revision() : null,
@@ -322,6 +336,7 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
         baseUrl: p.baseUrl,
         askBaseUrl: Boolean(p.askBaseUrl),
         credentialOptional: Boolean(p.credentialOptional),
+        sessionCapable: Boolean(p.sessionCapable),
         defaultModels: p.defaultModels,
         catalogId: p.catalogId ?? null,
         hints: p.hints ?? {},
@@ -349,7 +364,10 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       // Who each session account is logged in as. Same "never faked" rule as
       // `installedAgents`: null when unwired, never an empty map that would read
       // as "all logged out".
-      logins: deps.identities ? deps.identities() : null,
+      logins: identities ? identities.logins : null,
+      // Absent-vs-empty matters here too: `[]` is a real answer ("checked, all
+      // distinct"), so null has to mean "nobody looked".
+      loginCollisions: identities ? identities.collisions : null,
       // Custom providers are returned SEPARATELY from `providers` even though
       // the registry already merges them: the UI has to know which ones it may
       // edit, and a merged list cannot say.
@@ -383,8 +401,8 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
 
       // References are checked HERE, where the state is in hand. parseProfile
       // validated the shape; this validates that the things it names exist.
-      if (!loaded.state.agentProfiles?.[parsed.agentProfile]) {
-        return fail(400, `no agent profile named "${parsed.agentProfile}"`)
+      if (!loaded.state.setups?.[parsed.setup]) {
+        return fail(400, `no setup named "${parsed.setup}"`)
       }
       const missing = parsed.accounts.filter((a) => !loaded.state.providerAccounts?.[a])
       if (missing.length > 0) {
@@ -466,20 +484,20 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
 
   if (resource === 'agent-profiles') {
     const name = rest[0] ? decodeURIComponent(rest[0]) : null
-    if (!name) return fail(400, 'agent profile name is required')
+    if (!name) return fail(400, 'setup name is required')
 
     if (req.method === 'PUT') {
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
       const loaded = store.load()
       const parsed = parseAgentProfile(
-        isObjectLike(req.body) ? req.body.agentProfile : null,
-        loaded.state.agentProfiles?.[name],
+        isObjectLike(req.body) ? req.body.setup : null,
+        loaded.state.setups?.[name],
       )
       if (typeof parsed === 'string') return fail(400, parsed)
       return commit(store, {
         ...loaded.state,
-        agentProfiles: { ...loaded.state.agentProfiles, [name]: parsed },
+        setups: { ...loaded.state.setups, [name]: parsed },
       })
     }
 
@@ -487,13 +505,13 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
       const loaded = store.load()
-      if (!loaded.state.agentProfiles?.[name]) return fail(404, `no agent profile named "${name}"`)
+      if (!loaded.state.setups?.[name]) return fail(404, `no setup named "${name}"`)
       const affected = Object.entries(loaded.state.profiles ?? {})
-        .filter(([, pr]) => pr.agentProfile === name)
+        .filter(([, pr]) => pr.setup === name)
         .map(([n]) => n)
-      const agentProfiles = { ...loaded.state.agentProfiles }
-      delete agentProfiles[name]
-      return commit(store, { ...loaded.state, agentProfiles }, { affectedProfiles: affected })
+      const setups = { ...loaded.state.setups }
+      delete setups[name]
+      return commit(store, { ...loaded.state, setups }, { affectedProfiles: affected })
     }
   }
 

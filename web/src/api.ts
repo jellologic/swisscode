@@ -31,6 +31,8 @@ export type ProviderInfo = {
   baseUrl: string | null
   askBaseUrl: boolean
   credentialOptional: boolean
+  /** whether an account here may authenticate with a session directory */
+  sessionCapable: boolean
   defaultModels: Record<string, string>
   catalogId: string | null
   hints: { keyHint?: string; modelHint?: string; note?: string }
@@ -77,7 +79,7 @@ export type ProviderAccount = {
 }
 
 /** WHAT RUNS. Holds no credential, so it crosses whole. */
-export type AgentProfile = {
+export type Setup = {
   agent?: string
   label?: string
   models?: Record<string, string>
@@ -92,7 +94,7 @@ export type SelectionStrategy = 'single' | 'round-robin' | 'usage'
 /** THE PAIRING. References plus the rule for choosing among them. */
 export type Profile = {
   label?: string
-  agentProfile: string
+  setup: string
   accounts: string[]
   strategy?: SelectionStrategy
 }
@@ -114,7 +116,7 @@ export type CustomProvider = {
 export type Bootstrap = {
   state: {
     providerAccounts: Record<string, ProviderAccount>
-    agentProfiles: Record<string, AgentProfile>
+    setups: Record<string, Setup>
     profiles: Record<string, Profile>
     defaultProfile: string | null
     bindings: Record<string, unknown>
@@ -139,8 +141,25 @@ export type Bootstrap = {
    * accounts are simply absent from it.
    */
   logins: Record<string, string | null> | null
+  /**
+   * Accounts that are really one subscription.
+   *
+   * COMPUTED ON THE SERVER, by the same `core/account.ts` rule the CLI and the
+   * doctor use. Do not rediscover it here by comparing `logins` strings: two
+   * accounts can share a subscription and still describe differently, and a
+   * fourth private copy of the rule is the exact failure that module exists to
+   * prevent. Null means nobody looked; `[]` means they were compared and differ.
+   */
+  loginCollisions: IdentityCollision[] | null
   customProviders: Record<string, CustomProvider>
   reservedProviderIds: string[]
+}
+
+/** Mirrors `IdentityCollision` in src/core/account.ts. */
+export type IdentityCollision = {
+  names: string[]
+  matchedOn: 'configDir' | 'accountUuid' | 'email'
+  value: string
 }
 
 /** One window of a subscription, as the endpoint publishes it. */
@@ -266,10 +285,10 @@ export const api = {
       { method: 'DELETE', body: JSON.stringify({ revision }) },
     ),
 
-  saveAgentProfile: (name: string, agentProfile: unknown, revision: string | null) =>
+  saveAgentProfile: (name: string, setup: unknown, revision: string | null) =>
     call<{ revision: string }>(`/api/agent-profiles/${encodeURIComponent(name)}`, {
       method: 'PUT',
-      body: JSON.stringify({ revision, agentProfile }),
+      body: JSON.stringify({ revision, setup }),
     }),
 
   deleteAgentProfile: (name: string, revision: string | null) =>

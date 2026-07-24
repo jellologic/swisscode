@@ -28,7 +28,7 @@ import { EmptyState } from '../Brand'
 // The SAME decisions the CLI and the API make, imported rather than restated.
 // core/ is pure — no I/O, no node builtins — so it bundles into the browser as
 // happily as it compiles for the launch path.
-import { accountsUsedBy, credentialSource } from '../../../src/core/account'
+import { COLLISION_REASON, accountsUsedBy, credentialSource } from '../../../src/core/account'
 import { formatWindow } from '../../../src/core/format'
 
 /**
@@ -223,10 +223,11 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
     const isNew = !data.state.providerAccounts?.[editing]
     const provider = data.providers.find((p) => p.id === draft.provider)
     const stored = data.state.providerAccounts?.[editing]
-    // Session mode belongs to the first-party Anthropic endpoint: a provider
-    // with no baseUrl of its own that is not the custom "ask me" one. A gateway
-    // (baseUrl set) or a custom endpoint cannot read a ~/.claude login.
-    const sessionCapable = Boolean(provider && provider.baseUrl === null && !provider.askBaseUrl)
+    // DECLARED by the provider, not inferred from the shape of its descriptor.
+    // This used to read `baseUrl === null && !askBaseUrl`, which is true of
+    // Anthropic by accident rather than by statement — and the wizard needed the
+    // same answer, which would have made it two copies of a guess.
+    const sessionCapable = Boolean(provider?.sessionCapable)
     const mode: 'key' | 'session' =
       draft.configDir && sessionCapable ? 'session' : 'key'
     return (
@@ -258,7 +259,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
               onChange={(e) => {
                 const nextId = e.target.value
                 const next = data.providers.find((p) => p.id === nextId)
-                const nextSessionCapable = Boolean(next && next.baseUrl === null && !next.askBaseUrl)
+                const nextSessionCapable = Boolean(next?.sessionCapable)
                 setDraft((d) => ({
                   ...d,
                   provider: nextId,
@@ -471,6 +472,25 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
           ) : undefined
         }
       >
+        {/*
+          Duplicated subscriptions, named ONCE at the top with the fix, and
+          badged per row below. The list is read one account at a time, so a
+          badge without an explanation is a puzzle and an explanation without a
+          badge is a footnote — the CLI listing pairs them for the same reason.
+        */}
+        {(data.loginCollisions ?? []).map((c) => (
+          <Banner key={c.names.join('+')} tone="warn">
+            <strong>{c.names.join(' and ')}</strong>{' '}
+            {c.matchedOn === 'configDir'
+              ? 'share one session directory'
+              : 'are the same account'}
+            {' — '}
+            {COLLISION_REASON}.{' '}
+            {c.matchedOn === 'configDir'
+              ? 'Give one a directory of its own, then log in there as the other account.'
+              : 'A new session directory starts out cloned from the login you already have, so it stays a copy until you run /login as a different account inside it.'}
+          </Banner>
+        ))}
         {accounts.length === 0 ? (
           <EmptyState>No accounts yet. An account is a provider plus the credential that pays for it.</EmptyState>
         ) : (
@@ -483,6 +503,7 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
               const login = a.configDir ? (data.logins?.[name] ?? null) : null
               const measured = usage?.accounts.find((m) => m.name === name)
               const conflict = credentialSource(a) === 'conflict'
+              const duplicate = (data.loginCollisions ?? []).some((c) => c.names.includes(name))
               return (
                 <DataRow
                   key={name}
@@ -505,6 +526,13 @@ export function Accounts({ data, reload }: { data: Bootstrap; reload: () => Prom
                       <span>{name}</span>
                       {a.label ? <span className={accountLabel}>{a.label}</span> : null}
                       {conflict ? <Badge tone="danger">conflict</Badge> : null}
+                      {/*
+                        `warn`, not `danger`: a duplicate account works
+                        perfectly — every launch through it authenticates. What
+                        it does not do is add capacity, which is why it is worth
+                        saying and why it is not an error.
+                      */}
+                      {duplicate ? <Badge tone="warn">duplicate</Badge> : null}
                     </Inline>
                   }
                   meta={

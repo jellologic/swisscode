@@ -28,8 +28,8 @@ function configFor(providerId: string) {
   if (provider.askBaseUrl) account.baseUrl = 'https://custom.example'
   return makeConfig({
     providerAccounts: { acct: account },
-    agentProfiles: { main: { agent: 'claude-code', models: { opus: 'test-opus' } } },
-    profiles: { p: { agentProfile: 'main', accounts: ['acct'] } },
+    setups: { main: { agent: 'claude-code', models: { opus: 'test-opus' } } },
+    profiles: { p: { setup: 'main', accounts: ['acct'] } },
   })
 }
 
@@ -97,7 +97,7 @@ test('the ambient PATH survives — the child still finds node for the shebang',
 test('a profile pinning all four tiers writes all four into the child', () => {
   const r = launch({
     config: makeConfig({
-      agentProfiles: {
+      setups: {
         main: {
           agent: 'claude-code',
           models: { opus: 'm-opus', sonnet: 'm-sonnet', haiku: 'm-haiku', fable: 'm-fable' },

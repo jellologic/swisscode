@@ -1,8 +1,8 @@
-// Turn a selected profile into the one account + agent profile a launch uses.
+// Turn a selected profile into the one account + setup a launch uses.
 //
 // `core/profile.ts` answers WHICH profile (positional / flag / binding /
 // default). This answers what that profile actually resolves to, which since v3
-// means dereferencing an agent profile and choosing among one or more accounts.
+// means dereferencing a setup and choosing among one or more accounts.
 //
 // Pure, and pure on purpose: strategy selection is the step that decides WHICH
 // ACCOUNT PAYS, so it must be exhaustively testable without a store, a clock or
@@ -68,17 +68,17 @@ export type ResolveOptions = {
   now?: number
 }
 
-/** Flatten an account and an agent profile into the shape a launch consumes. */
+/** Flatten an account and a setup into the shape a launch consumes. */
 function flatten(
   accountName: string,
   account: ProviderAccount,
-  agentProfileName: string,
+  setupName: string,
   state: State,
 ): ResolvedProfile {
-  const agentProfile = state.agentProfiles?.[agentProfileName] ?? {}
+  const setup = state.setups?.[setupName] ?? {}
   const resolved: ResolvedProfile = {
     accountName,
-    agentProfileName,
+    setupName,
     provider: account.provider,
   }
   // Assigned conditionally throughout: `exactOptionalPropertyTypes` makes
@@ -90,15 +90,15 @@ function flatten(
   if (account.apiKeyFromEnv !== undefined) resolved.apiKeyFromEnv = account.apiKeyFromEnv
   if (account.configDir !== undefined) resolved.configDir = account.configDir
 
-  if (agentProfile.agent !== undefined) resolved.agent = agentProfile.agent
-  if (agentProfile.models !== undefined) resolved.models = agentProfile.models
-  if (agentProfile.skipPermissions !== undefined) {
-    resolved.skipPermissions = agentProfile.skipPermissions
+  if (setup.agent !== undefined) resolved.agent = setup.agent
+  if (setup.models !== undefined) resolved.models = setup.models
+  if (setup.skipPermissions !== undefined) {
+    resolved.skipPermissions = setup.skipPermissions
   }
-  if (agentProfile.env !== undefined) resolved.env = agentProfile.env
-  if (agentProfile.compat !== undefined) resolved.compat = agentProfile.compat
-  if (agentProfile.contextWindows !== undefined) {
-    resolved.contextWindows = agentProfile.contextWindows
+  if (setup.env !== undefined) resolved.env = setup.env
+  if (setup.compat !== undefined) resolved.compat = setup.compat
+  if (setup.contextWindows !== undefined) {
+    resolved.contextWindows = setup.contextWindows
   }
   return resolved
 }
@@ -172,7 +172,7 @@ export function selectAccount(
  *
  * Every failure names the fix rather than reporting a shape mismatch: a config
  * that dangles is something a person has to repair, and "profile X references
- * agent profile Y, which does not exist" is the whole diagnosis.
+ * setup Y, which does not exist" is the whole diagnosis.
  */
 export function resolveProfileRefs(
   state: State,
@@ -182,12 +182,12 @@ export function resolveProfileRefs(
   const profile = state.profiles?.[profileName]
   if (!profile) return { ok: false, reason: `profile "${profileName}" does not exist.` }
 
-  const agentProfileName = profile.agentProfile
-  if (!agentProfileName || !state.agentProfiles?.[agentProfileName]) {
+  const setupName = profile.setup
+  if (!setupName || !state.setups?.[setupName]) {
     return {
       ok: false,
       reason:
-        `profile "${profileName}" uses agent profile "${agentProfileName ?? '—'}", which does ` +
+        `profile "${profileName}" uses setup "${setupName ?? '—'}", which does ` +
         'not exist. Run `swisscode config ' + profileName + '` to repair it.',
     }
   }
@@ -235,7 +235,7 @@ export function resolveProfileRefs(
 
   return {
     ok: true,
-    resolved: flatten(picked.name, account, agentProfileName, state),
+    resolved: flatten(picked.name, account, setupName, state),
     warnings,
   }
 }

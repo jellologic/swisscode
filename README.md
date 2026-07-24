@@ -126,14 +126,43 @@ need to pass a reserved token through literally, put it after `--`:
 swisscode -- --cc-profile   # claude receives "--cc-profile"
 ```
 
+## The four things
+
+Four concepts, and only the last one is a thing you launch.
+
+| | What it is | Optional? |
+|---|---|---|
+| **Provider** | An endpoint dialect — base URL, which credential variable, default models, compatibility flags. Eight ship built in | No. Every account names one. *Adding your own* is the optional part |
+| **Account** | **Who pays.** One provider plus one credential: an API key, an env var, or a Claude subscription login | No |
+| **Setup** | **What runs.** Which CLI (`claude-code`, `kilo`, `opencode`), which model per tier, permissions, env | No. Every profile names one |
+| **Profile** | **The pairing.** One setup + one or more accounts + how to choose between them | No — this is what `swisscode <name>` launches |
+
+```
+swisscode work
+  └── profile "work"
+       ├── setup "cc"                        claude-code, opus/sonnet/haiku
+       └── accounts ["personal", "team"]     strategy: usage
+            └── account "personal"  →  provider "anthropic"  →  subscription login
+```
+
+Why split at all: they vary independently. One setup ("Claude Code, yolo, GLM on
+every tier") can be pointed at several accounts, and one account can back several
+setups. A profile naming more than one account is how rotation works.
+
+Two mistakes the tool now catches for you, because both used to fail silently:
+an **account with no profile** cannot be launched (`swisscode <account-name>`
+selects a *profile*, so the name would go to the agent as a prompt), and **two
+accounts that are the same subscription** share one quota while looking like two.
+
 ## Profiles
 
-A profile is a named provider + key + models. Name one after each account,
-client or experiment.
+Name one after each account, client or experiment.
 
 ```sh
 swisscode config work           # create or edit the "work" profile
 swisscode config list           # every profile (keys are never printed)
+swisscode config setups         # what runs, and which profiles share each
+swisscode config accounts       # who pays, and which profiles use each
 swisscode config default work   # used when nothing else applies
 swisscode config rm old         # deletes it, and any bindings to it
 ```
@@ -147,6 +176,21 @@ swisscode work --resume
 If the first word isn't a profile name it's passed straight to `claude`, so
 `swisscode fix the login bug` still works. To be explicit either way, use
 `--cc-profile work` — an unknown name there is an error rather than a prompt.
+
+One exception to that fallthrough: a first word that names an **account** or an
+**setup** is refused rather than sent as a prompt, because it is far
+likelier to be a mis-aimed selection than the start of a sentence.
+
+```
+$ swisscode personal
+swisscode: "personal" is an account, not a profile — accounts say who pays, and
+a profile is the pairing you launch. Known profiles: work. Make one that uses it
+with `swisscode config <name>`, or send this word to the agent as a prompt with
+`swisscode -- personal …`.
+```
+
+It only fires on an exact match against a name in your own config, so ordinary
+prompts are untouched — and `swisscode -- personal …` sends it through verbatim.
 
 Profile names must start with a letter or digit and contain only letters,
 digits, `.`, `_` or `-`. Names that would collide with a subcommand, or with a
@@ -354,15 +398,35 @@ key — it is a **login**, stored by Claude Code in your keychain and pointed at
 An account is one or the other, never both; a config naming a key *and* a
 session directory is refused rather than resolved by precedence.
 
+The terminal wizard covers this too — pick **Anthropic (direct)** in
+`swisscode config <name>` and it asks how the account pays, offering a
+subscription kept separate from your other logins, the login you already use, or
+an API key. Or do it directly:
+
 ```sh
 swisscode config accounts login work          # make a session dir, run /login inside
 swisscode config accounts login personal --dir ~/.claude   # adopt the login you already have
 swisscode config accounts                     # who each account is, no keychain prompt
 ```
 
-`login` creates `~/.config/swisscode/accounts/<name>` at `0700`, then runs the
-agent there so you can complete `/login` once. After that the account is a
-normal thing profiles can reference.
+`login` creates `~/.config/swisscode/accounts/<name>` at `0700`, mints a profile
+of the same name so there is something to launch, then runs the agent there so
+you can complete `/login` once.
+
+The profile matters: an account says *who pays*, and `swisscode <name>` selects
+a **profile**. Without one the account is unreachable — which is why `config
+accounts` and `config doctor` both flag an account no profile uses. Pass
+`--no-profile` if you mean to wire it into an existing multi-account profile
+yourself.
+
+> **A new directory does not start logged out — it starts as a copy of the login
+> you already have.** Claude Code seeds a fresh `CLAUDE_CONFIG_DIR` from your
+> current session, so if you exit without running `/login` as a *different*
+> account, you end up with two names for one subscription: both report their own
+> email and plan, both work, and neither adds any capacity. `config accounts`
+> marks them `DUPLICATE` and `config doctor` fails the `distinct accounts` check,
+> because a `usage` profile would otherwise count that single quota twice and
+> rotate between two halves of the same thing.
 
 > **Naming `~/.claude` means *unsetting* `CLAUDE_CONFIG_DIR`, not setting it to
 > that path.** Claude Code chooses its keychain item on whether the variable is
@@ -384,7 +448,7 @@ into each one to look. It caches them, and a profile with
 `"strategy": "usage"` then launches on whichever account has the most left:
 
 ```json
-{ "agentProfile": "default", "accounts": ["personal", "work"], "strategy": "usage" }
+{ "setup": "default", "accounts": ["personal", "work"], "strategy": "usage" }
 ```
 
 Ranking uses the **tighter of the two windows, never their average**. An account
@@ -569,12 +633,12 @@ holds an API key in plaintext.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "providerAccounts": {
     "openrouter": { "provider": "openrouter", "apiKey": "sk-or-…" },
     "personal":   { "provider": "anthropic", "configDir": "/Users/me/.claude" }
   },
-  "agentProfiles": {
+  "setups": {
     "default": {
       "agent": "claude-code",
       "models": {
@@ -590,7 +654,7 @@ holds an API key in plaintext.
     }
   },
   "profiles": {
-    "work": { "agentProfile": "default", "accounts": ["openrouter"], "strategy": "single" }
+    "work": { "setup": "default", "accounts": ["openrouter"], "strategy": "single" }
   },
   "defaultProfile": "work",
   "bindings": { "/Users/me/clients/acme": "acme" },
@@ -599,12 +663,16 @@ holds an API key in plaintext.
 ```
 
 Three separate things, because they vary independently. A **provider account**
-is who pays — a key, or a subscription login. An **agent profile** is what runs
-— which CLI, which model per tier, which flags. A **profile** pairs them and
-says how to choose when it names more than one account (`single`, `round-robin`,
-or `usage`). One agent profile can be shared by several profiles that bill
-different accounts, which is the arrangement the older flat shape could not
-express.
+is who pays — a key, or a subscription login. A **setup** is what runs — which
+CLI, which model per tier, which flags. A **profile** pairs them and says how to
+choose when it names more than one account (`single`, `round-robin`, or
+`usage`). One setup can be shared by several profiles that bill different
+accounts, which is the arrangement the older flat shape could not express.
+
+> Setups were called `agentProfiles` before v4. Two things one word apart —
+> "agent profile" and "profile" — read backwards to almost everyone, so the one
+> nobody types got the new name. Existing configs migrate on first read, and
+> `config agents` still works as an alias for `config setups`.
 
 `bindings` records absolute paths, which means client names and project layout.
 That's new non-credential information in this file — worth remembering before

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { css, cva } from '../../styled-system/css'
 import { ApiError, api, type Bootstrap, type SelectionStrategy } from '../api'
 import {
@@ -114,10 +114,79 @@ function Ref({
 // than an `Inline` — whose <div> would be invalid markup in that slot.
 const choiceLabelRow = css({ display: 'inline-flex', alignItems: 'baseline', gap: '2' })
 
+/* ------------------------------------------------------- the four concepts */
+
+/**
+ * What the four screens in the sidebar actually are, and how they relate.
+ *
+ * COLLAPSED BY DEFAULT, because it is onboarding rather than working state and
+ * the people who need it need it once. Each screen already carries its own
+ * one-line description ("who pays", "what runs"); what was missing — and what
+ * users got wrong — is the RELATIONSHIP between them, which no single screen is
+ * in a position to state.
+ */
+const conceptRow = css({
+  display: 'grid',
+  gridTemplateColumns: '[6rem 1fr]',
+  columnGap: '4',
+  rowGap: '1',
+  alignItems: 'baseline',
+  '& > *': { minW: '0' },
+})
+const conceptTerm = css({ textStyle: 'code', color: 'content.primary' })
+const conceptDef = css({ textStyle: 'meta', color: 'content.secondary' })
+const conceptTree = css({
+  textStyle: 'code',
+  color: 'content.tertiary',
+  whiteSpace: 'pre',
+  overflowX: 'auto',
+  mt: '3',
+})
+
+const CONCEPTS: { term: string; def: string }[] = [
+  { term: 'provider', def: 'an endpoint dialect — eight ship built in; adding your own is optional' },
+  { term: 'account', def: 'WHO PAYS. One provider plus a key, an env var, or a Claude subscription login' },
+  { term: 'setup', def: 'WHAT RUNS. Which CLI, which model per tier, permissions' },
+  {
+    term: 'profile',
+    def: 'THE PAIRING of a setup with one or more accounts — and the only one of the four you launch',
+  },
+]
+
+const CONCEPT_TREE = `swisscode work
+  └── profile "work"
+       ├── setup "cc"                     claude-code, opus/sonnet/haiku
+       └── accounts ["personal", "team"]  strategy: usage
+            └── account "personal" → provider "anthropic" → subscription login`
+
+function HowTheseFit() {
+  const [open, setOpen] = useState(false)
+  return (
+    <Panel
+      title="How these fit together"
+      action={<Button onClick={() => setOpen((v) => !v)}>{open ? 'Hide' : 'Show'}</Button>}
+    >
+      {open ? (
+        <>
+          <div className={conceptRow}>
+            {CONCEPTS.map((c) => (
+              <React.Fragment key={c.term}>
+                <div className={conceptTerm}>{c.term}</div>
+                <div className={conceptDef}>{c.def}</div>
+              </React.Fragment>
+            ))}
+          </div>
+          <div className={conceptTree}>{CONCEPT_TREE}</div>
+        </>
+      ) : null}
+    </Panel>
+  )
+}
+
 export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Promise<void> }) {
   const names = Object.keys(data.state.profiles ?? {})
   const accountNames = Object.keys(data.state.providerAccounts ?? {})
-  const agentProfileNames = Object.keys(data.state.agentProfiles ?? {})
+  const setupNames = Object.keys(data.state.setups ?? {})
 
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState<Record<string, unknown>>({})
@@ -130,7 +199,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
       name
         ? { ...data.state.profiles[name] }
         : {
-            agentProfile: agentProfileNames[0] ?? '',
+            setup: setupNames[0] ?? '',
             accounts: accountNames[0] ? [accountNames[0]] : [],
             strategy: 'single',
           },
@@ -164,7 +233,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
 
   if (editing !== null) {
     const isNew = !data.state.profiles?.[editing]
-    const canCreate = agentProfileNames.length > 0 && accountNames.length > 0
+    const canCreate = setupNames.length > 0 && accountNames.length > 0
     return (
       <>
         <PageHeader
@@ -174,7 +243,7 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
         {error ? <Banner tone="danger">{error}</Banner> : null}
         {!canCreate ? (
           <Banner tone="warn">
-            A profile references an account and an agent profile, so at least one of each has to
+            A profile references an account and a setup, so at least one of each has to
             exist first.
           </Banner>
         ) : null}
@@ -193,16 +262,16 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
               />
             </Field>
           ) : null}
-          <Field label="Agent profile" hint="What runs. Edit the setup itself under Agent profiles.">
+          <Field label="Setup" hint="What runs. Edit the setup itself under Setups.">
             <select
               className={selectStyle}
-              value={String(draft.agentProfile ?? '')}
-              onChange={(e) => put('agentProfile', e.target.value)}
+              value={String(draft.setup ?? '')}
+              onChange={(e) => put('setup', e.target.value)}
             >
-              {agentProfileNames.map((n) => (
+              {setupNames.map((n) => (
                 <option key={n} value={n}>
                   {n}
-                  {data.state.agentProfiles[n]?.agent ? ` — ${data.state.agentProfiles[n]!.agent}` : ''}
+                  {data.state.setups[n]?.agent ? ` — ${data.state.setups[n]!.agent}` : ''}
                 </option>
               ))}
             </select>
@@ -304,10 +373,11 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
         }
       />
       {error ? <Banner tone="danger">{error}</Banner> : null}
+      <HowTheseFit />
 
       <Panel flush>
         {names.length === 0 ? (
-          <EmptyState>No profiles yet. A profile pairs an agent profile with one or more accounts.</EmptyState>
+          <EmptyState>No profiles yet. A profile pairs a setup with one or more accounts.</EmptyState>
         ) : (
           <DataList>
             {names.map((name) => {
@@ -315,11 +385,11 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
               const isDefault = data.state.defaultProfile === name
               // Report what it RESOLVES to, not what it references — a list of
               // key names would make the reader do the dereference in their head.
-              const agentProfile = data.state.agentProfiles?.[p.agentProfile]
+              const setup = data.state.setups?.[p.setup]
               const attached = p.accounts ?? []
               const first = attached[0]
               const account = first ? data.state.providerAccounts?.[first] : undefined
-              const broken = !agentProfile || attached.length === 0 || !account
+              const broken = !setup || attached.length === 0 || !account
               return (
                 <DataRow
                   key={name}
@@ -334,17 +404,17 @@ export function Profiles({ data, reload }: { data: Bootstrap; reload: () => Prom
                   meta={
                     <Stack gap="1.5">
                       <KeyValueList>
-                        <KeyValue label="Agent profile">
+                        <KeyValue label="Setup">
                           <Ref
-                            name={p.agentProfile || 'none'}
+                            name={p.setup || 'none'}
                             // `agent` is OPTIONAL and blank is the documented
                             // default, so `?? 'claude-code'` is the resolution —
-                            // without it an agent profile that never named one
+                            // without it a setup that never named one
                             // resolved to nothing at all here while the Agent
                             // profiles screen showed the same record resolving
                             // fine.
-                            to={agentProfile ? (agentProfile.agent ?? 'claude-code') : 'missing'}
-                            missing={!agentProfile}
+                            to={setup ? (setup.agent ?? 'claude-code') : 'missing'}
+                            missing={!setup}
                           />
                         </KeyValue>
                         {attached.length === 0 ? (

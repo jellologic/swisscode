@@ -153,11 +153,11 @@ const baseState = (): State =>
     version: 2,    providerAccounts: {
       work: makeProfile({ provider: 'zai', apiKey: 'secret' }),
     },
-    agentProfiles: {
+    setups: {
       work: { models: {} },
     },
     profiles: {
-      work: { agentProfile: 'work', accounts: ['work'] },
+      work: { setup: 'work', accounts: ['work'] },
     },
     defaultProfile: 'work',
     bindings: {},
@@ -431,14 +431,40 @@ test('session logins are reported as unknown rather than faked when unwired', ()
   const without = handleApi({ method: 'GET', path: '/api/bootstrap', body: null }, deps(s))
   assert.equal((without.body as Record<string, unknown>).logins, null)
 
+  assert.equal((without.body as Record<string, unknown>).loginCollisions, null)
+
   const withIdentities = handleApi({ method: 'GET', path: '/api/bootstrap', body: null }, {
     ...deps(s),
-    identities: () => ({ personal: 'a@b.c  ·  Max 20x', spare: null }),
+    identities: () => ({
+      logins: { personal: 'a@b.c  ·  Max 20x', spare: null },
+      collisions: [],
+    }),
   })
   assert.deepEqual((withIdentities.body as Record<string, unknown>).logins, {
     personal: 'a@b.c  ·  Max 20x',
     spare: null,
   })
+  // `[]` is a real answer — "we compared them, they are different" — and must
+  // survive as itself rather than collapsing into the `null` above.
+  assert.deepEqual((withIdentities.body as Record<string, unknown>).loginCollisions, [])
+})
+
+test('duplicate subscriptions reach the browser as data, not as a string to re-parse', () => {
+  // The browser must never rediscover this by comparing the `logins` strings:
+  // two accounts can share one subscription and still describe differently, and
+  // re-deriving the rule in a fourth place is exactly what core/account.ts
+  // exists to prevent.
+  const s = store(baseState())
+  const res = handleApi({ method: 'GET', path: '/api/bootstrap', body: null }, {
+    ...deps(s),
+    identities: () => ({
+      logins: { personal: 'a@b.c  ·  Max 20x', spare: 'a@b.c  ·  Max 20x' },
+      collisions: [{ names: ['personal', 'spare'], matchedOn: 'accountUuid', value: 'uuid-1' }],
+    }),
+  })
+  assert.deepEqual((res.body as Record<string, unknown>).loginCollisions, [
+    { names: ['personal', 'spare'], matchedOn: 'accountUuid', value: 'uuid-1' },
+  ])
 })
 
 test('a custom provider round-trips through the API and becomes launchable', () => {
@@ -532,7 +558,7 @@ test('deleting a provider reports orphaned profiles rather than silently repairi
     {
       method: 'PUT',
       path: '/api/agent-profiles/gw-agent',
-      body: { revision: s.revision!(), agentProfile: {} },
+      body: { revision: s.revision!(), setup: {} },
     },
     deps(s),
   )
@@ -542,7 +568,7 @@ test('deleting a provider reports orphaned profiles rather than silently repairi
       path: '/api/profiles/uses-gw',
       body: {
         revision: s.revision!(),
-        profile: { agentProfile: 'gw-agent', accounts: ['gw-acct'] },
+        profile: { setup: 'gw-agent', accounts: ['gw-acct'] },
       },
     },
     deps(s),

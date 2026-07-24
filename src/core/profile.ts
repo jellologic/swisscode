@@ -119,6 +119,39 @@ export function resolveProfile(
   // tier 1a: the positional.
   if (positionalHit) return hit(positionalHit, 'positional', { consumedPositional: true })
 
+  // A name that IS a config concept, just not the one this selects.
+  //
+  // The fallthrough above is right for `swisscode fix this bug` and wrong for
+  // `swisscode ezra.spero`, and until this existed nothing distinguished them:
+  // the account name became the first word of a prompt, and the launch fired it
+  // at whichever profile happened to be the default. No error, no warning, a
+  // real request billed — the user just watched it happen.
+  //
+  // Narrow on purpose. It fires only when the token EXACTLY matches an account
+  // or agent-profile name, which is a fact about this config rather than a
+  // guess about the string, so an ordinary prompt is untouched unless its first
+  // word is literally the name of something in the config. When it is, refusing
+  // loudly beats guessing: the whole point of tier 1 is that which account pays
+  // is never decided by inference.
+  if (positional) {
+    const kind = has(state?.providerAccounts ?? {}, positional)
+      ? ({ what: 'an account', does: 'accounts say who pays' } as const)
+      : has(state?.setups ?? {}, positional)
+        ? ({ what: 'a setup', does: 'setups say what runs' } as const)
+        : null
+    if (kind) {
+      return {
+        ...none,
+        error:
+          `"${positional}" is ${kind.what}, not a profile — ${kind.does}, and a profile is the ` +
+          `pairing you launch. ` +
+          (names.length > 0 ? `Known profiles: ${names.join(', ')}. ` : '') +
+          `Make one that uses it with \`swisscode config <name>\`, or send this word to the ` +
+          `agent as a prompt with \`swisscode -- ${positional} …\`.`,
+      }
+    }
+  }
+
   if (names.length === 0) return none
 
   // tier 2: the binding.

@@ -136,10 +136,10 @@ import {
 const state = () =>
   makeState({
     providerAccounts: { z: { provider: 'zai' }, or: { provider: 'openrouter' } },
-    agentProfiles: { z: {}, or: {} },
+    setups: { z: {}, or: {} },
     profiles: {
-      z: { agentProfile: 'z', accounts: ['z'] },
-      or: { agentProfile: 'or', accounts: ['or'] },
+      z: { setup: 'z', accounts: ['z'] },
+      or: { setup: 'or', accounts: ['or'] },
     },
     defaultProfile: 'z',
     bindings: { '/work/a': 'or', '/work/a/b/c': 'z', '/gone': 'deleted' },

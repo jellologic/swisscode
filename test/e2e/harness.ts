@@ -203,18 +203,18 @@ export function launch({
 // ── config fixtures ──
 
 type AccountSpec = { provider: string; apiKey?: string; apiKeyFromEnv?: string; configDir?: string; baseUrl?: string }
-type ProfileSpec = { agentProfile: string; accounts: string[]; strategy?: string }
+type ProfileSpec = { setup: string; accounts: string[]; strategy?: string }
 
 /**
  * A v3 config, spelled at the density a test needs.
  *
- * Defaults to one openrouter key account, one claude-code agent profile pinning
+ * Defaults to one openrouter key account, one claude-code setup pinning
  * a model, and one profile pairing them as the default — the smallest config
  * that launches. Any piece can be overridden.
  */
 export function makeConfig(over: {
   providerAccounts?: Record<string, AccountSpec>
-  agentProfiles?: Record<string, { agent?: string; models?: Record<string, string> }>
+  setups?: Record<string, { agent?: string; models?: Record<string, string> }>
   profiles?: Record<string, ProfileSpec>
   defaultProfile?: string | null
   bindings?: Record<string, string>
@@ -224,8 +224,8 @@ export function makeConfig(over: {
   return {
     version: 3,
     providerAccounts: over.providerAccounts ?? { or: { provider: 'openrouter', apiKey: 'sk-e2e-or' } },
-    agentProfiles: over.agentProfiles ?? { main: { agent: 'claude-code', models: { opus: 'openrouter/fusion' } } },
-    profiles: over.profiles ?? { p: { agentProfile: 'main', accounts: ['or'] } },
+    setups: over.setups ?? { main: { agent: 'claude-code', models: { opus: 'openrouter/fusion' } } },
+    profiles: over.profiles ?? { p: { setup: 'main', accounts: ['or'] } },
     defaultProfile: 'defaultProfile' in over ? over.defaultProfile : 'p',
     bindings: over.bindings ?? {},
     settings: over.settings ?? {},

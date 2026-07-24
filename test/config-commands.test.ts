@@ -5,7 +5,7 @@
 // most of what is asserted here is about what they write and what they refuse.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runConfigCommand } from '../src/composition/config-root.ts'
@@ -13,7 +13,7 @@ import { registry } from '../src/adapters/providers/registry.ts'
 import { registry as agents } from '../src/adapters/agents/registry.ts'
 import type { OpenUi } from '../src/composition/config-root.ts'
 import type { State } from '../src/ports/config-store.ts'
-import { makeProfile } from './support/fixtures.ts'
+import { makeAccount, makeProfile } from './support/fixtures.ts'
 
 // Annotated `State` rather than left to inference: the tests below read
 // profiles these commands CREATE — `.fix`, `.old`, `.third` — which a literal
@@ -25,13 +25,13 @@ const STATE = (): State => ({
     z: makeProfile({ provider: 'zai', apiKey: 'zai-secret-value' }),
     or: makeProfile({ provider: 'openrouter', apiKeyFromEnv: 'OPENROUTER_KEY' }),
   },
-  agentProfiles: {
+  setups: {
     z: { models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' }, skipPermissions: true },
     or: {},
   },
   profiles: {
-    z: { agentProfile: 'z', accounts: ['z'] },
-    or: { agentProfile: 'or', accounts: ['or'] },
+    z: { setup: 'z', accounts: ['z'] },
+    or: { setup: 'or', accounts: ['or'] },
   },
   defaultProfile: 'z',
   bindings: {},
@@ -139,8 +139,8 @@ test('an existing profile with an awkward name still opens', async () => {
   // Validation applies at CREATION only; a hand-edited config keeps working.
   const state = STATE()
   state.providerAccounts.fix = { provider: 'zai' }
-  state.agentProfiles.fix = {}
-  state.profiles.fix = { agentProfile: 'fix', accounts: ['fix'] }
+  state.setups.fix = {}
+  state.profiles.fix = { setup: 'fix', accounts: ['fix'] }
   const h = harness({ state })
   assert.equal(await h.run(['fix']), 0)
   assert.equal(h.uiCalls[0]!.profileName, 'fix')
@@ -174,8 +174,8 @@ test('config list flags a profile whose provider this build does not know', asyn
   // The provider id lives on the ACCOUNT now, so an unknown one is an unknown
   // account provider — the profile itself resolves fine and still lists.
   state.providerAccounts.old = { provider: 'volcengine' }
-  state.agentProfiles.old = {}
-  state.profiles.old = { agentProfile: 'old', accounts: ['old'] }
+  state.setups.old = {}
+  state.profiles.old = { setup: 'old', accounts: ['old'] }
   const h = harness({ state })
   await h.run(['list'])
   assert.match(h.text(), /unknown provider/)
@@ -213,8 +213,8 @@ test('deleting the default profile promotes the survivor only when there is one'
 
   const three = STATE()
   three.providerAccounts.third = { provider: 'zai' }
-  three.agentProfiles.third = {}
-  three.profiles.third = { agentProfile: 'third', accounts: ['third'] }
+  three.setups.third = {}
+  three.profiles.third = { setup: 'third', accounts: ['third'] }
   const h2 = harness({ state: three })
   await h2.run(['rm', 'z'])
   // Guessing among several would silently pick an account to bill.
@@ -408,11 +408,11 @@ test('every surface that names a provider sees the custom ones', async () => {
       version: 2,      providerAccounts: {
         rig: makeProfile({ provider: 'vllm' }),
       },
-      agentProfiles: {
+      setups: {
         rig: {},
       },
       profiles: {
-        rig: { agentProfile: 'rig', accounts: ['rig'] },
+        rig: { setup: 'rig', accounts: ['rig'] },
       },
       defaultProfile: 'rig',
       bindings: {},
@@ -445,11 +445,11 @@ test('a profile on a genuinely unknown provider still says so', async () => {
       version: 2,      providerAccounts: {
         ghost: makeProfile({ provider: 'nope' }),
       },
-      agentProfiles: {
+      setups: {
         ghost: {},
       },
       profiles: {
-        ghost: { agentProfile: 'ghost', accounts: ['ghost'] },
+        ghost: { setup: 'ghost', accounts: ['ghost'] },
       },
       defaultProfile: 'ghost',
       bindings: {},
@@ -480,11 +480,63 @@ test('config accounts lists who pays, and the reverse index of who uses them', a
   assert.ok(!text.includes('sk-or-B'), 'an account key reached the terminal')
 })
 
-test('config agents marks a shared agent profile as shared', async () => {
+test('config accounts names two accounts that are secretly one subscription', async (t) => {
+  // REAL DIRECTORIES, because the identity comes off disk. The situation is the
+  // measured one: `config accounts login spare` creates a directory, Claude Code
+  // seeds it from the login already in use, and exiting without `/login` leaves
+  // two names for one quota. Both directories exist and differ; only the
+  // `.claude.json` inside them shows it.
+  const root = mkdtempSync(join(tmpdir(), 'swisscode-dup-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const seed = (name: string, uuid: string, email: string): string => {
+    const dir = join(root, name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, '.claude.json'),
+      JSON.stringify({ oauthAccount: { accountUuid: uuid, emailAddress: email } }),
+    )
+    return dir
+  }
+
+  const state = STATE()
+  // personal and spare are the SAME login in two directories; work is genuinely
+  // separate and must stay unflagged.
+  state.providerAccounts.personal = makeAccount({
+    provider: 'anthropic',
+    configDir: seed('personal', 'u-1', 'me@x.com'),
+  })
+  state.providerAccounts.spare = makeAccount({
+    provider: 'anthropic',
+    configDir: seed('spare', 'u-1', 'me@x.com'),
+  })
+  state.providerAccounts.work = makeAccount({
+    provider: 'anthropic',
+    configDir: seed('work', 'u-2', 'work@x.com'),
+  })
+
+  const h = harness({ state })
+  assert.equal(await h.run(['accounts']), 0)
+  const text = h.text()
+
+  assert.match(text, /DUPLICATE\s+same subscription as spare/)
+  assert.match(text, /DUPLICATE\s+same subscription as personal/)
+  assert.match(text, /personal and spare are the same Anthropic account/)
+  // The fix has to name `/login`, since "delete one" is the wrong advice —
+  // the user wanted two subscriptions and still has one.
+  assert.match(text, /`\/login` as a\n\s+DIFFERENT account/)
+  // A genuinely separate account must NOT be swept in. Firing on real setups is
+  // how a warning gets trained out of existence.
+  assert.ok(
+    !/work.*DUPLICATE/s.test(text.slice(text.indexOf('  work'), text.indexOf('PROBLEM'))),
+    'a distinct account was reported as a duplicate',
+  )
+})
+
+test('config agents marks a shared setup as shared', async () => {
   // Sharing is the capability the split bought; a listing that did not show it
   // would leave the user unable to tell one setup from two identical ones.
   const state = STATE()
-  state.profiles.or!.agentProfile = state.profiles.z!.agentProfile
+  state.profiles.or!.setup = state.profiles.z!.setup
   const h = harness({ state })
   assert.equal(await h.run(['agents']), 0)
   assert.match(h.text(), /used by\s+or, z\s+\(shared\)|used by\s+z, or\s+\(shared\)/)
@@ -494,7 +546,7 @@ test('both list commands cope with an empty config rather than printing nothing'
   const empty = {
     version: 3,
     providerAccounts: {},
-    agentProfiles: {},
+    setups: {},
     profiles: {},
     defaultProfile: null,
     bindings: {},
@@ -506,5 +558,5 @@ test('both list commands cope with an empty config rather than printing nothing'
 
   const b = harness({ state: empty })
   await b.run(['agents'])
-  assert.match(b.text(), /No agent profiles yet/)
+  assert.match(b.text(), /No setups yet/)
 })

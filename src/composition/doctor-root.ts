@@ -41,7 +41,13 @@ import {
   sessionDirLooksInitialised,
 } from '../adapters/claude-session/identity.ts'
 import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
-import { CONFLICT_REASON, credentialSource } from '../core/account.ts'
+import {
+  COLLISION_REASON,
+  CONFLICT_REASON,
+  accountsUsedBy,
+  credentialSource,
+  identityCollisions,
+} from '../core/account.ts'
 import type { MeasureOptions } from '../adapters/usage/measure.ts'
 import type { LaunchDeps } from './launch-root.ts'
 import { createOllamaIntrospect, interpretOllamaContext } from '../adapters/doctor/ollama.ts'
@@ -387,6 +393,86 @@ export async function runDoctor({
             verdict.detail,
             verdict.fix ? { fix: verdict.fix } : {},
           ),
+        )
+      }
+    }
+  }
+
+  // Accounts nothing can launch.
+  //
+  // CONFIG-WIDE, like the duplicate check below. An account no profile
+  // references is not idle, it is unreachable: `swisscode <account-name>` does
+  // not select it (a positional names a PROFILE), so the credential sits there
+  // paying for nothing. `config accounts login` now links one automatically, so
+  // this catches the leftovers — hand-edited configs, `--no-profile`, and every
+  // account created before that fix existed.
+  const orphans = Object.keys(loaded.state.providerAccounts ?? {}).filter(
+    (name) => accountsUsedBy(loaded.state.profiles, name).length === 0,
+  )
+  checks.push(
+    orphans.length === 0
+      ? makeCheck('account-orphan', 'accounts reachable', OK, 'every account is used by a profile')
+      : makeCheck(
+          'account-orphan',
+          'accounts reachable',
+          WARN,
+          `no profile uses ${orphans.join(', ')} — nothing can launch ${
+            orphans.length === 1 ? 'it' : 'them'
+          }`,
+          { fix: `swisscode config ${orphans[0]}` },
+        ),
+  )
+
+  // Accounts that are secretly one subscription.
+  //
+  // CONFIG-WIDE, unlike the session check above, which can only see the profile
+  // being diagnosed. Being the same account as another one is not a property an
+  // account has on its own, so no per-profile check could ever find it.
+  //
+  // Costs one `.claude.json` read per session account — no credential, no
+  // Keychain, no network — so it runs under `--offline` with the static checks.
+  const sessionAccounts = Object.entries(loaded.state.providerAccounts ?? {}).filter(
+    ([, a]) => a.configDir,
+  )
+  if (sessionAccounts.length < 2) {
+    checks.push(
+      makeCheck(
+        'account-duplicate',
+        'distinct accounts',
+        SKIP,
+        'skipped: fewer than two subscription accounts to compare',
+      ),
+    )
+  } else {
+    const collisions = identityCollisions(
+      sessionAccounts.map(([name, a]) => {
+        const identity = a.configDir ? readSessionIdentity(a.configDir) : null
+        return {
+          name,
+          ...(a.configDir ? { configDir: a.configDir } : {}),
+          ...(identity?.accountUuid ? { accountUuid: identity.accountUuid } : {}),
+          ...(identity?.email ? { email: identity.email } : {}),
+        }
+      }),
+    )
+    if (collisions.length === 0) {
+      checks.push(
+        makeCheck(
+          'account-duplicate',
+          'distinct accounts',
+          OK,
+          `${sessionAccounts.length} subscription accounts, all different`,
+        ),
+      )
+    } else {
+      for (const c of collisions) {
+        checks.push(
+          makeCheck('account-duplicate', 'distinct accounts', WARN, `${c.names.join(' and ')} — ${COLLISION_REASON}`, {
+            fix:
+              c.matchedOn === 'configDir'
+                ? `they share the session directory ${c.value} — give one its own`
+                : `\`swisscode config accounts login ${c.names[1] ?? c.names[0]}\`, then \`/login\` as a different account`,
+          }),
         )
       }
     }

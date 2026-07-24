@@ -51,7 +51,7 @@ export function applyOverrides(
   }
 
   if (overrides.env && typeof overrides.env === 'object') {
-    // Merged AFTER the agent profile's env, and '' still means UNSET.
+    // Merged AFTER the setup's env, and '' still means UNSET.
     next.env = { ...(next.env ?? {}), ...overrides.env }
   }
 

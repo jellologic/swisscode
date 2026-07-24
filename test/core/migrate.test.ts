@@ -34,12 +34,12 @@ test('migrates a real 0.1.0 config into a named profile', () => {
   assert.equal(state.defaultProfile, 'zai')
   // v1 now chains through v2 into the three-way split, in one read.
   assert.deepEqual(state.providerAccounts.zai, { provider: 'zai', apiKey: 'zai-secret' })
-  assert.deepEqual(state.agentProfiles.zai, {
+  assert.deepEqual(state.setups.zai, {
     models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2' },
     skipPermissions: true,
   })
   assert.deepEqual(state.profiles.zai, {
-    agentProfile: 'zai',
+    setup: 'zai',
     accounts: ['zai'],
     strategy: 'single',
   })
@@ -50,8 +50,8 @@ test('migration is shape-only: it repairs nothing', () => {
   // The [1m] fix reaches existing users at env-build time. Rewriting stored
   // model strings is `config doctor`'s job, invoked by a human.
   const { state } = migrate(V1_FULL)
-  assert.equal(state.agentProfiles.zai!.models!.opus, 'glm-5.2')
-  assert.equal(state.agentProfiles.zai!.models!.fable, undefined)
+  assert.equal(state.setups.zai!.models!.opus, 'glm-5.2')
+  assert.equal(state.setups.zai!.models!.fable, undefined)
 })
 
 test('migration is lossless: unknown v1 keys ride along on the profile', () => {
@@ -64,7 +64,7 @@ test('migration is lossless: unknown v1 keys ride along on the profile', () => {
   // They ride on the AGENT PROFILE now: the split files a v2 profile's
   // non-credential fields there, and an unrecognized key is by definition not a
   // credential.
-  const migrated = state.agentProfiles.zai as unknown as Record<string, unknown>
+  const migrated = state.setups.zai as unknown as Record<string, unknown>
   assert.deepEqual(migrated.somethingNew, { a: 1 })
   assert.equal(migrated.note, 'hi')
 })
@@ -86,9 +86,9 @@ test('a minimal v1 config still produces a usable profile', () => {
   const { state } = migrate({ provider: 'anthropic' })
   assert.equal(state.defaultProfile, 'anthropic')
   assert.deepEqual(state.providerAccounts.anthropic, { provider: 'anthropic' })
-  assert.deepEqual(state.agentProfiles.anthropic, {})
+  assert.deepEqual(state.setups.anthropic, {})
   assert.deepEqual(state.profiles.anthropic, {
-    agentProfile: 'anthropic',
+    setup: 'anthropic',
     accounts: ['anthropic'],
     strategy: 'single',
   })
@@ -109,12 +109,12 @@ test('a v1 custom-endpoint config keeps its baseUrl and env', () => {
     models: { opus: 'm', sonnet: 'm', haiku: 'm' },
   })
   assert.equal(state.providerAccounts.custom!.baseUrl, 'https://local.example')
-  assert.deepEqual(state.agentProfiles.custom!.env, { API_TIMEOUT_MS: '600000' })
+  assert.deepEqual(state.setups.custom!.env, { API_TIMEOUT_MS: '600000' })
 })
 
 test('models are picked down to the four tiers, values untouched', () => {
   const { state } = migrate({ provider: 'zai', models: { opus: 'a', bogus: 'b' } } as never)
-  assert.deepEqual(state.agentProfiles.zai!.models, { opus: 'a' })
+  assert.deepEqual(state.setups.zai!.models, { opus: 'a' })
 })
 
 test('a v2 config is MIGRATED, and says so', () => {
@@ -133,37 +133,91 @@ test('a v2 config is MIGRATED, and says so', () => {
   assert.equal(r.migratedFrom, 2)
   assert.equal(r.state.version, SUPPORTED_VERSION)
   assert.deepEqual(r.state.providerAccounts.a, { provider: 'zai', apiKey: 'k' })
-  assert.deepEqual(r.state.agentProfiles.a, { models: { opus: 'glm-5.2' } })
+  assert.deepEqual(r.state.setups.a, { models: { opus: 'glm-5.2' } })
   assert.deepEqual(r.state.profiles.a, {
-    agentProfile: 'a',
+    setup: 'a',
     accounts: ['a'],
     strategy: 'single',
   })
 })
 
-test('an already-v3 config is returned unchanged and is not rewritten', () => {
-  // The terminal rung. A launch that merely READS must not touch the disk, and
-  // `migratedFrom: null` is the only thing that keeps it from doing so.
+test('v3 -> v4 renames the map and every reference to it, losing nothing', () => {
+  // PURELY A RENAME, so the test is about what SURVIVES. A step that quietly
+  // dropped a setup, or left a profile pointing at a key that no longer exists,
+  // would migrate a working config into one that cannot resolve an agent.
   const v3 = {
     version: 3,
+    providerAccounts: { a: { provider: 'zai', apiKey: 'k' } },
+    agentProfiles: { a: { models: { opus: 'glm-5.2' }, skipPermissions: true } },
+    profiles: { a: { agentProfile: 'a', accounts: ['a'], strategy: 'single' } },
+    defaultProfile: 'a',
+    bindings: { '/work': 'a' },
+    settings: {},
+  }
+  const r = migrate(v3)
+  assert.equal(r.migratedFrom, 3)
+  assert.equal(r.state.version, SUPPORTED_VERSION)
+  assert.deepEqual(r.state.setups.a, { models: { opus: 'glm-5.2' }, skipPermissions: true })
+  assert.deepEqual(r.state.profiles.a, { setup: 'a', accounts: ['a'], strategy: 'single' })
+  // Everything the rename does not touch is bit-identical.
+  assert.deepEqual(r.state.providerAccounts.a, { provider: 'zai', apiKey: 'k' })
+  assert.deepEqual(r.state.bindings, { '/work': 'a' })
+  assert.equal(r.state.defaultProfile, 'a')
+  // The old names are GONE, not carried alongside — two spellings of one field
+  // is how a later reader picks the stale one.
+  const raw = r.state as unknown as Record<string, unknown>
+  assert.equal(raw.agentProfiles, undefined)
+  assert.equal((r.state.profiles.a as unknown as Record<string, unknown>).agentProfile, undefined)
+})
+
+test('an already-v4 config is returned unchanged and is not rewritten', () => {
+  // The terminal rung. A launch that merely READS must not touch the disk, and
+  // `migratedFrom: null` is the only thing that keeps it from doing so.
+  const v4 = {
+    version: SUPPORTED_VERSION,
     providerAccounts: { a: { provider: 'zai' } },
-    agentProfiles: { a: {} },
-    profiles: { a: { agentProfile: 'a', accounts: ['a'] } },
+    setups: { a: {} },
+    profiles: { a: { setup: 'a', accounts: ['a'] } },
     defaultProfile: 'a',
     bindings: {},
     settings: {},
   }
-  const r = migrate(v3)
+  const r = migrate(v4)
   assert.equal(r.migratedFrom, null)
-  assert.deepEqual(r.state, v3)
+  assert.deepEqual(r.state, v4)
+})
+
+test('every rung reaches v4 in one read, and migrating twice changes nothing', () => {
+  // The ladder is the thing most likely to rot: `fromV2` stamping the CURRENT
+  // version instead of a literal 3 would silently skip the v3->v4 step, which
+  // is exactly the failure `fromV1`'s comment predicted before v4 existed.
+  const v1 = { provider: 'zai', apiKey: 'k', opusModel: 'glm-5.2' }
+  const v2 = {
+    version: 2,
+    profiles: { a: { provider: 'zai', apiKey: 'k' } },
+    defaultProfile: 'a',
+  }
+  for (const [label, raw] of [['v1', v1], ['v2', v2]] as const) {
+    const r = migrate(raw)
+    assert.equal(r.state.version, SUPPORTED_VERSION, `${label} must land on v4`)
+    assert.ok(Object.keys(r.state.setups).length > 0, `${label} must produce a setup`)
+    for (const p of Object.values(r.state.profiles)) {
+      assert.ok(p.setup, `${label} profile must reference its setup by the v4 name`)
+      assert.ok(r.state.setups[p.setup], `${label} reference must resolve`)
+    }
+    // Idempotence, structurally rather than by a flag someone has to set.
+    assert.deepEqual(migrate(r.state).state, r.state, `${label} must be a fixed point`)
+  }
 })
 
 test('a NEWER schema is read best-effort and locked read-only', () => {
   const r = migrate({
     version: 99,
     providerAccounts: { a: { provider: 'zai' } },
-    agentProfiles: { a: {} },
-    profiles: { a: { agentProfile: 'a', accounts: ['a'] } },
+    // A file from the future speaks the future's vocabulary, so the salvage
+    // reads the CURRENT key names rather than the ones v3 happened to use.
+    setups: { a: {} },
+    profiles: { a: { setup: 'a', accounts: ['a'] } },
     defaultProfile: 'a',
     futureThing: true,
   })
@@ -185,7 +239,8 @@ test('normalize resolves a dangling defaultProfile only when unambiguous', () =>
   assert.equal(one.state.defaultProfile, 'solo')
 
   const many = normalize({
-    version: 2,    agentProfiles: {},
+    version: 2,
+    setups: {},
     profiles: { a: makeProfile({ provider: 'zai' }), b: { provider: 'openrouter' } },
     defaultProfile: 'gone',
   })
@@ -196,7 +251,8 @@ test('normalize resolves a dangling defaultProfile only when unambiguous', () =>
 
 test('normalize drops non-absolute binding keys with a warning', () => {
   const { state, warnings } = normalize({
-    version: 2,    agentProfiles: {},
+    version: 2,
+    setups: {},
     profiles: {},
     bindings: { 'relative/path': 'a', '/abs/path': 'b' },
   })

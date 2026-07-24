@@ -32,12 +32,20 @@ import { TIERS } from '../core/tiers.ts'
 import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
 import { withCustomProviders } from '../adapters/providers/composite.ts'
 import { describeIdentity, readSessionIdentity } from '../adapters/claude-session/identity.ts'
+import type { SessionIdentity } from '../adapters/claude-session/identity.ts'
+import type { IdentityCollision } from '../core/account.ts'
 import { accountLogin } from '../adapters/claude-session/onboard.ts'
 import { swapCredential } from '../adapters/claude-session/swap.ts'
 import { measureAccounts, remainingMap } from '../adapters/usage/measure.ts'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { CONFLICT_REASON, accountsUsedBy, credentialSource } from '../core/account.ts'
+import {
+  COLLISION_REASON,
+  CONFLICT_REASON,
+  accountsUsedBy,
+  credentialSource,
+  identityCollisions,
+} from '../core/account.ts'
 import { isNewer } from '../core/version.ts'
 import {
   createFsVersionStore,
@@ -85,10 +93,20 @@ export type RunConfigCommandOptions = {
 const SUBCOMMANDS = Object.freeze([
   'list', 'default', 'agent', 'rm', 'use', 'bind', 'unbind', 'bindings', 'doctor', 'help',
   'accounts',
+  'setups',
+  // v3's name for `setups`. Kept dispatchable so an install that scripted it
+  // does not break on upgrade; undocumented in USAGE, and it says so once when
+  // used. See the v3->v4 note in core/migrate.ts for why the word changed.
   'agents',
 ])
 
 const USAGE = `swisscode config — manage profiles and directory bindings
+
+  provider  an endpoint dialect — 8 ship built in; adding one is optional
+  account   WHO PAYS: a provider plus a key, an env var, or a Claude login
+  setup     WHAT RUNS: which CLI, which model per tier, permissions
+  profile   THE PAIRING of a setup with one or more accounts — and the only
+            one of the four that \`swisscode <name>\` launches
 
   swisscode config                    edit the active profile, or pick one
   swisscode config <name>             create or edit a named profile
@@ -98,14 +116,16 @@ const USAGE = `swisscode config — manage profiles and directory bindings
 
   swisscode config accounts           provider accounts, and which profiles use each
   swisscode config accounts login <name>   adopt a Claude subscription: makes a session
-                 [--dir <path>]             directory and runs the agent so you can /login
+                 [--dir <path>]             directory, a profile you can launch, and runs
+                 [--no-profile]             the agent so you can /login (--no-profile skips
+                                            the profile, leaving it unlaunchable)
   swisscode config accounts usage     how much of each subscription is left, and cache it
   swisscode config upgrade            check npm for a newer swisscode and install it
     [--dry-run]                         (--dry-run only prints the command)
   swisscode config accounts swap      move one account's login into another session
     --into <account-or-dir> <account>   directory — narrower than /login, which hits every
                                         running session at once
-  swisscode config agents             agent profiles, and which profiles use each
+  swisscode config setups             setups, and which profiles use each
 
   swisscode config agent              list agents and which profile uses each
   swisscode config agent <name>       show which coding CLI <name> launches
@@ -199,8 +219,11 @@ export async function runConfigCommand({
       return upgradeCommand({ deps, args: rest, out, err })
     case 'accounts':
       return accountsCommand({ deps, args: rest, out, err })
+    case 'setups':
+      return listSetups({ deps, out })
     case 'agents':
-      return listAgentProfiles({ deps, out })
+      err('swisscode: `config agents` is now `config setups`. The old name still works for now.')
+      return listSetups({ deps, out })
     default:
       break
   }
@@ -294,7 +317,7 @@ function agentCommand({
       return 0
     }
     for (const n of names) {
-      const ap = state.agentProfiles?.[state.profiles[n]?.agentProfile ?? '']
+      const ap = state.setups?.[state.profiles[n]?.setup ?? '']
       out(`  ${n} → ${ap?.agent ?? DEFAULT_AGENT_ID}`)
     }
     return 0
@@ -310,10 +333,10 @@ function agentCommand({
     return 2
   }
 
-  const agentProfileName = profile.agentProfile
-  const agentProfile = state.agentProfiles?.[agentProfileName]
+  const setupName = profile.setup
+  const setup = state.setups?.[setupName]
   if (agentId === undefined) {
-    out(`${profileName} → ${agentProfile?.agent ?? DEFAULT_AGENT_ID}`)
+    out(`${profileName} → ${setup?.agent ?? DEFAULT_AGENT_ID}`)
     return 0
   }
 
@@ -324,31 +347,31 @@ function agentCommand({
     return 2
   }
   if (loaded.readOnly) return refuseWrite(err)
-  if (!agentProfile) {
+  if (!setup) {
     err(
-      `swisscode: profile "${profileName}" uses agent profile "${agentProfileName}", which ` +
+      `swisscode: profile "${profileName}" uses setup "${setupName}", which ` +
         'does not exist. Run `swisscode config ' + profileName + '` to repair it.',
     )
     return 2
   }
   // Written to the AGENT PROFILE, not the profile: since v3 that is where the
-  // coding CLI lives, and an agent profile may back several profiles — which is
+  // coding CLI lives, and a setup may back several profiles — which is
   // the point of the split, and worth the reminder in the confirmation line.
   const next: State = {
     ...state,
-    agentProfiles: {
-      ...state.agentProfiles,
-      [agentProfileName]: { ...agentProfile, agent: agentId },
+    setups: {
+      ...state.setups,
+      [setupName]: { ...setup, agent: agentId },
     },
   }
   deps.store.save(next)
   const alsoUsing = Object.entries(state.profiles ?? {})
-    .filter(([n, pr]) => n !== profileName && pr.agentProfile === agentProfileName)
+    .filter(([n, pr]) => n !== profileName && pr.setup === setupName)
     .map(([n]) => n)
   out(
     `${profileName} now launches ${agentId}.` +
       (alsoUsing.length
-        ? ` (shared agent profile "${agentProfileName}" — also used by ${alsoUsing.join(', ')})`
+        ? ` (shared setup "${setupName}" — also used by ${alsoUsing.join(', ')})`
         : ''),
   )
   return 0
@@ -420,7 +443,7 @@ function listProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
     // Resolution warnings say what was skipped and why; swallowing them here
     // would leave a stale reference invisible until someone read the JSON.
     for (const w of resolution.warnings) out(`    ⚠ ${w}`)
-    out(`    agent      ${r.agentProfileName} → ${r.agent ?? DEFAULT_AGENT_ID}`)
+    out(`    agent      ${r.setupName} → ${r.agent ?? DEFAULT_AGENT_ID}`)
     if (r.baseUrl) out(`    baseUrl    ${r.baseUrl}`)
     // Presence and ORIGIN only. Never a prefix, never a suffix, never a length:
     // a masked key is still a fingerprint, and this output gets pasted into bug
@@ -1172,7 +1195,13 @@ function accountsCommand({
     const i = rest.indexOf(name)
     return i >= 0 ? rest[i + 1] : undefined
   }
-  const positional = rest.filter((a, i) => !a.startsWith('--') && !rest[i - 1]?.startsWith('--'))
+  // ONLY these consume the token after them. The previous version treated every
+  // `--flag` as value-taking, so adding one boolean would have silently eaten
+  // the account name in `login --no-profile personal`.
+  const VALUE_FLAGS = ['--dir', '--provider']
+  const positional = rest.filter(
+    (a, i) => !a.startsWith('--') && !VALUE_FLAGS.includes(rest[i - 1] ?? ''),
+  )
 
   const options = {
     name: positional[0],
@@ -1188,6 +1217,7 @@ function accountsCommand({
     ...options,
     ...(dir !== undefined ? { dir } : {}),
     ...(provider !== undefined ? { provider } : {}),
+    ...(rest.includes('--no-profile') ? { noProfile: true } : {}),
   })
 }
 
@@ -1205,6 +1235,31 @@ function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
     out('No provider accounts yet. Run `swisscode config` to make one.')
     return 0
   }
+
+  // Identities are read UP FRONT rather than inside the loop, because the
+  // duplicate-subscription check below needs every account's identity before the
+  // first one is printed. Still exactly one read apiece — `.claude.json` is a
+  // 200 kB file on a well-used account and this command runs constantly.
+  const identities = new Map<string, SessionIdentity | null>()
+  for (const name of names) {
+    const dir = state.providerAccounts[name]!.configDir
+    if (dir) identities.set(name, readSessionIdentity(dir))
+  }
+  const collisions = identityCollisions(
+    names.map((name) => {
+      const identity = identities.get(name)
+      return {
+        name,
+        ...(state.providerAccounts[name]!.configDir
+          ? { configDir: state.providerAccounts[name]!.configDir }
+          : {}),
+        ...(identity?.accountUuid ? { accountUuid: identity.accountUuid } : {}),
+        ...(identity?.email ? { email: identity.email } : {}),
+      }
+    }),
+  )
+  const collidingWith = (name: string): string[] =>
+    collisions.flatMap((c) => (c.names.includes(name) ? c.names.filter((n) => n !== name) : []))
 
   for (const name of names) {
     // `!` — read off Object.keys of this very object.
@@ -1229,42 +1284,80 @@ function listAccounts({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
       // instead. The email is the thing the user recognises — "which of my
       // three accounts is this?" is the question, and a path does not answer it.
       // Reads `.claude.json` only; no credential, no prompt, no network.
-      // Read ONCE — `.claude.json` is a 200 kB file on a well-used account.
-      const identity = readSessionIdentity(a.configDir)
+      const identity = identities.get(name) ?? null
       out(`    login      ${describeIdentity(identity)}`)
       out(`    session    ${a.configDir}`)
       if (!identity) {
         out(`               run \`swisscode config accounts login ${name}\` and \`/login\` inside`)
+      }
+      // Named on the account itself as well as in the summary below, because
+      // this is read one account at a time and a footnote is easy to scroll past.
+      const twins = collidingWith(name)
+      if (twins.length > 0) {
+        out(`    DUPLICATE  same subscription as ${twins.join(', ')} — see below`)
       }
     } else {
       // Presence and ORIGIN only, exactly as `config list` does: a masked key is
       // still a fingerprint and this output gets pasted into bug reports.
       out(`    key        ${credentialOrigin(a)}`)
     }
-    out(`    used by    ${usedBy.length > 0 ? usedBy.join(', ') : '— nothing'}`)
+    // "used by — nothing" understated it: an account no profile names cannot be
+    // launched at all, which is a broken state rather than an idle one.
+    if (usedBy.length > 0) {
+      out(`    used by    ${usedBy.join(', ')}`)
+    } else {
+      out('    used by    — NOTHING CAN LAUNCH THIS. An account says who pays; a profile is')
+      out(`               what you launch. Make one: \`swisscode config ${name}\``)
+    }
+  }
+
+  // The explanation goes ONCE, at the end, with the fix. Repeating the full
+  // reason under every colliding account would bury the listing it belongs to.
+  for (const c of collisions) {
+    out('')
+    out(`  PROBLEM  ${c.names.join(' and ')} ${WHY_MATCHED[c.matchedOn]} ${c.value}`)
+    out(`           ${COLLISION_REASON}.`)
+    if (c.matchedOn === 'configDir') {
+      out('           Point one at a directory of its own, then `/login` there as the other account.')
+    } else {
+      // `?? c.names[0]` only to satisfy noUncheckedIndexedAccess — a collision
+      // always names at least two accounts.
+      const second = c.names[1] ?? c.names[0]
+      out(`           Run \`swisscode config accounts login ${second}\` and \`/login\` as a`)
+      out('           DIFFERENT account — a new session directory starts out cloned from the')
+      out('           login you already have, so skipping `/login` leaves you with a copy.')
+    }
   }
   return 0
 }
 
+/** How each key reads in a sentence, so the three call sites cannot drift. */
+const WHY_MATCHED: Record<IdentityCollision['matchedOn'], string> = {
+  configDir: 'share one session directory:',
+  accountUuid: 'are the same Anthropic account:',
+  email: 'are both logged in as',
+}
+
 /**
- * `swisscode config agents` — what runs, and who uses it.
+ * `swisscode config setups` — what runs, and who uses it.
  *
  * Named for the concept rather than the CLI: `config agent <profile> <id>`
- * already existed and still edits which coding CLI a profile launches. This
- * lists the agent PROFILES, which is the thing that can now be shared.
+ * already existed and still edits WHICH coding CLI a setup launches, so it
+ * keeps its name. This lists the setups themselves, which is the thing that can
+ * be shared between profiles.
  */
-function listAgentProfiles({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
+function listSetups({ deps, out }: { deps: LaunchDeps; out: Emit }): number {
   const { state } = deps.store.load()
-  const names = Object.keys(state.agentProfiles ?? {}).sort()
+  const names = Object.keys(state.setups ?? {}).sort()
   if (names.length === 0) {
-    out('No agent profiles yet. Run `swisscode config` to make one.')
+    out('No setups yet. Run `swisscode config` to make one.')
     return 0
   }
 
   for (const name of names) {
-    const ap = state.agentProfiles[name]!
+    const ap = state.setups[name]!
     const usedBy = Object.entries(state.profiles ?? {})
-      .filter(([, p]) => p.agentProfile === name)
+      .filter(([, p]) => p.setup === name)
       .map(([n]) => n)
 
     out(`  ${name}${ap.label ? `  (${ap.label})` : ''}`)

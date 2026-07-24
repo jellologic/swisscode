@@ -176,11 +176,11 @@ function deps(over: { state?: State; env?: EnvMap } = {}) {
     providerAccounts: {
       z: { provider: 'zai', apiKey: SECRET },
     },
-    agentProfiles: {
+    setups: {
       z: { models: { opus: 'glm-5.2', sonnet: 'glm-5.2', haiku: 'glm-5.2', fable: 'glm-5.2' } },
     },
     profiles: {
-      z: { agentProfile: 'z', accounts: ['z'] },
+      z: { setup: 'z', accounts: ['z'] },
     },
     defaultProfile: 'z',
     bindings: {},
@@ -220,11 +220,11 @@ test('a provider placeholder is not treated as a secret and is not redacted', as
     providerAccounts: {
       local: makeProfile({ provider: 'ollama' }),
     },
-    agentProfiles: {
+    setups: {
       local: { models: { opus: 'qwen3-coder:30b' } },
     },
     profiles: {
-      local: { agentProfile: 'local', accounts: ['local'] },
+      local: { setup: 'local', accounts: ['local'] },
     },
     defaultProfile: 'local',
     bindings: {},
@@ -295,11 +295,11 @@ test('the total budget stops the run rather than running long', async () => {
     providerAccounts: {
       z: { provider: 'zai', apiKey: SECRET },
     },
-    agentProfiles: {
+    setups: {
       z: { models: { opus: 'a', sonnet: 'b', haiku: 'c', fable: 'd' } },
     },
     profiles: {
-      z: { agentProfile: 'z', accounts: ['z'] },
+      z: { setup: 'z', accounts: ['z'] },
     },
     defaultProfile: 'z',
     bindings: {},
@@ -361,11 +361,11 @@ test('--fix prunes dangling bindings and nothing else', async () => {
     providerAccounts: {
       z: { provider: 'zai', apiKey: SECRET },
     },
-    agentProfiles: {
+    setups: {
       z: { models: { opus: 'glm-5.2' } },
     },
     profiles: {
-      z: { agentProfile: 'z', accounts: ['z'] },
+      z: { setup: 'z', accounts: ['z'] },
     },
     defaultProfile: 'z',
     bindings: { '/definitely/not/a/real/path': 'gone' },
@@ -375,7 +375,7 @@ test('--fix prunes dangling bindings and nothing else', async () => {
   await runDoctor({ deps: d.deps, offline: true, fix: true })
   assert.equal(d.saves.length, 1)
   assert.deepEqual(d.saves[0]!.bindings, {})
-  // The model string the user pinned is untouched — on the agent profile,
+  // The model string the user pinned is untouched — on the setup,
   // which is where models live since v3.
-  assert.deepEqual(d.saves[0]!.agentProfiles.z!.models, { opus: 'glm-5.2' })
+  assert.deepEqual(d.saves[0]!.setups.z!.models, { opus: 'glm-5.2' })
 })
