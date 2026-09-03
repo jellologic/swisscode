@@ -19,13 +19,27 @@ import { execFileSync } from 'node:child_process'
  * which is the same as not having one. Raising it should be a visible line in a
  * diff with a reason attached.
  *
- * LOWERED from 260 when the artifact fell to ~118 kB — stripping comments from
- * the emitted JS, minifying dist/ui.js, and swapping react-dom for preact/compat
- * in the browser bundle. A ceiling with more slack beneath it than artifact
- * above it is not a budget; it is a number. 150 keeps ~27% headroom, which is
- * room for an honest feature and not room for a silent regression.
+ * LOWERED from 260 to 150 when the artifact fell to ~118 kB — stripping comments
+ * from the emitted JS, minifying dist/ui.js, and swapping react-dom for
+ * preact/compat in the browser bundle. A ceiling with more slack beneath it than
+ * artifact above it is not a budget; it is a number.
+ *
+ * RAISED to 175 for `config proxy`, the local gateway (+4.8 kB packed). Two
+ * things are worth recording about that number, because the 150 it replaced had
+ * quietly stopped doing its job:
+ *
+ * The artifact had drifted from ~118 kB to 147.7 kB — 2.3 kB, or 1.5%, under
+ * the ceiling — while this comment still claimed ~27% headroom. A budget that
+ * flush fails on the next honest change, which is exactly the reflexive-raise
+ * failure the paragraph above warns about; it had become that, unnoticed,
+ * because nothing re-reads a number that keeps passing.
+ *
+ * The gateway is the same trade as the web UI: everyone downloads it, most
+ * people never start it. 4.8 kB for failover across providers is a trade worth
+ * making once — and, like the web UI, it is the reason to keep measuring rather
+ * than an excuse to stop.
  */
-const BUDGET_KB = 150
+const BUDGET_KB = 175
 
 // `--ignore-scripts` because `prepare` runs the whole build, and this script is
 // meant to MEASURE the artifact, not rebuild it — in CI the build has already

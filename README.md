@@ -10,7 +10,7 @@
   <a href="https://github.com/jellologic/swisscode/actions/workflows/ci.yml"><img src="https://github.com/jellologic/swisscode/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/node/v/swisscode?logo=node.js&logoColor=white&color=5fa04e" alt="node current">
   <img src="https://img.shields.io/npm/l/swisscode?color=3da639" alt="MIT license">
-  <img src="https://img.shields.io/badge/no%20proxy-no%20daemon-8957e5" alt="no proxy, no daemon">
+  <img src="https://img.shields.io/badge/launch-nothing%20left%20running-8957e5" alt="a launch leaves nothing running">
   <a href="AGENTS.md"><img src="https://img.shields.io/badge/agent--written%20PRs-welcome-2f81f7" alt="agent-written PRs welcome"></a>
 </p>
 
@@ -25,10 +25,16 @@ exactly like `claude`, only pointed at [OpenRouter](https://openrouter.ai),
 Anthropic-compatible endpoint.
 
 Unlike a router/proxy or a desktop GUI, swisscode is a **launcher**: it sets the
-right environment and `exec`s the real CLI, so there is **no proxy, no daemon, no
-background process** — and it fixes third-party correctness bugs (like the
+right environment and `exec`s the real CLI, so **a launch leaves nothing
+running** — no proxy, no daemon, no background process between you and your
+agent. It also fixes third-party correctness bugs (like the
 [silent 200K → 1M context downgrade](#extended-context-1m)) that a log-reader or
 proxy structurally cannot.
+
+There is one thing you can start on purpose:
+[`swisscode config proxy`](#gateway) runs a local gateway that fails over
+between profiles when a provider is overloaded. It is opt-in, runs in the
+foreground, and is not on the launch path.
 
 - **Any provider** — OpenRouter, z.ai/GLM, Kimi, DeepSeek, Qwen, ModelScope, SiliconFlow, or a custom Anthropic-compatible endpoint.
 - **Local models, no key** — [Ollama](#ollama) speaks the Anthropic Messages API natively, so `swisscode` points Claude Code at `localhost` with no proxy and nothing to sign up for.
@@ -36,7 +42,7 @@ proxy structurally cannot.
 - **Named profiles &amp; per-directory bindings** — the right backend per repo, automatically.
 - **Correctness fixes** — real 1M context (`[1m]`), catalog-driven auto-compaction, gateway compatibility flags.
 - **A preflight `doctor`** — binary, endpoint, credential, models, real tool-calling probe, and the context window your local server actually loaded.
-- **No proxy, no daemon, no GUI** — a single binary that `exec`s the real CLI, so nothing sits between you and your agent.
+- **A launch leaves nothing running** — a single binary that `exec`s the real CLI, so nothing sits between you and your agent. The optional [gateway](#gateway) is the one process you start deliberately.
 
 It replaces shell aliases like this:
 
@@ -537,6 +543,55 @@ swisscode ships no preset for. They are validated on save with the same rules th
 shipped presets are tested against: no `/v1` suffix, no hand-typed `[1m]`, real
 compatibility flags. Shipped presets stay read-only, and a custom provider cannot
 shadow one.
+
+## Gateway
+
+`swisscode config proxy` runs a local gateway that sits in front of several
+profiles and fails over between them. It exists for one failure a launcher
+structurally cannot fix: a provider that is fine when you start and overloaded
+twenty minutes later.
+
+```sh
+swisscode config proxy --profile work --fallback glm
+swisscode config proxy --profile work --fallback glm,local --port 8787
+
+# then point any agent at it
+swisscode --cc-base-url http://127.0.0.1:8787
+```
+
+It has **no configuration of its own**. Every route is derived from the profiles
+you already keep, through the same resolution a launch uses, so the gateway and
+the launcher can never disagree about what "my work profile" means.
+
+When the primary returns `429` or `529` it retries — honouring `retry-after` —
+and then moves to the next profile. Failover **remaps the model by tier**: a
+request for your `opus`-tier model reaches the fallback's `opus`-tier model, so
+failing over to z.ai asks for `glm-5.2` rather than forwarding `claude-opus-5`
+to a host that has never heard of it.
+
+A few properties worth stating plainly:
+
+- **Requests are forwarded byte for byte.** Anthropic signs `thinking` blocks
+  against the exact bytes it received, so a proxy that re-encodes a body
+  invalidates them. This one only re-serializes when it actually changes the
+  model, on failover.
+- **A credential never crosses routes.** Each route carries its own account's
+  key, and a profile authenticated by a Claude *login* rather than a key
+  forwards your own credential untouched instead of substituting one.
+- **`/v1/messages/count_tokens` is answered locally.** Claude Code calls it to
+  decide when to auto-compact, and Anthropic rejects it outright for
+  subscription tokens, so a gateway that forwards or 404s it breaks compaction
+  silently. The count is an estimate and is documented as one.
+- **Foreground only.** Ctrl-C ends it. There is no daemon and no PID file — the
+  port bind is the mutex, exactly as it is for the web UI. It binds `127.0.0.1`
+  only.
+
+`/health` lists the routes and `/usage` reports per-profile token totals; both
+omit credentials. Totals are also printed on exit.
+
+This is the one part of swisscode that keeps running. It is opt-in, it is not on
+the launch path, and a plain `swisscode` launch is unaffected by whether it is
+running.
 
 ## Agents
 

@@ -93,6 +93,7 @@ export type RunConfigCommandOptions = {
 const SUBCOMMANDS = Object.freeze([
   'list', 'default', 'agent', 'rm', 'use', 'bind', 'unbind', 'bindings', 'doctor', 'help',
   'accounts',
+  'proxy',
   'setups',
   // v3's name for `setups`. Kept dispatchable so an install that scripted it
   // does not break on upgrade; undocumented in USAGE, and it says so once when
@@ -139,6 +140,11 @@ const USAGE = `swisscode config — manage profiles and directory bindings
 
   swisscode config web [--port <n>]   configure swisscode from a browser
                  [--no-open]
+
+  swisscode config proxy              run a local gateway that fails over between
+    [--profile <name>]                 profiles when a provider is overloaded, then
+    [--fallback <a,b>]                 point an agent at it with
+    [--port <n>]                       --cc-base-url http://127.0.0.1:8787
 
   swisscode config doctor [--json]    check binary, endpoint, credential, models,
                                        tool calling, env conflicts, permissions
@@ -215,6 +221,8 @@ export async function runConfigCommand({
       return doctorCommand({ deps, args: rest, out, err })
     case 'web':
       return webCommand({ deps, args: rest, out, err })
+    case 'proxy':
+      return proxyCommand({ deps, args: rest, out, err })
     case 'upgrade':
       return upgradeCommand({ deps, args: rest, out, err })
     case 'accounts':
@@ -861,6 +869,100 @@ async function webCommand({
     return 0
   } catch (e) {
     err(`swisscode: ${(e as { message?: string }).message ?? 'could not start the web UI'}`)
+    return 2
+  }
+}
+
+/**
+ * `swisscode config proxy` — a local gateway in front of several profiles.
+ *
+ * The launcher answers "which provider should this session use?" once, at
+ * launch. This answers it per request, which is a different question and the
+ * reason it is a separate process rather than part of a launch: when a
+ * provider returns 529 mid-session, only something still running can react.
+ *
+ * Foreground by design, like `config web`. The promise settles when the server
+ * closes, so the command holds the terminal and Ctrl-C ends it — there is no
+ * daemon to leave behind and no PID file to go stale.
+ */
+async function proxyCommand({
+  deps,
+  args,
+  out,
+  err,
+}: {
+  deps: LaunchDeps
+  args: string[]
+  out: Emit
+  err: Emit
+}): Promise<number> {
+  const portFlag = args.indexOf('--port')
+  let port: number | undefined
+  if (portFlag !== -1) {
+    const raw = args[portFlag + 1]
+    const parsed = Number(raw)
+    if (!raw || !Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+      err(`swisscode: --port needs a number between 0 and 65535; got "${raw ?? ''}".`)
+      return 2
+    }
+    port = parsed
+  }
+
+  const profiles: string[] = []
+  const profileFlag = args.indexOf('--profile')
+  if (profileFlag !== -1) {
+    const name = args[profileFlag + 1]
+    if (!name || name.startsWith('-')) {
+      err('swisscode: --profile needs a profile name.')
+      return 2
+    }
+    profiles.push(name)
+  }
+  const fallbackFlag = args.indexOf('--fallback')
+  if (fallbackFlag !== -1) {
+    const raw = args[fallbackFlag + 1]
+    if (!raw || raw.startsWith('-')) {
+      err('swisscode: --fallback needs one or more comma-separated profile names.')
+      return 2
+    }
+    for (const name of raw.split(',').map((n) => n.trim()).filter(Boolean)) profiles.push(name)
+  }
+
+  const { runProxy, describeRoutes } = await import('./gateway-root.ts')
+  try {
+    const started = await runProxy({ deps, profiles, ...(port === undefined ? {} : { port }), out })
+    if (!started.ok) {
+      err(`swisscode: ${started.reason}`)
+      return 2
+    }
+
+    out(`swisscode: gateway on ${started.server.url}`)
+    for (const line of describeRoutes(started.routes)) out(line)
+    out('')
+    out(`  point an agent at it:  swisscode --cc-base-url ${started.server.url}`)
+    out('')
+
+    await new Promise<void>((resolve) => {
+      const stop = () => {
+        void started.server.close().then(resolve)
+      }
+      process.once('SIGINT', stop)
+      process.once('SIGTERM', stop)
+    })
+
+    // Printed on the way out rather than per request: a running gateway should
+    // not narrate, and the totals are only interesting once.
+    const totals = [...started.server.usage.entries()]
+    if (totals.length > 0) {
+      out('')
+      for (const [profile, u] of totals) {
+        out(`  ${profile.padEnd(16)} ${String(u.requests).padStart(4)} req   in ${u.inputTokens.toLocaleString()}   out ${u.outputTokens.toLocaleString()}`)
+      }
+    }
+    return 0
+  } catch (e) {
+    const message = (e as { message?: string }).message ?? 'could not start the gateway'
+    err(`swisscode: ${/EADDRINUSE/.test(message) ? `port ${port ?? 8787} is already in use — another gateway may be running.` : message}`)
     return 2
   }
 }

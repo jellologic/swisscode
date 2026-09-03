@@ -22,10 +22,18 @@ argv ─┬─> parse ──> select profile ──> apply overrides ──> bui
                                                           (process replaced)
 ```
 
-There is no proxy, no daemon, no background process, and after `execve` no
-swisscode. That single fact drives most of the design: anything that would make
-the launch slower, heavier or less auditable is pushed off the launch path or
-out of the project.
+A launch involves no proxy, no daemon, no background process, and after `execve`
+no swisscode. That single fact drives most of the design: anything that would
+make the launch slower, heavier or less auditable is pushed off the launch path
+or out of the project.
+
+Note the scope of that claim. It is about the **launch path**, which is the part
+`test/architecture.test.ts` actually enforces — a closure rooted at `src/cli.ts`
+that may not import `node:http` or call `fetch`, and that is capped at 42
+modules. `swisscode config proxy` starts a long-running local gateway, and is
+legal for exactly the reason the web UI is: it is reached only through a dynamic
+`import()`, so it never joins that closure. A launch still leaves nothing
+running; a gateway is something you start on purpose and stop with Ctrl-C.
 
 The tool's job is small; its **failure modes are expensive**. Sending a z.ai
 token to OpenRouter, silently billing an Anthropic account because a stale
@@ -114,6 +122,12 @@ that an adapter meets it. Here the check is real in three places:
   caught. Gated on the provider id rather than generalised into an "introspect a
   provider" port method: one example is not enough to know that abstraction's
   shape, and the second caller is what should define it.
+- **`gateway/*`** — `swisscode config proxy`. `server` is the only module that
+  touches a socket; `table` derives routes from profiles, `dispatch` holds the
+  retry and failover policy, `tokens` estimates a count locally. The split is
+  the same one the web feature makes, for the same reason: a policy you can test
+  without a network is a policy that gets tested. Reached only through a dynamic
+  import, so it never joins the launch closure.
 - **`claude-session/*`** — Claude subscription logins, which belong to the agent
   rather than to us. Split three ways on purpose: `identity` reads *who* an
   account is (a file read, no credential, no prompt, so listing is free),

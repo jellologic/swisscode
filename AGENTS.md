@@ -16,7 +16,12 @@ about it. Read what your agent produced before you submit it.
 `swisscode` is a **launcher**. It resolves a profile (provider + credential +
 per-tier models + flags), builds a child environment, and `execve`s the real
 coding CLI — `claude`, `kilo`, or `opencode` — replacing its own process image.
-No proxy, no daemon, nothing left running.
+A launch leaves nothing running: no proxy, no daemon, no background process.
+
+The one exception is opt-in and off the launch path — `swisscode config proxy`
+runs a local gateway that fails over between profiles when a provider returns
+529. It is foreground-only, reached solely through a dynamic import, and
+invariant 1 below still holds: the launch path itself never touches a socket.
 
 TypeScript, published as compiled JavaScript. Node >= 22. Four runtime
 dependencies, all reachable only from the Ink wizard.
