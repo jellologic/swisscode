@@ -116,13 +116,28 @@ export type LaunchOptions = {
  */
 export function launch({
   config,
-  argv = [],
+  argv,
   cwd,
   env = {},
   overrideBins = {},
   useRealBinaries = false,
 }: LaunchOptions): LaunchResult {
   ensureBuilt()
+
+  // `argv` used to default to [], because a bare `swisscode` launched the
+  // default profile. It no longer does — an empty argv now opens the control
+  // plane, which serves HTTP and never returns — so a test that means "launch"
+  // has to say which profile.
+  //
+  // Defaulting to the config's own default profile keeps every existing test
+  // asserting what it always asserted, rather than re-pointing twenty call
+  // sites at a name the harness already knows.
+  const named =
+    argv ??
+    (() => {
+      const fallback = (config as { defaultProfile?: string | null } | null)?.defaultProfile
+      return typeof fallback === 'string' ? [fallback] : []
+    })()
 
   const work = mkdtempSync(join(tmpdir(), 'swisscode-e2e-'))
   const configDir = join(work, 'config', 'swisscode')
@@ -178,11 +193,27 @@ export function launch({
   // it stays unit-tested via spawnFallback + an injected SignalHost, and this
   // e2e does not reach it. Running the matrix under both supported Node versions
   // is defence in depth, not two different dispatches.)
-  const run = spawnSync(process.execPath, [BIN, ...argv], {
+  // A TIMEOUT, because a hang here is far more expensive than a failure.
+  //
+  // swisscode is expected to exit on every path this harness drives: it either
+  // execve's the recorder, or refuses with a message. A build that instead
+  // blocks — `swisscode` with no arguments now serves the control plane, which
+  // holds the terminal by design — would otherwise pin spawnSync forever.
+  // Without this, one such change kept four CI jobs `in_progress` for forty
+  // minutes with no output before anyone could tell what had happened.
+  const run = spawnSync(process.execPath, [BIN, ...named], {
     env: childEnv,
     ...(cwd ? { cwd } : {}),
     encoding: 'utf8',
+    timeout: 20_000,
+    killSignal: 'SIGKILL',
   })
+  if (run.error && (run.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') {
+    throw new Error(
+      `swisscode did not exit within 20s for argv [${named.join(' ')}]. ` +
+        'Every path this harness drives must terminate; a blocking command needs its own test.',
+    )
+  }
 
   let recorded: Capture | null = null
   try {
