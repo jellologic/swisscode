@@ -4,15 +4,30 @@
 // object out, so every branch — including every refusal — is testable without
 // binding a socket. The server module is the only part that knows about sockets.
 //
-// It is thin by construction. Everything it does is already a port operation,
-// which is the whole reason a second UI was cheap: the Ink wizard and this API
-// are two adapters over one unchanged core.
+// It is thin by construction, and now literally so: every mutation below is a
+// pure function in core/operations.ts, and this file's remaining job is HTTP —
+// routing, revision conflicts, redaction and status codes. That split is what
+// makes a second front end cheap. It was not always true; the rules used to
+// live half here and half in the Ink wizard's own `finish()`, with no way to
+// tell the two agreed.
 
 import { bindPath, bindingEntries, unbindPath } from '../../core/binding.ts'
-import { validateProfileName } from '../../core/migrate.ts'
-import { toCustomProvider, validateCustomProvider } from '../../core/provider-def.ts'
 import { TIERS } from '../../core/tiers.ts'
-import { accountsUsedBy, validateAccount } from '../../core/account.ts'
+import {
+  deleteAccount,
+  deleteProfile,
+  deleteProvider,
+  deleteSetup,
+  parseAccount,
+  parseSetup,
+  putAccount,
+  putProfile,
+  putProvider,
+  putSettings,
+  putSetup,
+  setDefaultProfile,
+} from '../../core/operations.ts'
+import type { OpResult } from '../../core/operations.ts'
 import type { IdentityCollision } from '../../core/account.ts'
 import { COMPAT_ENV, CREDENTIAL_ENVS } from '../agents/claude-code/env.ts'
 import { CATALOG_SOURCE, CLAUDE_ENV_CATALOG } from '../agents/claude-code/env-catalog.ts'
@@ -188,125 +203,24 @@ function commit(store: ConfigStorePort, state: State, extra: unknown = {}): ApiR
 }
 
 /**
- * A provider account submitted by the browser.
- *
- * Whitelisted rather than spread: an unknown key from a hostile or buggy client
- * must not reach config.json, where a future swisscode would read it as
- * meaningful.
- *
- * `apiKey` is accepted (write-only) but only when NON-EMPTY — an empty string
- * from a form the user did not touch must not erase a stored key, which is the
- * single most destructive mistake this endpoint could make. Clearing is an
- * explicit `null`, so "I did not touch this" and "remove my credential" stay
- * different requests.
+ * The shape parsers moved to core/operations.ts with the mutations they belong
+ * to. Re-exported here because they are part of this module's tested surface
+ * and callers should not have to care that the rules relocated.
  */
-export function parseAccount(
-  input: unknown,
-  existing: ProviderAccount | undefined,
-): ProviderAccount | string {
-  if (!isObjectLike(input)) return 'account must be an object'
-  const provider = str(input.provider) ?? existing?.provider
-  if (!provider) return 'provider is required'
+export { parseAccount, parseSetup, parseProfile } from '../../core/operations.ts'
 
-  const account: ProviderAccount = { ...(existing ?? {}), provider }
-  if (typeof input.label === 'string') account.label = input.label
-  if (typeof input.configDir === 'string') {
-    if (input.configDir) account.configDir = input.configDir
-    else delete account.configDir
-  }
-  if (typeof input.baseUrl === 'string') account.baseUrl = input.baseUrl
-  if (typeof input.apiKey === 'string' && input.apiKey.length > 0) account.apiKey = input.apiKey
-  if (input.apiKey === null) delete account.apiKey
-  if (typeof input.apiKeyFromEnv === 'string') {
-    if (input.apiKeyFromEnv) account.apiKeyFromEnv = input.apiKeyFromEnv
-    else delete account.apiKeyFromEnv
-  }
-  // The two modes are MUTUALLY EXCLUSIVE, and the conflict is refused rather
-  // than resolved by precedence. The RULE lives in core/account.ts so the
-  // launch path and the doctor reach the same verdict this endpoint does —
-  // they used to disagree, and the doctor called a conflicting account healthy.
-  const invalid = validateAccount(account)
-  if (invalid) return invalid
-  return account
+/** Map a core refusal onto the status code it deserves. */
+function refuse(result: Extract<OpResult, { ok: false }>): ApiResponse {
+  const status = result.kind === 'missing' ? 404 : 400
+  return result.reasons
+    ? json(status, { error: result.reason, errors: result.reasons })
+    : fail(status, result.reason)
 }
 
-/** A setup submitted by the browser. Holds no credential. */
-export function parseAgentProfile(
-  input: unknown,
-  existing: Setup | undefined,
-): Setup | string {
-  if (!isObjectLike(input)) return 'setup must be an object'
-  const setup: Setup = { ...(existing ?? {}) }
-
-  if (typeof input.label === 'string') setup.label = input.label
-  if (typeof input.agent === 'string') setup.agent = input.agent
-  if (typeof input.skipPermissions === 'boolean') {
-    setup.skipPermissions = input.skipPermissions
-  }
-
-  if (isObjectLike(input.models)) {
-    const models: Record<string, string> = {}
-    for (const tier of TIERS) {
-      const v = input.models[tier]
-      if (typeof v === 'string') models[tier] = v
-    }
-    setup.models = models
-  }
-
-  if (isObjectLike(input.compat)) {
-    const compat: Record<string, boolean> = {}
-    for (const [k, v] of Object.entries(input.compat)) {
-      if (typeof v === 'boolean') compat[k] = v
-    }
-    setup.compat = compat as NonNullable<Setup['compat']>
-  }
-
-  if (isObjectLike(input.env)) {
-    const env: Record<string, string> = {}
-    for (const [k, v] of Object.entries(input.env)) {
-      if (typeof v === 'string') env[k] = v
-    }
-    setup.env = env
-  }
-
-  // Measured windows only. A non-integer or non-positive entry is dropped
-  // rather than stored: this feeds CLAUDE_CODE_AUTO_COMPACT_WINDOW, and a
-  // window set too large overflows the conversation instead of compacting it.
-  if (isObjectLike(input.contextWindows)) {
-    const windows: Record<string, number> = {}
-    for (const [model, v] of Object.entries(input.contextWindows)) {
-      if (typeof v === 'number' && Number.isInteger(v) && v > 0) windows[model] = v
-    }
-    setup.contextWindows = windows
-  }
-
-  return setup
-}
-
-/**
- * The pairing. References only — no credential, no agent settings.
- *
- * References are NOT validated against the store here; that is the caller's
- * job, because it holds the state and can name what is missing. Validating
- * shape and validating existence are different failures and deserve different
- * messages.
- */
-export function parseProfile(input: unknown, existing: Profile | undefined): Profile | string {
-  if (!isObjectLike(input)) return 'profile must be an object'
-  const setup = str(input.setup) ?? existing?.setup
-  if (!setup) return 'setup is required'
-
-  const accounts = Array.isArray(input.accounts)
-    ? input.accounts.filter((a): a is string => typeof a === 'string' && a.length > 0)
-    : (existing?.accounts ?? [])
-  if (accounts.length === 0) return 'a profile needs at least one provider account'
-
-  const profile: Profile = { ...(existing ?? {}), setup, accounts }
-  if (typeof input.label === 'string') profile.label = input.label
-  if (input.strategy === 'single' || input.strategy === 'round-robin' || input.strategy === 'usage') {
-    profile.strategy = input.strategy
-  }
-  return profile
+/** Apply a pure operation and persist it, or report why it was refused. */
+function apply(store: ConfigStorePort, result: OpResult): ApiResponse {
+  if (!result.ok) return refuse(result)
+  return commit(store, result.state, result.meta)
 }
 
 export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
@@ -389,55 +303,16 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
     if (!name) return fail(400, 'profile name is required')
 
     if (req.method === 'PUT') {
-      const valid = validateProfileName(name)
-      if (!valid.ok) return fail(400, valid.reason)
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
-
-      const loaded = store.load()
       const body = isObjectLike(req.body) ? req.body.profile : null
-      const parsed = parseProfile(body, loaded.state.profiles?.[name])
-      if (typeof parsed === 'string') return fail(400, parsed)
-
-      // References are checked HERE, where the state is in hand. parseProfile
-      // validated the shape; this validates that the things it names exist.
-      if (!loaded.state.setups?.[parsed.setup]) {
-        return fail(400, `no setup named "${parsed.setup}"`)
-      }
-      const missing = parsed.accounts.filter((a) => !loaded.state.providerAccounts?.[a])
-      if (missing.length > 0) {
-        return fail(400, `no provider account named "${missing[0]}"`)
-      }
-
-      const state: State = {
-        ...loaded.state,
-        profiles: { ...loaded.state.profiles, [name]: parsed },
-      }
-      // First profile created becomes the default, matching the wizard: a lone
-      // profile that is not the default is a state the CLI would then refuse to
-      // launch from.
-      if (!state.defaultProfile) state.defaultProfile = name
-      return commit(store, state)
+      return apply(store, putProfile(store.load().state, name, body))
     }
 
     if (req.method === 'DELETE') {
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
-      const loaded = store.load()
-      if (!loaded.state.profiles?.[name]) return fail(404, `no profile named "${name}"`)
-
-      const profiles = { ...loaded.state.profiles }
-      delete profiles[name]
-      // Bindings to a deleted profile are pruned, exactly as `config rm` does.
-      // Leaving them would make a directory silently fall back to the default.
-      const bindings = Object.fromEntries(
-        Object.entries(loaded.state.bindings ?? {}).filter(([, p]) => p !== name),
-      )
-      const state: State = { ...loaded.state, profiles, bindings }
-      // `string | null`, not optional — null is the "no default" state the
-      // launcher already knows how to report, so clear rather than delete.
-      if (state.defaultProfile === name) state.defaultProfile = null
-      return commit(store, state)
+      return apply(store, deleteProfile(store.load().state, name))
     }
   }
 
@@ -452,33 +327,14 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
     if (req.method === 'PUT') {
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
-      const loaded = store.load()
-      const parsed = parseAccount(
-        isObjectLike(req.body) ? req.body.account : null,
-        loaded.state.providerAccounts?.[name],
-      )
-      if (typeof parsed === 'string') return fail(400, parsed)
-      return commit(store, {
-        ...loaded.state,
-        providerAccounts: { ...loaded.state.providerAccounts, [name]: parsed },
-      })
+      const body = isObjectLike(req.body) ? req.body.account : null
+      return apply(store, putAccount(store.load().state, name, body))
     }
 
     if (req.method === 'DELETE') {
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
-      const loaded = store.load()
-      if (!loaded.state.providerAccounts?.[name]) return fail(404, `no account named "${name}"`)
-
-      // Profiles referencing it are REPORTED, never silently repaired: only the
-      // user knows which account should pay instead.
-      const affected = accountsUsedBy(loaded.state.profiles, name)
-
-      const accounts = { ...loaded.state.providerAccounts }
-      delete accounts[name]
-      return commit(store, { ...loaded.state, providerAccounts: accounts }, {
-        affectedProfiles: affected,
-      })
+      return apply(store, deleteAccount(store.load().state, name))
     }
   }
 
@@ -489,29 +345,14 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
     if (req.method === 'PUT') {
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
-      const loaded = store.load()
-      const parsed = parseAgentProfile(
-        isObjectLike(req.body) ? req.body.setup : null,
-        loaded.state.setups?.[name],
-      )
-      if (typeof parsed === 'string') return fail(400, parsed)
-      return commit(store, {
-        ...loaded.state,
-        setups: { ...loaded.state.setups, [name]: parsed },
-      })
+      const body = isObjectLike(req.body) ? req.body.setup : null
+      return apply(store, putSetup(store.load().state, name, body))
     }
 
     if (req.method === 'DELETE') {
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
-      const loaded = store.load()
-      if (!loaded.state.setups?.[name]) return fail(404, `no setup named "${name}"`)
-      const affected = Object.entries(loaded.state.profiles ?? {})
-        .filter(([, pr]) => pr.setup === name)
-        .map(([n]) => n)
-      const setups = { ...loaded.state.setups }
-      delete setups[name]
-      return commit(store, { ...loaded.state, setups }, { affectedProfiles: affected })
+      return apply(store, deleteSetup(store.load().state, name))
     }
   }
 
@@ -523,70 +364,36 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
 
-      const loaded = store.load()
       const submitted = isObjectLike(req.body) ? req.body.provider : null
-      const candidate = isObjectLike(submitted) ? { ...submitted, id } : submitted
-
-      // The runtime twin of registry.test.ts. A shipped descriptor is guarded
-      // by tests; one typed into a browser is guarded by exactly this call, so
-      // the two lists of rules have to stay in step.
-      const verdict = validateCustomProvider(candidate, {
-        // The BASE ids, not the merged list: a custom provider must not shadow
-        // a shipped preset, but it may of course overwrite ITSELF.
+      // The runtime twin of registry.test.ts. A shipped descriptor is guarded by
+      // tests; one typed into a browser is guarded by this call, so the two
+      // lists of rules have to stay in step.
+      //
+      // These three are PARAMETERS because they are Claude Code's: core/ may not
+      // name a CLAUDE_CODE_ or ANTHROPIC_ variable, so the adapter that owns
+      // them supplies them. RESERVED_PROVIDER_IDS is the BASE list, not the
+      // merged one — a custom provider must not shadow a shipped preset, but it
+      // may of course overwrite itself.
+      return apply(store, putProvider(store.load().state, id, submitted, {
         reservedIds: RESERVED_PROVIDER_IDS,
         knownCompatFlags: Object.keys(COMPAT_ENV),
         credentialEnvs: CREDENTIAL_ENVS,
-      })
-      if (!verdict.ok) return json(400, { error: verdict.errors[0], errors: verdict.errors })
-
-      const providersMap = { ...(loaded.state.providers ?? {}) }
-      providersMap[id] = toCustomProvider(candidate as Record<string, unknown>)
-      // Warnings ride along on success: they describe a config that is legal
-      // and probably wrong, which is the user's call to make, not ours.
-      return commit(store, { ...loaded.state, providers: providersMap }, {
-        warnings: verdict.warnings,
-      })
+      }))
     }
 
     if (req.method === 'DELETE') {
       if (!id) return fail(400, 'provider id is required')
       const conflict = revisionConflict(store, req.body)
       if (conflict) return conflict
-      const loaded = store.load()
-      if (!loaded.state.providers?.[id]) return fail(404, `no custom provider named "${id}"`)
-
-      // ACCOUNTS point at providers now, not profiles — so deleting a provider
-      // orphans accounts, and those in turn orphan whichever profiles use them.
-      // Both are reported, never silently repaired: only the user knows where a
-      // profile should point next.
-      const orphanedAccounts = Object.entries(loaded.state.providerAccounts ?? {})
-        .filter(([, a]) => a.provider === id)
-        .map(([name]) => name)
-      const orphaned = Object.entries(loaded.state.profiles ?? {})
-        .filter(([, p]) => (p.accounts ?? []).some((a) => orphanedAccounts.includes(a)))
-        .map(([name]) => name)
-
-      const providersMap = { ...loaded.state.providers }
-      delete providersMap[id]
-      return commit(store, { ...loaded.state, providers: providersMap }, {
-        orphanedAccounts,
-        orphanedProfiles: orphaned,
-      })
+      return apply(store, deleteProvider(store.load().state, id))
     }
   }
 
   if (resource === 'settings' && req.method === 'PUT') {
     const conflict = revisionConflict(store, req.body)
     if (conflict) return conflict
-    const loaded = store.load()
     const input = isObjectLike(req.body) ? req.body.settings : null
-    if (!isObjectLike(input)) return fail(400, 'settings must be an object')
-    const settings = { ...loaded.state.settings }
-    if (typeof input.quiet === 'boolean') settings.quiet = input.quiet
-    if (Number.isInteger(input.bindingWalkDepth)) {
-      settings.bindingWalkDepth = input.bindingWalkDepth as number
-    }
-    return commit(store, { ...loaded.state, settings })
+    return apply(store, putSettings(store.load().state, input))
   }
 
   if (resource === 'default' && req.method === 'PUT') {
@@ -594,9 +401,7 @@ export function handleApi(req: ApiRequest, deps: ApiDeps): ApiResponse {
     if (conflict) return conflict
     const name = isObjectLike(req.body) ? str(req.body.name) : null
     if (!name) return fail(400, 'name is required')
-    const loaded = store.load()
-    if (!loaded.state.profiles?.[name]) return fail(404, `no profile named "${name}"`)
-    return commit(store, { ...loaded.state, defaultProfile: name })
+    return apply(store, setDefaultProfile(store.load().state, name))
   }
 
   if (resource === 'bindings') {

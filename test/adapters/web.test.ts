@@ -20,7 +20,7 @@ import {
   tokensMatch,
 } from '../../src/adapters/web/security.ts'
 import { CONFLICT_REASON } from '../../src/core/account.ts'
-import { handleApi, parseAccount, parseAgentProfile, redactAccount, redactState } from '../../src/adapters/web/api.ts'
+import { handleApi, parseAccount, parseSetup, redactAccount, redactState } from '../../src/adapters/web/api.ts'
 import { FALLBACK_SCRIPT_PATH, resolveAsset, startWebServer } from '../../src/adapters/web/server.ts'
 import { request } from 'node:http'
 import { registry as providers } from '../../src/adapters/providers/registry.ts'
@@ -587,7 +587,7 @@ test('deleting a provider reports orphaned profiles rather than silently repairi
 test('contextWindows accepts measured integers and drops anything else', () => {
   // It feeds CLAUDE_CODE_AUTO_COMPACT_WINDOW; a bad value there overflows the
   // conversation instead of compacting it.
-  const parsed = parseAgentProfile(
+  const parsed = parseSetup(
     { contextWindows: { good: 200000, zero: 0, neg: -1, str: '100', frac: 1.5 } },
     undefined,
   )
