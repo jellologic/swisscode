@@ -136,24 +136,3 @@ export const _probe: AnthropicMessagesProbePort = createProbe()
 // speaks Ollama's native API rather than the Anthropic one, and it bills
 // nothing, so the two have different rules about when they may be called.
 export const _ollamaIntrospect: OllamaIntrospectPort = createOllamaIntrospect()
-
-// the lazy UI boundary
-//
-// src/cli.ts declares `UiModule` STRUCTURALLY rather than as
-// `typeof import('../src/composition/ui-root.ts')`. It has to: anything under
-// src/ that names the UI — even in type space — pulls the component tree into
-// tsconfig.build.json's program and ships a second, unbundled copy of React
-// inside the package. (`exclude` only filters the `include` globs; a module
-// reached through an import joins the program regardless.)
-//
-// That leaves cli.ts asserting a shape it cannot see. This is where the claim
-// is checked against the real thing. test/ is never emitted and never packed,
-// so naming ui-root HERE is free — and if `runUi`'s signature ever drifts from
-// what cli.ts calls, this line stops compiling.
-//
-// Verified to bite: renaming runUi's `state` parameter type produced
-//   TS2322: Type 'typeof import(".../ui-root")' is not assignable to type 'UiModule'.
-import type { UiModule } from '../src/cli.ts'
-import * as uiRoot from '../src/composition/ui-root.ts'
-
-export const _ui: UiModule = uiRoot

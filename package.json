@@ -1,7 +1,7 @@
 {
   "name": "swisscode",
   "version": "0.6.0",
-  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode. Run multiple Claude Pro/Max accounts, check usage limits and switch accounts without /login — or point any coding CLI at Ollama (local, no key), OpenRouter, z.ai/GLM, DeepSeek & Qwen. No proxy, no daemon.",
+  "description": "Drop-in launcher for Claude Code, Kilo & OpenCode. Run multiple Claude Pro/Max accounts, check usage limits and switch accounts without /login \u2014 or point any coding CLI at Ollama (local, no key), OpenRouter, z.ai/GLM, DeepSeek & Qwen. No proxy, no daemon.",
   "type": "module",
   "bin": {
     "swisscode": "./bin/swisscode.js"
@@ -74,16 +74,10 @@
   "bugs": {
     "url": "https://github.com/jellologic/swisscode/issues"
   },
-  "dependencies": {
-    "ink": "^7.1.1",
-    "ink-select-input": "^6.2.0",
-    "ink-text-input": "^6.0.0",
-    "react": "^19.2.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.20.1",
     "@types/react": "^19.2.17",
-    "esbuild": "^0.28.1",
     "ink-testing-library": "^4.0.0",
     "typescript": "^7.0.2"
   }

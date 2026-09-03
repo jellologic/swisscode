@@ -1,80 +1,5 @@
 import { parseArgv } from './core/args.ts'
 import { defaultDeps, LaunchError, main } from './composition/launch-root.ts'
-import type { Profile, State } from './ports/config-store.ts'
-
-/**
- * Which wizard to open.
- *
- * Spelled here rather than imported from ./composition/config-root.ts, for the
- * same reason config-root spells `OpenUi` locally instead of importing it from
- * adapters/ui: a static `import type` of config-root would put that module into
- * the launch path's SOURCE graph, and the architecture test that keeps the
- * config subcommands off the launch path reads the source graph.
- *
- * The duplication is CHECKED, not blind. `openUi` is handed to
- * `runConfigCommand` below, so if this union ever drifts from config-root's
- * `WizardMode` the call stops compiling.
- */
-type WizardMode = 'config' | 'setup'
-
-/**
- * The slice of dist/ui.js this module uses.
- *
- * SPELLED STRUCTURALLY, naming no UI module — and that is not fussiness, it is
- * a packaging requirement discovered the hard way. Writing this as
- * `typeof import('./composition/ui-root.ts')` also compiles, also erases, and
- * also keeps the launch path clean at runtime… and then silently ships the
- * entire React component tree a SECOND time, unbundled, as
- * dist/adapters/ui/*.js.
- *
- * The reason: tsconfig.build.json `exclude`s src/adapters/ui, but `exclude`
- * only filters the `include` globs. A module reached through an IMPORT — even a
- * type-only query like the one above — still joins the program, and being under
- * rootDir it is still emitted. So the exclusion silently stops applying the
- * moment anything under src/ names the UI, in type space or otherwise.
- *
- * Declaring the shape here instead is the same move config-root.ts makes with
- * `OpenUi`, for the same reason. It is not an unchecked guess either:
- * test/ports.conformance.ts asserts the REAL ui-root satisfies this type, and
- * test/ is never emitted, so that check costs the package nothing.
- */
-export type UiModule = {
-  runUi: (options: {
-    mode: WizardMode
-    state: State
-    profileName?: string | null
-  }) => Promise<Profile | null>
-}
-
-/**
- * The Ink UI is imported lazily and only from here. bin/swisscode.js and
- * everything the launch path reaches stays plain dependency-free JS, so a
- * normal launch never pays for loading React.
- *
- * `profileName` is optional here but required by config-root's `OpenUi`, which
- * is the correct direction: a handler may accept more than the contract
- * promises to pass. runCli's own `openUi('setup', …)` call relies on it.
- */
-async function openUi(
-  mode: WizardMode,
-  options: { state: State; profileName?: string | null },
-): Promise<Profile | null> {
-  let ui: UiModule
-  try {
-    // @ts-expect-error '../dist/ui.js' is BUILD OUTPUT, not source, and tsc
-    // must never resolve it: that would make `pnpm typecheck` depend on
-    // build order and would typecheck the compiler's own emit. The contract
-    // this import has to honour is `UiModule` above, which is checked against
-    // the real source instead.
-    ui = await import('../dist/ui.js')
-  } catch (err) {
-    if ((err as { code?: string }).code === 'ERR_MODULE_NOT_FOUND') {
-      throw new Error('UI bundle is missing. Run `npm run build` in the swisscode checkout.')
-    }
-    throw err
-  }
-  return ui.runUi({ mode, ...options })
-}
 
 /**
  * `never`, because every path leaves: a LaunchError exits with its own code and
@@ -105,6 +30,21 @@ export async function runCli(argv: string[]): Promise<void> {
     return
   }
 
+  // NO ARGUMENTS AT ALL opens the control plane.
+  //
+  // This is the one deliberate break with the old shape, where a bare
+  // `swisscode` launched the default profile or the directory binding. The
+  // control plane is where profiles, models, accounts and the gateway are now
+  // edited, and it needs a way in that does not spend a word from the reserved
+  // namespace — so it takes the empty invocation.
+  //
+  // Anything at all in argv still launches, so `swisscode -p '...'` and every
+  // passthrough form behave exactly as before.
+  if (argv.length === 0) {
+    const { runControlPlane } = await import('./composition/control-plane-root.ts')
+    process.exit(await runControlPlane({ deps: defaultDeps() }))
+  }
+
   const parsed = parseArgv(argv)
 
   // An unknown --cc-* option, a --cc-model with a bad tier, a repeated
@@ -126,7 +66,6 @@ export async function runCli(argv: string[]): Promise<void> {
       command,
       args: commandArgs,
       deps: defaultDeps(),
-      openUi,
     })
     if (code !== 0) process.exit(code)
     return
@@ -154,16 +93,12 @@ export async function runCli(argv: string[]): Promise<void> {
     process.exit(2)
   }
 
-  const saved = await openUi('setup', { state: planned.loaded.state })
-  if (!saved) {
-    console.error('swisscode: setup cancelled, nothing launched.')
-    process.exit(1)
-  }
-
-  // Re-read from disk so the launch uses exactly what was persisted.
-  try {
-    main({ ...launchArgs, deps: defaultDeps() })
-  } catch (err) {
-    fail(err)
-  }
+  // Nothing is configured yet. There is no terminal wizard to fall into any
+  // more, and guessing a provider would violate the rule against inventing
+  // configuration, so this names the one command that can fix it.
+  console.error(
+    'swisscode: no profiles are configured yet. Run `swisscode` with no ' +
+      'arguments to open the control plane and create one.',
+  )
+  process.exit(2)
 }

@@ -1,16 +1,15 @@
-// Two-stage build. Neither stage is optional.
+// One compile stage, plus the optional web frontend.
 //
-//   1. tsc  src/**            -> dist/**      plain compiled JS, the launch path
-//   2. esbuild ui-root        -> dist/ui.js   the bundled Ink UI
+//   1. tsc  src/**  -> dist/**   plain compiled JS
+//   2. vite web/    -> dist/web  the browser control plane (optional)
 //
-// They are separate because they ship different things. The launch path must
-// stay a readable, auditable tree of individual modules with no bundler in the
-// way. The UI is one lazily-imported blob that nothing on the launch path is
-// allowed to reach.
+// There is no bundler over `dist/`: the launch path stays a readable, auditable
+// tree of individual modules. The esbuild stage that produced dist/ui.js went
+// with the Ink wizard — configuration is done in the browser now, so the only
+// bundled artifact is the one the browser loads.
 import { execFileSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import * as esbuild from 'esbuild'
 
 const TSC = 'node_modules/typescript/bin/tsc'
 
@@ -46,27 +45,6 @@ execFileSync(process.execPath, [TSC, '-p', 'tsconfig.build.json'], { stdio: 'inh
 // so drop them here rather than ship nine inert stubs in the tarball.
 rmSync('dist/ports', { recursive: true, force: true })
 
-// Stage 2. ink/react stay external so we never have to bundle yoga's wasm.
-// esbuild reads the TSX sources and strips types; type CHECKING is
-// `pnpm typecheck`'s job, not the bundler's.
-const uiRoot = 'src/composition/ui-root.ts'
-if (!existsSync(uiRoot)) throw new Error(`build: cannot find ${uiRoot}`)
-
-await esbuild.build({
-  entryPoints: [uiRoot],
-  outfile: 'dist/ui.js',
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  target: 'node22',
-  jsx: 'automatic',
-  // Minified, unlike stage 1's output. This one is already a single opaque
-  // blob that nothing on the launch path may reach and no human reads module by
-  // module, so the auditability argument that keeps `dist/` unbundled does not
-  // apply to it — and it halves, 74.5 kB to 38.2 kB.
-  minify: true,
-  external: ['ink', 'react', 'react/jsx-runtime', 'ink-select-input', 'ink-text-input'],
-})
 
 // Stage 3. The web UI, built by Vite into dist/web.
 //
@@ -96,7 +74,4 @@ if (panda && vite) {
   console.log('skipped dist/web (frontend toolchain not installed)')
 }
 
-console.log(
-  `built dist/ (tsc), dist/ui.js (esbuild, from ${uiRoot})` +
-    (webBuilt ? ' and dist/web (vite)' : ''),
-)
+console.log(`built dist/ (tsc)` + (webBuilt ? ' and dist/web (vite)' : ''))

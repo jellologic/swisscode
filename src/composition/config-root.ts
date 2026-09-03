@@ -26,7 +26,6 @@ import {
   pruneBindingsForProfile,
   unbindPath,
 } from '../core/binding.ts'
-import { validateProfileName } from '../core/migrate.ts'
 import { resolveProfileRefs } from '../core/resolve.ts'
 import { TIERS } from '../core/tiers.ts'
 import { DEFAULT_AGENT_ID } from '../adapters/agents/registry.ts'
@@ -62,30 +61,13 @@ import type { ProcessPort } from '../ports/process.ts'
 /** A line of output. `console.log`/`console.error` both satisfy it. */
 type Emit = (line: string) => void
 
-/** Which wizard `openUi` should open. */
-export type WizardMode = 'config' | 'setup'
 
-/**
- * How this module reaches the Ink wizard.
- *
- * A CALLBACK, injected by src/cli.ts, rather than an import — and the type is
- * spelled here rather than imported from adapters/ui so that nothing in this
- * file, not even in type space, names the UI module. That keeps the lazy
- * boundary a property of the source graph and not merely of the emit.
- *
- * Returns the saved profile, or null when the user cancelled.
- */
-export type OpenUi = (
-  mode: WizardMode,
-  options: { state: State; profileName: string | null },
-) => Promise<Profile | null>
 
 export type RunConfigCommandOptions = {
   /** 'config' | 'setup', as parsed from argv */
   command: string | null
   args?: string[]
   deps: LaunchDeps
-  openUi: OpenUi
   out?: Emit
   err?: Emit
 }
@@ -156,7 +138,6 @@ export async function runConfigCommand({
   command,
   args = [],
   deps: baseDeps,
-  openUi,
   out = console.log,
   err = console.error,
 }: RunConfigCommandOptions): Promise<number> {
@@ -181,10 +162,10 @@ export async function runConfigCommand({
       )
       return 2
     }
-    return openWizard({ deps, openUi, name: null, mode: 'setup', err, out })
+    return editingMoved(null, err)
   }
 
-  if (head === undefined) return openWizard({ deps, openUi, name: null, err, out })
+  if (head === undefined) return editingMoved(null, err)
   if (head === 'help' || head === '--help' || head === '-h') {
     out(USAGE)
     return 0
@@ -240,44 +221,23 @@ export async function runConfigCommand({
     )
     return 2
   }
-  return openWizard({ deps, openUi, name: head, err, out })
+  return editingMoved(head, err)
 }
 
-async function openWizard({
-  deps,
-  openUi,
-  name,
-  mode = 'config',
-  err,
-  out,
-}: {
-  deps: LaunchDeps
-  openUi: OpenUi
-  name: string | null
-  mode?: WizardMode
-  err: Emit
-  out: Emit
-}): Promise<number> {
-  const loaded = deps.store.load()
-  for (const w of loaded.warnings ?? []) err(`swisscode: ${w}`)
-
-  if (loaded.readOnly) return refuseWrite(err)
-
-  if (name !== null) {
-    const exists = Object.prototype.hasOwnProperty.call(loaded.state.profiles ?? {}, name)
-    if (!exists) {
-      // Validation applies at CREATION only. A hand-edited file keeps working.
-      const verdict = validateProfileName(name)
-      if (!verdict.ok) {
-        err(`swisscode: ${verdict.reason}`)
-        return 2
-      }
-    }
-  }
-
-  const saved = await openUi(mode, { state: loaded.state, profileName: name })
-  if (saved) out(`\n  saved to ${deps.store.path()}\n`)
-  return 0
+/**
+ * Where profile editing lives now.
+ *
+ * The Ink wizard is gone: it edited a flattened view and minted account, setup
+ * and profile one-to-one, so a profile drawing models from more than one
+ * account was not sayable in it. Rather than guess at what the user wanted,
+ * this names the command that can actually do the job.
+ */
+function editingMoved(name: string | null, err: Emit): number {
+  err(
+    `swisscode: profile editing moved to the control plane. Run \`swisscode\` ` +
+      `with no arguments to open it${name === null ? '' : `, then open "${name}"`}.`,
+  )
+  return 2
 }
 
 /**

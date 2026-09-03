@@ -11,7 +11,6 @@ import { join } from 'node:path'
 import { runConfigCommand } from '../src/composition/config-root.ts'
 import { registry } from '../src/adapters/providers/registry.ts'
 import { registry as agents } from '../src/adapters/agents/registry.ts'
-import type { OpenUi } from '../src/composition/config-root.ts'
 import type { State } from '../src/ports/config-store.ts'
 import { makeAccount, makeProfile } from './support/fixtures.ts'
 
@@ -69,19 +68,11 @@ function harness(
       },
     },
   }
-  const uiCalls: Record<string, unknown>[] = []
-  const run = (
-    args: string[],
-    openUi: OpenUi = async (mode, opts) => {
-      uiCalls.push({ mode, ...opts })
-      return null
-    },
-  ) =>
+  const run = (args: string[]) =>
     runConfigCommand({
       command: 'config',
       args,
       deps,
-      openUi,
       out: (l) => stdout.push(String(l)),
       err: (l) => stderr.push(String(l)),
     })
@@ -89,7 +80,6 @@ function harness(
   return {
     run,
     saves,
-    uiCalls,
     stdout,
     stderr,
     state: () => current,
@@ -109,41 +99,39 @@ test('every subcommand lives under `config`, claiming no new bare word', async (
   }
 })
 
-test('a name that is not a subcommand opens the wizard for that profile', async () => {
+test('a name that is not a subcommand points at the control plane, naming the profile', async () => {
   const h = harness()
-  await h.run(['z'])
-  assert.deepEqual(h.uiCalls, [{ mode: 'config', state: h.state(), profileName: 'z' }])
+  assert.equal(await h.run(['z']), 2)
+  assert.match(h.errText(), /control plane/)
+  assert.match(h.errText(), /"z"/)
 })
 
-test('creating a profile named after a subcommand is refused', async () => {
-  // `config doctor` dispatches the doctor, so a profile of that name could
-  // never be opened — which is why the name is rejected at creation and why
-  // the parser's own reserved set can stay at four tokens.
+test('a subcommand still dispatches rather than being read as a profile name', async () => {
+  // `config doctor` runs the doctor; it is not treated as a profile called
+  // "doctor". That is why the parser's reserved set can stay at four tokens.
+  //
+  // The name-validation half of this moved with the wizard: `config <name>` no
+  // longer creates anything, so the guard now lives at the two places that do —
+  // adapters/web/api.ts and adapters/claude-session/onboard.ts.
   const h = harness()
-  await h.run(['doctor', '--offline'])
-  assert.deepEqual(h.uiCalls, [], 'doctor runs the doctor, it does not open a wizard')
-
-  const h2 = harness()
-  assert.equal(await h2.run(['login']), 2)
-  assert.equal(h2.uiCalls.length, 0)
-  assert.match(h2.errText(), /reserved/)
+  assert.equal(await h.run(['doctor', '--offline']), 0)
+  assert.doesNotMatch(h.errText(), /control plane/)
 })
 
-test('a common English word needs --force before it can shadow a prompt', async () => {
+test('an unknown name is refused rather than silently launched', async () => {
   const h = harness()
   assert.equal(await h.run(['fix']), 2)
-  assert.match(h.errText(), /likely to type as a prompt/)
+  assert.match(h.errText(), /control plane/)
 })
 
-test('an existing profile with an awkward name still opens', async () => {
-  // Validation applies at CREATION only; a hand-edited config keeps working.
+test('an existing profile is named back to the user when editing is requested', async () => {
   const state = STATE()
   state.providerAccounts.fix = { provider: 'zai' }
   state.setups.fix = {}
   state.profiles.fix = { setup: 'fix', accounts: ['fix'] }
   const h = harness({ state })
-  assert.equal(await h.run(['fix']), 0)
-  assert.equal(h.uiCalls[0]!.profileName, 'fix')
+  assert.equal(await h.run(['fix']), 2)
+  assert.match(h.errText(), /"fix"/)
 })
 
 // list

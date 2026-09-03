@@ -1,5 +1,10 @@
-// Guards the one architectural property this project actually sells: launching
-// Claude Code must not load React.
+// Guards the architectural properties this project sells: a launch stays small,
+// synchronous and socket-free, and core/ stays pure.
+//
+// The original framing was "launching Claude Code must not load React". React is
+// gone entirely now — deleted with the Ink wizard — so that particular risk is
+// closed by construction rather than by assertion, and the zero-dependency test
+// below is what keeps it closed.
 //
 // Deterministic by construction — it asserts on the import graph, not on
 // wall-clock startup time, so it cannot flake on a loaded CI box.
@@ -124,14 +129,40 @@ test('the launch path never statically reaches adapters/ui, catalog, usage or cl
   }
 })
 
-test('the UI bundle is reachable only through a dynamic import', () => {
+/**
+ * The invariant this replaces.
+ *
+ * There used to be a check that dist/ui.js was reachable only through a dynamic
+ * import, and a companion rule that nothing under src/ could name the UI module
+ * even in type space — because an `import type` re-adds a file to the build
+ * program and would have shipped the React tree a second time, unbundled.
+ *
+ * Both are gone with their subject: the Ink wizard was deleted, configuration
+ * moved to the browser, and the four runtime dependencies went with it. What is
+ * asserted instead is the stronger, simpler fact that replaced them.
+ */
+test('the package has no runtime dependencies at all', () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+    dependencies?: Record<string, string>
+  }
+  assert.deepEqual(
+    Object.keys(pkg.dependencies ?? {}),
+    [],
+    'a runtime dependency reappeared; every one of them used to be reachable only from the wizard',
+  )
+})
+
+test('the control plane is reachable only through a dynamic import', () => {
   const { files, dynamic } = launchClosure()
   assert.ok(
-    [...dynamic.keys()].some((s) => s.includes('dist/ui.js')),
-    'nothing on the launch path lazily imports the UI bundle',
+    [...dynamic.keys()].some((s) => s.includes('control-plane-root')),
+    'src/cli.ts must reach the control plane lazily, or the launch path grows an HTTP server',
   )
   for (const f of files) {
-    assert.ok(!f.includes(join('dist', 'ui.js')), 'dist/ui.js is in the static closure')
+    assert.ok(
+      !f.includes(join('src', 'composition', 'control-plane-root')),
+      'control-plane-root is in the static closure',
+    )
   }
 })
 
