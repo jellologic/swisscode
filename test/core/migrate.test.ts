@@ -1,15 +1,19 @@
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import {
   SUPPORTED_VERSION,
   emptyState,
   fromV1,
+  fromV2,
+  fromV3,
   isV1,
   migrate,
   normalize,
   validateProfileName,
 } from '../../src/core/migrate.ts'
 import { makeProfile } from '../support/fixtures.ts'
+import type { ConfigV2 } from '../../src/ports/config-store.ts'
 
 /** Exactly the shape swisscode 0.1.0 writes. */
 const V1_FULL = {
@@ -292,4 +296,87 @@ test('profile names: grammar, reserved words and the common-word guard', () => {
   // `swisscode fix the login bug` must not silently select a profile.
   assert.ok(!validateProfileName('fix').ok)
   assert.ok(validateProfileName('fix', { force: true }).ok)
+})
+
+/**
+ * Each rung stamps its OWN output version, never the moving constant.
+ *
+ * `migrate` dispatches on the version number, so a rung that stamps
+ * SUPPORTED_VERSION makes the ladder skip every step above it: the draft claims
+ * to be current while still carrying the older shape. `fromV1` and `fromV2`
+ * carried a comment warning about this; `fromV3` did it anyway, and it was
+ * invisible only because SUPPORTED_VERSION happened to equal its own output.
+ *
+ * These assert LITERALS deliberately. Written against SUPPORTED_VERSION they
+ * would have passed while the bug was present, which is how it survived.
+ *
+ * Each rung is fed its own minimal input rather than the previous rung's
+ * output, so no widening cast is needed to express the test.
+ */
+const V2_MIN: ConfigV2 = {
+  version: 2,
+  profiles: { work: { provider: 'zai', apiKey: 'k' } },
+  defaultProfile: 'work',
+  bindings: {},
+  settings: {},
+}
+
+const V3_MIN: Record<string, unknown> = {
+  version: 3,
+  providerAccounts: { work: { provider: 'zai', apiKey: 'k' } },
+  agentProfiles: { work: { models: { opus: 'glm-5.2' } } },
+  profiles: { work: { agentProfile: 'work', accounts: ['work'] } },
+  defaultProfile: 'work',
+  bindings: {},
+  settings: {},
+}
+
+test('fromV1 stamps version 2, not the current version', () => {
+  assert.equal(fromV1(V1_FULL).version, 2)
+})
+
+test('fromV2 stamps version 3, not the current version', () => {
+  assert.equal(fromV2(V2_MIN).version, 3)
+})
+
+test('fromV3 stamps version 4, not the current version', () => {
+  assert.equal(fromV3(V3_MIN).version, 4)
+})
+
+/**
+ * The guard that can actually fail today.
+ *
+ * The behavioural tests above cannot: while SUPPORTED_VERSION is 4, the buggy
+ * `version: SUPPORTED_VERSION` and the correct `version: 4` produce identical
+ * output. That is precisely why the bug survived review and sat latent — it has
+ * no observable behaviour until a v5 exists, at which point it silently marks
+ * v3 configs as v5.
+ *
+ * So this reads the source instead, in the spirit of test/architecture.test.ts:
+ * a rung may not stamp the moving constant, whatever that constant happens to
+ * equal right now.
+ */
+test('no migration rung stamps the moving version constant', () => {
+  const src = readFileSync(new URL('../../src/core/migrate.ts', import.meta.url), 'utf8')
+  // Each rung's body runs to the next top-level export.
+  for (const match of src.matchAll(/export function (fromV\d+)\b/g)) {
+    const start = match.index ?? 0
+    const next = src.indexOf('\nexport ', start + 1)
+    const body = src.slice(start, next === -1 ? src.length : next)
+    const stamp = body.match(/^\s*version: (.+),$/m)
+    assert.ok(stamp, `${match[1]} has no version stamp`)
+    assert.match(
+      stamp[1] ?? '',
+      /^\d+$/,
+      `${match[1]} must stamp a literal version, not ${stamp[1]} — ` +
+        'migrate() dispatches on this number and a moving constant makes the ladder skip rungs',
+    )
+  }
+})
+
+test('a v3 config migrates to exactly v4, one rung at a time', () => {
+  const result = migrate(V3_MIN)
+  assert.equal(result.migratedFrom, 3)
+  assert.equal(result.state.version, 4)
+  assert.equal(result.readOnly, false)
 })

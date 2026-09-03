@@ -302,7 +302,14 @@ export function fromV3(raw: Record<string, unknown>): V4Draft {
   const { agentProfiles: _dropped, ...rest } = raw
   return {
     ...rest,
-    version: SUPPORTED_VERSION,
+    // LITERAL 4, not SUPPORTED_VERSION — the third time this warning has been
+    // written and the first time it was needed. `fromV1` and `fromV2` both stamp
+    // their own output version because `migrate` dispatches on the number: a rung
+    // that stamps the CURRENT version makes the ladder skip every step above it.
+    // This one stamped the constant, so a v3 config would have been marked v5
+    // while still carrying v4 shape the moment a v5 existed. It was invisible
+    // only because SUPPORTED_VERSION happened to equal 4.
+    version: 4,
     providerAccounts: isPlainObject(raw.providerAccounts)
       ? (raw.providerAccounts as Record<string, Record<string, unknown>>)
       : {},
