@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { FileAccountRepository } from "./accountVault.js";
+import type { VaultWarning } from "./accountVault.js";
 import { ClaudeActiveCredentialStore } from "./activeStore.js";
 import { AnthropicOAuthClient, AnthropicUsageClient } from "./anthropic.js";
 import { findAccountByCredential } from "./identity.js";
@@ -51,6 +52,52 @@ describe("FileAccountRepository", () => {
       await findAccountByCredential(repo, { accessToken: "x", refreshToken: "fresh-rt" }),
       null,
     );
+  });
+
+  it("skips unusable files instead of failing every other account", async () => {
+    const dir = join(await tempDir("vault-"), "subs");
+    const warnings: VaultWarning[] = [];
+    const repo = new FileAccountRepository(dir, { onWarning: (w) => warnings.push(w) });
+    await repo.save(
+      { id: "personal", label: "Personal", createdAt: "", updatedAt: "" },
+      { accessToken: "at", refreshToken: "rt" },
+    );
+    // One torn write and one structurally wrong file must not hide "personal".
+    await writeFile(join(dir, "broken.json"), '{ "account": ', "utf8");
+    await writeFile(join(dir, "shapeless.json"), JSON.stringify({ account: {}, credential: 7 }), "utf8");
+    await writeFile(join(dir, "not an id.json"), "{}", "utf8");
+
+    assert.deepEqual((await repo.list()).map((a) => a.id), ["personal"]);
+    assert.deepEqual(
+      warnings.map((w) => `${w.id}:${w.reason}`).sort(),
+      ["broken:corrupt", "not an id:invalid", "shapeless:invalid"],
+    );
+    assert.equal(await repo.get("broken"), undefined);
+    assert.equal(await repo.loadCredential("shapeless"), undefined);
+    // Rotating into an unreadable file would drop the account metadata.
+    await assert.rejects(
+      () => repo.saveCredential("broken", { accessToken: "a", refreshToken: "r" }),
+      /unreadable/,
+    );
+    await assert.rejects(
+      () => repo.saveCredential("nobody", { accessToken: "a", refreshToken: "r" }),
+      /Unknown subscription account/,
+    );
+  });
+
+  it("replaces vault files atomically, leaving nothing half-written behind", async () => {
+    const dir = join(await tempDir("vault-"), "subs");
+    const repo = new FileAccountRepository(dir);
+    await repo.save(
+      { id: "personal", label: "Personal", createdAt: "", updatedAt: "" },
+      { accessToken: "at", refreshToken: "rt" },
+    );
+    await repo.saveCredential("personal", { accessToken: "at2", refreshToken: "rt2" });
+    assert.deepEqual(await readdir(dir), ["personal.json"]);
+    assert.equal((await stat(join(dir, "personal.json"))).mode & 0o777, 0o600);
+    assert.equal((await repo.loadCredential("personal"))?.refreshToken, "rt2");
+    // Metadata survived the credential-only write.
+    assert.equal((await repo.get("personal"))?.label, "Personal");
   });
 });
 

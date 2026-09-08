@@ -38,6 +38,7 @@ export type {
   UsageWindow,
 } from "./subscriptions.js";
 export {
+  CredentialStoreError,
   OAuthError,
 } from "./subscriptionPorts.js";
 export type {

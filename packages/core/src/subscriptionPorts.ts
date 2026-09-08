@@ -15,6 +15,21 @@ export class OAuthError extends Error {
   }
 }
 
+/**
+ * The credential store Claude Code itself reads could not be used.
+ * Typed because callers must react differently per kind — in particular
+ * `keychain-unreadable` means a file-only write would leave Claude Code
+ * authenticated as somebody else, so a switch has to refuse rather than
+ * report success.
+ */
+export class CredentialStoreError extends Error {
+  readonly kind: "keychain-unreadable" | "keychain-missing" | "write-failed";
+  constructor(kind: CredentialStoreError["kind"], message: string) {
+    super(message);
+    this.kind = kind;
+  }
+}
+
 /** Port: swisscode-side vault for subscription accounts (0600 file store). */
 export interface AccountRepository {
   list(): Promise<SubscriptionAccount[]>;
