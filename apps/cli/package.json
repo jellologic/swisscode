@@ -33,7 +33,7 @@
   },
   "type": "module",
   "bin": {
-    "swisscode": "./dist/index.js"
+    "swisscode": "./dist/bundle.js"
   },
   "files": [
     "dist",
@@ -41,13 +41,14 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run bundle",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/bundle.js --sourcemap --log-level=warning",
     "prepack": "cp ../../README.md ./README.md && cp ../../LICENSE ./LICENSE",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsc -p tsconfig.json && node --test dist/*.test.js"
   },
-  "dependencies": {
-    "@swisscode/adapters": "2.1.0",
-    "@swisscode/core": "2.1.0"
+  "dependencies": {},
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }
