@@ -25,11 +25,26 @@ export const VALIDATION_TIMEOUT_MS = 10_000;
  * cross-origin redirect: a 302 from the declared endpoint would hand the key to
  * whatever host the response names. A redirect is reported, never followed.
  */
-function probeInit(timeoutMs: number, headers?: Record<string, string>): RequestInit {
+function probeInit(
+  timeoutMs: number,
+  headers?: Record<string, string>,
+): { init: RequestInit; done: () => void } {
+  // A plain (ref'd) timer rather than AbortSignal.timeout: that signal's timer
+  // is unref'd, so on Node 22 a probe stalled before any socket exists lets the
+  // event loop drain and the promise never settles. The timer is cleared as
+  // soon as the probe answers, so a fast probe never waits on it.
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new DOMException(`Probe timed out after ${timeoutMs}ms`, "TimeoutError")),
+    timeoutMs,
+  );
   return {
-    redirect: "manual",
-    signal: AbortSignal.timeout(timeoutMs),
-    ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+    init: {
+      redirect: "manual",
+      signal: controller.signal,
+      ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+    },
+    done: () => clearTimeout(timer),
   };
 }
 
@@ -63,14 +78,14 @@ export class OpenRouterAccountValidator implements ProviderAccountValidator {
     const base = (this.options.baseUrl ?? "https://openrouter.ai").replace(/\/$/, "");
     const fetchFn = this.options.fetchFn ?? fetch;
     const timeoutMs = this.options.timeoutMs ?? VALIDATION_TIMEOUT_MS;
+    const probe = probeInit(timeoutMs, { Authorization: `Bearer ${apiKey}` });
     let res: Response;
     try {
-      res = await fetchFn(
-        `${base}/api/v1/auth/key`,
-        probeInit(timeoutMs, { Authorization: `Bearer ${apiKey}` }),
-      );
+      res = await fetchFn(`${base}/api/v1/auth/key`, probe.init);
     } catch (err) {
       return { ok: false, error: failure("Key check", err, timeoutMs) };
+    } finally {
+      probe.done();
     }
     if (res.status === 401 || res.status === 403) {
       return { ok: false, error: "Key rejected (invalid or revoked)." };
@@ -122,14 +137,14 @@ export class CustomAccountValidator implements ProviderAccountValidator {
     }
     const fetchFn = this.options.fetchFn ?? fetch;
     const timeoutMs = this.options.timeoutMs ?? VALIDATION_TIMEOUT_MS;
+    const probe = probeInit(timeoutMs, headers);
     let res: Response;
     try {
-      res = await fetchFn(test.url, {
-        method: test.method ?? "GET",
-        ...probeInit(timeoutMs, headers),
-      });
+      res = await fetchFn(test.url, { method: test.method ?? "GET", ...probe.init });
     } catch (err) {
       return { ok: false, error: failure("Test request", err, timeoutMs) };
+    } finally {
+      probe.done();
     }
     const expected = test.expectStatus;
     // A def may legitimately expect a 3xx; anything else is an unfollowed hop.
