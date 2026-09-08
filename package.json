@@ -1,6 +1,38 @@
 {
   "name": "swisscode",
   "private": true,
+  "description": "Launch Claude Code with the right account, provider and model: multi-account Claude Pro/Max vault with usage limits and switching, a localhost proxy with rate-limit failover and traffic inspection, OpenRouter and custom Anthropic-compatible providers.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jellologic/swisscode.git"
+  },
+  "homepage": "https://github.com/jellologic/swisscode#readme",
+  "bugs": {
+    "url": "https://github.com/jellologic/swisscode/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "anthropic",
+    "anthropic-api",
+    "claude-max",
+    "claude-pro",
+    "account-switcher",
+    "usage-limits",
+    "rate-limit",
+    "proxy",
+    "openrouter",
+    "llm",
+    "coding-agent",
+    "developer-tools",
+    "cli",
+    "profiles",
+    "api-key-manager"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "type": "module",
   "packageManager": "npm@11.8.0",
   "workspaces": [

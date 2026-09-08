@@ -1,194 +1,298 @@
-# swisscode
+# swisscode — run Claude Code with multiple accounts, a rate-limit failover proxy, and any Anthropic-compatible provider
 
-Customize AI coding clients: add models and AI providers, bundle them into
-profiles, and launch a coding agent with the right env vars.
+<p align="center">
+  <a href="https://github.com/jellologic/swisscode/actions/workflows/ci.yml"><img src="https://github.com/jellologic/swisscode/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D22-5fa04e?logo=node.js&logoColor=white" alt="Node.js 22 or newer">
+  <img src="https://img.shields.io/badge/license-MIT-3da639" alt="MIT license">
+  <img src="https://img.shields.io/badge/runs%20on-macOS%20%7C%20Linux-8957e5" alt="macOS and Linux">
+</p>
 
+**swisscode** is a launcher and account manager for [Claude Code](https://claude.com/claude-code).
+Save several **Claude Pro / Max logins**, see each one's **5-hour and 7-day usage limits**,
+and **switch accounts without `/login`**. Route Claude Code through a **localhost proxy**
+that **fails over to the next account on a 429 rate limit**, refreshes expired tokens for
+you, and records every request for a **turn-by-turn traffic inspector**. Or point Claude
+Code at **OpenRouter** or **any custom Anthropic-compatible endpoint** with stored API keys,
+named **profiles**, and a small **web UI**.
+
+```sh
+swisscode work            # launch Claude Code as the "work" profile
+swisscode accounts usage  # how much of each subscription is left
+swisscode proxy run       # one endpoint, many accounts, automatic failover
 ```
-swisscode <profileName>
-```
 
-A **profile** binds one agent plugin (today: Claude Code) to one provider plugin
-(Claude subscription, OpenRouter, or a user-defined custom provider) plus a model
-and config. Both the CLI and the web UI resolve profiles through the same core
-function, so launches never drift between the two.
+- [Why swisscode](#why-swisscode)
+- [Quick start](#quick-start)
+- [Multiple Claude accounts](#multiple-claude-accounts-usage-limits-and-switching)
+- [The subscription proxy](#the-subscription-proxy-rate-limit-failover-and-traffic-inspection)
+- [OpenRouter and custom providers](#openrouter-and-custom-anthropic-compatible-providers)
+- [Profiles](#profiles)
+- [Web UI](#web-ui)
+- [Backup and restore](#backup-and-restore)
+- [Security model](#security-model)
+- [FAQ](#faq)
+- [Coming from swisscode 0.6.x](#coming-from-swisscode-06x)
+- [Architecture and contributing](#architecture-and-contributing)
+
+## Why swisscode
+
+Claude Code stores exactly one login. If you have a personal Max plan and a work Pro
+plan, or you simply hit the 5-hour window and want to keep going on another
+subscription, you are back to `/logout`, `/login`, and a browser tab. If you want to
+use OpenRouter or a self-hosted gateway, you maintain shell aliases full of
+`ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`.
+
+swisscode fixes both:
+
+| Problem | What swisscode does |
+| --- | --- |
+| Several Claude Pro/Max accounts | A local **vault** of logins with live usage per account and one-command switching |
+| Hitting the rate limit mid-task | The **proxy** fails over to the next stored account on `429` / `529`, invisibly to Claude Code |
+| Expired tokens | Refreshed automatically, with a lock so parallel requests never burn the same refresh token |
+| Different backends per project | **Profiles** bind an agent, a provider, a model, and an account; `swisscode <profile>` launches |
+| "What did Claude actually send?" | A **traffic inspector** with conversation threads, tool calls, and token usage per turn |
+| Keys scattered in aliases | Stored once as **provider accounts** (0600 files), referenced by profiles, masked everywhere |
+
+Everything is local. swisscode never talks to any server except the provider you chose,
+and it looks to Anthropic exactly like Claude Code itself.
 
 ## Quick start
 
-```bash
+swisscode v2 is not yet published to npm (`npm i -g swisscode` installs the older
+0.6.x line). Build from source:
+
+```sh
+git clone https://github.com/jellologic/swisscode.git
+cd swisscode
 npm install
-npm run build --workspaces --if-present
-
-# UI (`src/routeTree.gen.ts` is generated on first dev/build)
-cd apps/web && npm run dev        # http://localhost:3000
-npm start                         # serve a production build instead
-
-# CLI (profiles created in the UI live in ~/.swisscode/profiles.json)
-node apps/cli/dist/index.js list
-node apps/cli/dist/index.js myprofile --dry-run   # print command + redacted env
-node apps/cli/dist/index.js myprofile             # launch
-node apps/cli/dist/index.js myprofile -- args...  # extra args after --
+npm run build
+(cd apps/cli && npm link)          # puts `swisscode` on your PATH
 ```
 
-## Profiles
+Then either use the web UI or the CLI:
 
-A profile is `{ name, agentId, agentArgs?, providerId, providerConfig?, model?,
-subscriptionAccountId?, useProxy?, providerAccountId? }`:
+```sh
+# Web UI on http://localhost:3000 (binds to localhost only)
+cd apps/web && npm run dev
 
-- `providerConfig` holds inline provider fields (e.g. OpenRouter `apiKey`).
-  `providerAccountId` references a stored key-account instead; stored config merges
-  *under* inline values (inline wins).
-- `model` overrides the provider's default model for this profile.
-- `subscriptionAccountId` (claude-subscription only) switches to that stored login
-  at launch. Omitted = use whatever Claude Code is currently logged in as.
-- `useProxy: true` (requires `subscriptionAccountId`) routes through
-  `swisscode proxy` instead of swapping the shared credential file.
+# CLI
+swisscode accounts import personal      # snapshot the current `claude login`
+swisscode accounts usage                # 5h / 7d utilization per account
+swisscode list                          # profiles (create them in the UI or profiles.json)
+swisscode myprofile --dry-run           # show the command and redacted env, launch nothing
+swisscode myprofile                     # launch Claude Code
+swisscode myprofile -- --resume         # everything after -- goes to claude verbatim
+```
 
-`swisscode list` / `swisscode show <profile>` inspect profiles;
-`--dry-run` prints the resolved `{command, args, env}` (secrets redacted) without
-touching credentials or spawning anything.
+Requires Node.js 22 or newer and an installed `claude` binary.
 
-## Web UI
+## Multiple Claude accounts: usage limits and switching
 
-| Page | What it does |
-| --- | --- |
-| `/` | Dashboard: profile/account/plugin counts, proxy status, getting-started guide |
-| `/profiles` | Create/edit/preview/delete profiles (preview shows command + env) |
-| `/accounts` | Subscription vault + key-based accounts, live usage, switch actions |
-| `/providers` | Built-in catalog plus custom-provider create/edit |
-| `/agents` | Agent catalog (read-only) |
-| `/proxy` | Live request threads through the proxy, grouped into conversations |
-| `/proxy/<thread>` | Turn-by-turn timeline: verdict, reply, tool calls, token usage |
-| `/settings` | Backup export / import (with or without secrets) |
-| `/help` | Quick start plus per-plugin setup docs (plugins document themselves) |
-
-## Subscription accounts (Claude Code logins)
-
-Store multiple Claude subscriptions, see 5h/7d limits, and switch between them:
-
-```bash
-swisscode accounts current               # show the active `claude` login
-swisscode accounts import <id> [--label <label>] [--force]
+```sh
+swisscode accounts current                     # who Claude Code is logged in as
+swisscode accounts import <id> [--label <l>]   # save the current login to the vault
 swisscode accounts list
-swisscode accounts usage [id]            # live utilization per account
-swisscode accounts use <id> [--force]    # file-swap switch (warns if other
-                                         # `claude` sessions are running)
+swisscode accounts usage [id]                  # live 5-hour and 7-day limits
+swisscode accounts use <id> [--force]          # make it the system-wide Claude login
 swisscode accounts remove <id>
 ```
 
-A profile with `subscriptionAccountId` switches at launch (`swisscode <profile>`).
-Vault files live in `~/.swisscode/subscriptions/` (mode 0600). Import snapshots
-Claude Code's own store read-only: macOS Keychain (`Claude Code-credentials`)
-first, `~/.claude/.credentials.json` second — whichever holds OAuth creds wins,
-which is the precedence a fresh `claude` process honors (verified live).
+**Import** reads Claude Code's own credential store without modifying it: the macOS
+Keychain item `Claude Code-credentials` first, then `~/.claude/.credentials.json`.
+Each account is stored as a 0600 file under `~/.swisscode/subscriptions/`.
 
-Switching is faithful to `/login`: same item/service (Keychain account name is
-reused — a wrong `-a` would silently create a duplicate the client never reads),
-read-merge-write preserving every key we don't own (`mcpOAuth`, `rateLimitTier`,
-`subscriptionType`, ...), 0600 file mode with atomic rename, and a post-write
-re-read that aborts on mismatch. `~/.claude.json` (`oauthAccount`) is left alone —
-Claude Code re-derives that cache itself, same as with cswap. On macOS, restart
-running `claude` sessions to pick up a swap immediately (Keychain reads are cached).
+**Switching** (`accounts use`) rewrites Claude Code's store the same way `/login` does:
+same Keychain item, all foreign keys preserved, atomic file replace, and a read-back
+check. swisscode warns when other `claude` sessions are running because they share
+that login. Restart running sessions on macOS to pick up the switch.
 
-Expired vault tokens refresh automatically (5-minute buffer) and persist back to
-the vault. If Claude Code itself rotated the refresh lineage elsewhere, swisscode
-adopts the live credential instead of retrying a dead one.
+**Refresh** happens automatically five minutes before a token expires. When the login
+you switched to is also Claude Code's live login, the rotated token is written back so
+Claude Code keeps working. When Claude Code rotated a login on its own, swisscode adopts
+the live credential instead of retrying a dead one, after checking that it is the same
+account.
 
-## Proxy (transparent switching + traffic inspection)
+## The subscription proxy: rate-limit failover and traffic inspection
 
-Instead of swapping the shared credential file, route Claude Code through a
-localhost proxy that swaps the bearer token per request:
-
-```bash
-swisscode proxy run                     # :8123 (SWISSCODE_PROXY_PORT to change)
-swisscode proxy use <id>                # switch the proxy's active account
+```sh
+swisscode proxy run                 # http://127.0.0.1:8123 (SWISSCODE_PROXY_PORT)
+swisscode proxy use <id>            # change the account new requests are signed with
 swisscode proxy status
-swisscode proxy log [--tail <n>]        # recent proxied requests
+swisscode proxy log [--tail <n>]    # recent requests, redacted
 ```
 
-`run` flags: `--port <n>`, `--traffic-log <path>` / `--no-traffic-log`
-(default `~/.swisscode/proxy-traffic.jsonl`, redacted JSONL), `--log-bodies`,
-`--traffic-keep <n>` (memory ring, default 200, 0 disables),
-`--traffic-body-bytes <n>` / `--log-body-bytes <n>` (caps, 0 = unlimited).
+A profile with `"useProxy": true` sets `ANTHROPIC_BASE_URL` to the proxy and tags
+`ANTHROPIC_AUTH_TOKEN` with `swisscode-profile/<name>`. That tag is an attribution
+marker, not a secret: the proxy strips it and signs the upstream request with the vault
+token. Existing `claude` sessions are untouched.
 
-Profiles with `"useProxy": true` set `ANTHROPIC_BASE_URL` to the proxy and put a
-`swisscode-profile/<name>` tag in `ANTHROPIC_AUTH_TOKEN` — an attribution marker,
-not a credential; the proxy reads it, then signs upstream with the vault token.
-On 429/529 the proxy fails over to the next stored account; on 401 it refreshes
-once and retries. Existing `claude` sessions are untouched (only new launches
-route through the proxy).
+What the proxy does per request:
 
-Every proxied request is captured (never headers/tokens) and explained per
-provider: request/response summaries, plain-English verdicts, cache-aware token
-lines, tool-call decoding, and conversation threading that links follow-ups,
-safety screens, and subagent launches. Browse it at `/proxy` in the UI.
+- **Fails over** to the next stored account on `429` or `529`, and puts the exhausted
+  account on a cooldown taken from `Retry-After`.
+- **Refreshes once** and retries on `401`, coalescing concurrent refreshes per account
+  across the proxy, the CLI, and the web UI.
+- **Streams** SSE responses byte for byte, cancels the upstream request when Claude Code
+  aborts, and survives upstream disconnects.
+- **Records** a redacted entry: method, path, status, timing, attempts, the account that
+  served it, request facts parsed by the provider, and optionally truncated bodies.
+  Headers and tokens are never stored.
 
-## Provider accounts (API keys)
+Open `/proxy` in the web UI to browse **conversation threads** across requests: the
+verdict of each turn, the reply, tool calls decoded, cache-aware token usage, and links
+to the local Claude Code session that produced them.
 
-Key-based providers (OpenRouter today) store credentials once and reference them
-from profiles:
+`run` flags: `--port`, `--traffic-log <path>` / `--no-traffic-log` (JSONL at
+`~/.swisscode/proxy-traffic.jsonl`), `--log-bodies`, `--traffic-keep <n>` (ring buffer,
+default 200), `--traffic-body-bytes <n>` (default 64 KiB per side, `0` = unlimited).
 
-```bash
+## OpenRouter and custom Anthropic-compatible providers
+
+Store API keys once as **provider accounts** and reference them from profiles:
+
+```sh
 swisscode accounts --provider openrouter add <id> --set apiKey=sk-or-... [--label <l>]
-swisscode accounts --provider openrouter update <id> [--set key=value ...]
-swisscode accounts --provider openrouter list | show <id>   # masked
-swisscode accounts --provider openrouter usage [id]
-swisscode accounts --provider openrouter models             # published model list
-swisscode accounts --provider openrouter model <id>         # detail + serving providers
-swisscode accounts --provider openrouter test --set apiKey=...  # check without saving
+swisscode accounts --provider openrouter test --set apiKey=...   # check before saving
+swisscode accounts --provider openrouter usage [id]              # spend and limits
+swisscode accounts --provider openrouter models                  # model catalog
+swisscode accounts --provider openrouter model <model-id>        # serving endpoints
+swisscode accounts --provider openrouter list | show <id>        # secrets masked
+swisscode accounts --provider openrouter update <id> --set key=value
 swisscode accounts --provider openrouter remove <id>
 ```
 
-`show`/`list` mask secrets (`first4…last2`); `update` only changes sent keys.
+**Custom providers** need no code. Define one in the UI at `/providers/new`: an id, a
+display name, config fields (marked secret or not), static env such as
+`ANTHROPIC_BASE_URL`, a field-to-env mapping, an optional model env var, and an optional
+HTTPS test endpoint for a pre-save connection check. Custom providers then appear in
+accounts, profiles, launches, and `/help` exactly like the built-ins. This is how you
+point Claude Code at a gateway, an enterprise endpoint, or any other service that speaks
+the Anthropic Messages API.
 
-## Custom providers
+Static env cannot set `PATH`, `HOME`, `NODE_OPTIONS`, `LD_*`, `DYLD_*`, or similar
+loader variables, and test endpoints must be public HTTPS hosts.
 
-Providers that speak an Anthropic-compatible endpoint need no code: define one in
-the UI at `/providers/new` — id, display name, config fields, static env
-(`ANTHROPIC_BASE_URL=…`), env-from-config mapping, model env var, and an optional
-HTTPS test endpoint for pre-save credential checks. Custom providers immediately
-work in accounts, profiles, launches, and `/help` like built-ins. They intentionally
-expose no usage reader, model catalog, or login import — env mapping only.
+## Profiles
 
-## Backup / restore
+A profile is one line of JSON in `~/.swisscode/profiles.json`, or a form in the UI:
 
-`/settings` exports a versioned JSON bundle over profiles, subscription accounts,
-provider accounts, and custom providers — with or without secrets (without means
-keys/logins must be re-entered after restore). Import merges customs-first with an
-overwrite toggle and per-store imported/skipped/error counts. Usage and
-model-catalog caches are excluded; they reseed from the network.
+```json
+{
+  "name": "work",
+  "agentId": "claude-code",
+  "providerId": "claude-subscription",
+  "subscriptionAccountId": "work",
+  "useProxy": true,
+  "model": "claude-opus-5",
+  "agentArgs": ["--verbose"]
+}
+```
 
-## Architecture (hexagonal)
+- `providerId` + `providerAccountId` or inline `providerConfig` (inline wins) choose the
+  backend and its key.
+- `subscriptionAccountId` picks the Claude login; `useProxy` routes through the proxy
+  instead of rewriting the shared credential store.
+- `model` overrides the provider default for this profile.
+- `swisscode show <profile>` and `--dry-run` print the resolved command and env with
+  every secret masked, by value as well as by name.
 
-- `packages/core` — domain + ports. Pure TS, zero I/O.
-  Entities (`Profile`, `LaunchSpec`), plugin ports (`AgentPort`,
-  `ProviderPort`), persistence ports, and the single orchestration choke point
-  `resolveLaunchSpec()` used by both UI and CLI.
-- `packages/adapters` — port implementations. Agents: `claude-code`.
-  Providers: `claude-subscription` (uses your `claude login`, no env),
-  `openrouter` (maps to `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/
-  `ANTHROPIC_MODEL`), plus stored custom providers. Storage: JSON under
-  `~/.swisscode/` (override with `SWISSCODE_HOME`).
-- `apps/web` — TanStack Start UI (server-only data access via `.server.`
-  modules; all domain logic delegates to core).
-- `apps/cli` — `swisscode` binary. Resolves a profile and spawns the agent.
+Both the CLI and the web UI resolve profiles through the same core function, so what
+the preview shows is what launches.
 
-### Adding a plugin
+## Web UI
 
-New agent or provider = one adapter file in `packages/adapters/src` plus one
-line in `packages/adapters/src/registry.ts`. Core, UI catalog, and CLI pick
-it up with no other changes. Each provider owns its wire-format knowledge via an
-optional `trafficParser` (request parsing, response summaries, conversation
-keys) — the proxy and inspection UI only touch that interface, so unmatched
-traffic falls back to a shape-only summary.
+`cd apps/web && npm run dev` serves on `http://localhost:3000`, bound to localhost.
 
-## Reference
+| Page | What it does |
+| --- | --- |
+| `/` | Dashboard: counts, proxy status, getting started |
+| `/profiles` | Create, edit, preview, and delete profiles |
+| `/accounts` | Subscription vault and key accounts, live usage, switch actions |
+| `/providers` | Built-in catalog plus custom provider editor |
+| `/proxy` | Live request threads grouped into conversations |
+| `/proxy/<thread>` | Turn-by-turn timeline with tool calls and token usage |
+| `/settings` | Backup export and import |
+| `/help` | Setup docs generated from each plugin |
 
-Storage roots at `SWISSCODE_HOME` (default `~/.swisscode`): `profiles.json`,
-`subscriptions/`, `accounts/`, `custom-providers.json`, `proxy-traffic.jsonl`,
-`usage-cache.json`, `model-catalog-cache.json`. Proxy: `SWISSCODE_PROXY_PORT`
-(default 8123), `SWISSCODE_TRAFFIC_KEEP`, `SWISSCODE_TRAFFIC_BODY_BYTES`,
-`SWISSCODE_LOG_BODY_BYTES`.
+## Backup and restore
 
-Dev commands: `npm run build|test|typecheck --workspaces --if-present` from the
-root; per-package `test` compiles `*.test.ts` and runs node:test
-(`node --test dist/...` for a single file after `tsc`).
+`/settings` exports a versioned JSON bundle of profiles, subscription accounts, provider
+accounts, and custom providers. Secrets are excluded unless you opt in. Import validates
+every record before writing, merges custom providers first, and reports imported,
+skipped, and errored counts per store.
+
+## Security model
+
+- All data lives under `~/.swisscode` (or `SWISSCODE_HOME`). Files that can hold secrets
+  are written atomically with mode 0600 in 0700 directories.
+- The proxy and the production web server bind `127.0.0.1` only, reject requests with a
+  foreign `Host` or any `Origin`, and the proxy's control routes require a per-run token
+  stored in `~/.swisscode/proxy-token`.
+- Traffic records never contain headers or tokens. Display paths mask secrets by value.
+- Every web server function validates its input before touching disk, the Keychain, or
+  the network.
+- swisscode uses Claude Code's own OAuth client and endpoints. Anthropic sees ordinary
+  Claude Code traffic.
+
+## FAQ
+
+**Can I use two Claude Max accounts with Claude Code?**
+Yes. Import both, then either `swisscode accounts use <id>` to switch the global login or
+run the proxy and let it pick the account per request.
+
+**Does the proxy get around Anthropic's rate limits?**
+No. Each account keeps its own limits. The proxy moves you to another account you own
+when one is exhausted, which is what you would do by hand with `/login`.
+
+**Is swisscode a Claude Code router?**
+Partly. It routes by account and by provider through profiles. It does not rewrite
+prompts or split requests across models.
+
+**Does it work with Cursor, Kilo, or OpenCode?**
+v2.1 ships one agent plugin, Claude Code. Adding another is one adapter file plus one
+registry line; see [Architecture](#architecture-and-contributing).
+
+**Where are my keys?**
+`~/.swisscode/accounts/<provider>/<id>.json` and `~/.swisscode/subscriptions/<id>.json`,
+mode 0600. Nothing is uploaded anywhere.
+
+**Windows?**
+Untested. The Keychain path is macOS only; the credentials file path is used elsewhere.
+
+## Coming from swisscode 0.6.x
+
+v2 is a rewrite. Compared with the 0.6.x line on npm it adds the subscription proxy,
+rate-limit failover, the traffic inspector, key-account storage, custom providers, the
+backup format, and the web UI. It does not yet include per-directory bindings, the
+`doctor` preflight, or the Kilo and OpenCode agents. Configuration is not migrated
+automatically.
+
+## Architecture and contributing
+
+Hexagonal monorepo:
+
+- `packages/core`: pure TypeScript, zero I/O. Domain types, ports, and
+  `resolveLaunchSpec()`, the single function that turns a profile into
+  `{ command, args, env }`.
+- `packages/adapters`: everything that touches disk or network. Agent and provider
+  plugins, the vault, OAuth, the proxy, traffic parsers, file stores.
+- `apps/cli`: the `swisscode` binary. `apps/web`: TanStack Start UI with server-only data
+  access.
+
+A new agent or provider is one adapter file plus one line in
+`packages/adapters/src/registry.ts`. See `CLAUDE.md` for the full map.
+
+```sh
+npm run build      # all workspaces
+npm run test       # node:test, colocated *.test.ts
+npm run typecheck
+```
+
+Storage and environment reference: `profiles.json`, `subscriptions/`, `accounts/`,
+`custom-providers.json`, `proxy-token`, `proxy-traffic.jsonl`, `usage-cache.json`,
+`model-catalog-cache.json` under `SWISSCODE_HOME`; `SWISSCODE_PROXY_PORT`,
+`SWISSCODE_TRAFFIC_KEEP`, `SWISSCODE_TRAFFIC_BODY_BYTES`, `SWISSCODE_LOG_BODY_BYTES`,
+`SWISSCODE_WEB_HOST`.
+
+MIT licensed. Issues and pull requests welcome at
+[github.com/jellologic/swisscode](https://github.com/jellologic/swisscode).

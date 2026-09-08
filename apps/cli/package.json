@@ -1,6 +1,36 @@
 {
   "name": "swisscode",
   "version": "0.1.0",
+  "description": "swisscode CLI: launch Claude Code with a named profile \u2014 switch between multiple Claude Pro/Max accounts, run the subscription proxy with rate-limit failover, use OpenRouter or custom providers.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jellologic/swisscode.git",
+    "directory": "apps/cli"
+  },
+  "homepage": "https://github.com/jellologic/swisscode#readme",
+  "keywords": [
+    "claude-code",
+    "claude",
+    "anthropic",
+    "anthropic-api",
+    "claude-max",
+    "claude-pro",
+    "account-switcher",
+    "usage-limits",
+    "rate-limit",
+    "proxy",
+    "openrouter",
+    "llm",
+    "coding-agent",
+    "developer-tools",
+    "cli",
+    "profiles",
+    "api-key-manager"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "type": "module",
   "bin": {
     "swisscode": "./dist/index.js"
