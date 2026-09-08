@@ -15,15 +15,18 @@
 //    the live token belongs to and decline on a mismatch. An unknown answer
 //    (endpoint down, expired token) does NOT decline: it cannot distinguish a
 //    wrong account from an offline laptop, and guard 1 already blocks the
-//    common case.
+//    common case. The lookup DEFAULTS to the real profile endpoint: every
+//    shipped call site builds `liveResyncHook({accounts, oauth, live})`, so an
+//    opt-in guard would be an unguarded guard.
 //
 // Interference rules (rotation is single-writer-unsafe):
 // - Adopting a live credential with valid access consumes nothing: the proxy
 //   simply shares the same Bearer Claude uses. Zero writes to Claude's store.
-// - The live access token is refreshed only when already expired, and the
-//   result is saved to OUR vault alone. Claude's store is never written here,
-//   so a concurrent Claude refresh can at worst cost one retry, never a
-//   half-written login.
+// - The live access token is refreshed only when already expired. That spends
+//   CLAUDE's single-use refresh token, so the rotation is mirrored back into
+//   its store (mirrorRotatedCredential, inside the OAuth adapter) — including
+//   when the email guard then declines to adopt. Keeping the result to
+//   ourselves would leave the editor holding a dead token.
 
 import { isCredentialExpired, OAuthError } from "@swisscode/core";
 import type {
@@ -32,6 +35,7 @@ import type {
   OAuthClient,
   OAuthCredential,
 } from "@swisscode/core";
+import { AnthropicUsageClient } from "./anthropic.js";
 import { credentialIdentity } from "./identity.js";
 
 /** Just enough of the profile client to answer "whose token is this?". */
@@ -39,11 +43,25 @@ export interface EmailLookup {
   fetchEmail(accessToken: string): Promise<string | undefined>;
 }
 
+let defaultProfile: EmailLookup | undefined;
+
+/**
+ * The profile endpoint, built lazily and shared. Only ever reached for an
+ * account whose email we already know, so an account imported before emails
+ * were recorded costs no request.
+ */
+function defaultEmailLookup(): EmailLookup {
+  return (defaultProfile ??= new AnthropicUsageClient());
+}
+
 export interface LiveResyncDeps {
   accounts: AccountRepository;
   oauth: OAuthClient;
   live: ActiveCredentialStore;
-  /** Optional identity check against the OAuth profile endpoint. */
+  /**
+   * Identity check for the live token. Defaults to the Anthropic profile
+   * endpoint; override to point at another host or to keep a test offline.
+   */
   profile?: EmailLookup;
 }
 
@@ -98,8 +116,9 @@ export async function resyncSubscriptionCredential(
   // Email check last: it needs a usable access token, which the refresh above
   // may just have produced.
   const account = await deps.accounts.get(accountId).catch(() => undefined);
-  if (account?.email && deps.profile) {
-    const liveEmail = await deps.profile.fetchEmail(candidate.accessToken).catch(() => undefined);
+  if (account?.email) {
+    const profile = deps.profile ?? defaultEmailLookup();
+    const liveEmail = await profile.fetchEmail(candidate.accessToken).catch(() => undefined);
     if (liveEmail && !sameEmail(liveEmail, account.email)) return undefined;
   }
   return candidate;

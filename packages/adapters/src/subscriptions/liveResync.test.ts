@@ -193,6 +193,68 @@ describe("resyncSubscriptionCredential", () => {
     assert.deepEqual(seen, ["rotated-access"]);
   });
 
+  it("checks identity through the real profile endpoint with no profile injected", async () => {
+    // Every shipped call site builds `liveResyncHook({accounts, oauth, live})`
+    // — the CLI, the proxy and the web server all skip `profile`. With an
+    // opt-in guard, `claude login` as work silently repointed the personal
+    // account at work. globalThis.fetch is stubbed: no network, no keychain.
+    const live: OAuthCredential = { accessToken: "live-a", refreshToken: "live-r", expiresAt: future };
+    const vault = (): VaultEntry[] => [
+      {
+        account: account("personal", "me@example.com"),
+        credential: { accessToken: "old-a", refreshToken: "dead-r", expiresAt: past },
+      },
+    ];
+    const calls: { url: string; token: string | null }[] = [];
+    const realFetch = globalThis.fetch;
+    const reply = (email: string): typeof fetch =>
+      (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        calls.push({ url: String(input), token: headers.get("authorization") });
+        return new Response(JSON.stringify({ account: { email } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+
+    try {
+      globalThis.fetch = reply("work@example.com");
+      const mismatch = build(vault(), live);
+      assert.equal(await resyncSubscriptionCredential(mismatch.deps, "personal"), undefined);
+      assert.equal(calls.length, 1);
+      assert.match(calls[0]?.url ?? "", /\/api\/oauth\/profile$/);
+      assert.equal(calls[0]?.token, "Bearer live-a");
+
+      globalThis.fetch = reply("me@example.com");
+      const match = build(vault(), live);
+      assert.deepEqual(await resyncSubscriptionCredential(match.deps, "personal"), live);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("asks nothing of the network for an account with no known email", async () => {
+    const live: OAuthCredential = { accessToken: "live-a", refreshToken: "live-r", expiresAt: future };
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("the email guard must not fire without an email to compare");
+    }) as unknown as typeof fetch;
+    try {
+      const { deps: d } = build(
+        [
+          {
+            account: account("legacy"),
+            credential: { accessToken: "old-a", refreshToken: "dead-r", expiresAt: past },
+          },
+        ],
+        live,
+      );
+      assert.deepEqual(await resyncSubscriptionCredential(d, "legacy"), live);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   it("liveResyncHook returns undefined without a live store", () => {
     const { deps: d } = deps(undefined, undefined);
     assert.equal(liveResyncHook({ accounts: d.accounts, oauth: d.oauth, live: undefined }), undefined);

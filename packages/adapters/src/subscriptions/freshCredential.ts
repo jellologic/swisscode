@@ -31,6 +31,7 @@ import type {
 } from "@swisscode/core";
 import { defaultSubscriptionsDir } from "./accountVault.js";
 import { withAccountLock } from "./accountLock.js";
+import { mirrorRotatedCredential } from "./liveMirror.js";
 import { liveResyncHook } from "./liveResync.js";
 import type { EmailLookup } from "./liveResync.js";
 
@@ -104,21 +105,14 @@ async function resolveExpired(
   });
   if (hook) options.onInvalidGrant = hook;
   const live = opts.liveStore;
-  if (shared && live) {
-    options.onRefreshed = async (credential) => {
-      // Our refresh just killed the token Claude Code holds. Hand it the new
-      // one via read-merge-write, or the user's next `claude` run is logged out.
-      try {
-        await live.writeActive(credential);
-      } catch (err) {
-        // The vault already has the working credential, so failing the caller
-        // here would break a request without un-rotating anything.
-        opts.onWarning?.(
-          `Refreshed the login shared with Claude Code but could not write it back ` +
-            `(${(err as Error).message}). Run \`claude login\` if Claude Code stops working.`,
-        );
-      }
-    };
+  if (live && stored) {
+    // Registered whenever a live store exists, not only when the read above
+    // said "shared": the decision that matters is made against Claude's store
+    // at write time, inside the helper. That also makes this a no-op when the
+    // OAuth client already mirrored the same rotation — it re-reads and finds
+    // the new lineage there, not the one we rotated away from.
+    options.onRefreshed = (credential) =>
+      mirrorRotatedCredential(live, stored, credential, opts.onWarning).then(() => undefined);
   }
   return ensureFreshCredential(accounts, oauth, accountId, options);
 }

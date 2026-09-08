@@ -9,6 +9,7 @@ import { ClaudeActiveCredentialStore } from "./activeStore.js";
 import { AnthropicOAuthClient, AnthropicUsageClient } from "./anthropic.js";
 import { findAccountByCredential } from "./identity.js";
 import { ensureFreshCredential, isCredentialExpired } from "@swisscode/core";
+import type { OAuthCredential } from "@swisscode/core";
 
 async function tempDir(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
@@ -203,7 +204,23 @@ describe("expiry + refresh against stub endpoints", () => {
     const port = (server.address() as { port: number }).port;
     try {
       const host = `http://127.0.0.1:${port}`;
-      const oauth = new AnthropicOAuthClient({ tokenHost: host, apiHost: host });
+      // Claude Code's store, holding the same "rt" lineage as the vault entry
+      // below. Injected rather than defaulted so this test never reads the real
+      // Keychain — and so the mirror that keeps `claude` logged in after our
+      // refresh is proven against the real token endpoint shape.
+      const claudeWrites: OAuthCredential[] = [];
+      let claudeLogin: OAuthCredential = { accessToken: "old", refreshToken: "rt", expiresAt: 1 };
+      const oauth = new AnthropicOAuthClient({
+        tokenHost: host,
+        apiHost: host,
+        liveStore: {
+          readActive: async () => ({ backend: "file" as const, credential: claudeLogin }),
+          writeActive: async (credential: OAuthCredential) => {
+            claudeWrites.push(credential);
+            claudeLogin = credential;
+          },
+        },
+      });
       const usage = new AnthropicUsageClient({ apiHost: host });
 
       assert.equal(isCredentialExpired({ accessToken: "a", refreshToken: "r" }), true);
@@ -221,6 +238,9 @@ describe("expiry + refresh against stub endpoints", () => {
       assert.equal(fresh.refreshed, true);
       assert.equal(fresh.credential.accessToken, "new-at");
       assert.equal((await repo.loadCredential("work"))?.refreshToken, "new-rt");
+      // "rt" is spent now: without this write Claude Code is logged out at its
+      // next refresh, and this caller passed no mirror options at all.
+      assert.deepEqual(claudeWrites.map((c) => c.refreshToken), ["new-rt"]);
 
       const snapshot = await usage.fetchUsage("work", "new-at");
       assert.equal(snapshot.fiveHour?.utilization, 12.5);
@@ -237,6 +257,8 @@ describe("expiry + refresh against stub endpoints", () => {
         { accessToken: "old", refreshToken: "dead", expiresAt: 1 },
       );
       await assert.rejects(() => ensureFreshCredential(repo, oauth, "dead"), /re-login/);
+      // A lineage Claude Code does not hold is never written back to it.
+      assert.equal(claudeWrites.length, 1);
     } finally {
       server.close();
     }

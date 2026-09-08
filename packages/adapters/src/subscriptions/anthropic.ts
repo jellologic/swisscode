@@ -4,12 +4,14 @@
 
 import type {
   AccountUsage,
+  ActiveCredentialStore,
   OAuthClient,
   OAuthCredential,
   UsageClient,
   UsageWindow,
 } from "@swisscode/core";
 import { OAuthError } from "@swisscode/core";
+import { mirrorRotatedCredential, resolveLiveStore } from "./liveMirror.js";
 import { MAX_RETRY_AFTER_MS, parseRetryAfterMs } from "./retryAfter.js";
 
 // Re-exported: this module was the Retry-After ceiling's original home and
@@ -24,6 +26,20 @@ export interface AnthropicOptions {
   tokenHost?: string; // default https://platform.claude.com
   apiHost?: string; // default https://api.anthropic.com
   fetchFn?: typeof fetch;
+}
+
+export interface AnthropicOAuthOptions extends AnthropicOptions {
+  /**
+   * Claude Code's own credential store, used for ONE purpose: handing back a
+   * rotation of a lineage it shares (see mirrorRotatedCredential). Defaults to
+   * the platform store, because a caller that never heard of the mirror — the
+   * web UI calls core's `ensureFreshCredential(vault, oauth, id)` — would
+   * otherwise log Claude Code out by refreshing. `null` disables it: hermetic
+   * tests, or a caller that has proven the lineage is private.
+   */
+  liveStore?: ActiveCredentialStore | null;
+  /** Non-fatal problems, e.g. the mirror write was refused. */
+  onWarning?: (message: string) => void;
 }
 
 const TOKEN_PATH = "/v1/oauth/token";
@@ -46,7 +62,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 export class AnthropicOAuthClient implements OAuthClient {
-  constructor(private readonly options: AnthropicOptions = {}) {}
+  constructor(private readonly options: AnthropicOAuthOptions = {}) {}
 
   async refresh(credential: OAuthCredential): Promise<OAuthCredential> {
     if (!credential.refreshToken) {
@@ -92,6 +108,15 @@ export class AnthropicOAuthClient implements OAuthClient {
     if (typeof body["expires_in"] === "number") {
       cred.expiresAt = Date.now() + (body["expires_in"] as number) * 1000;
     }
+    // The token we just spent is single-use: if Claude Code was holding the
+    // same one, its login dies here unless we hand the rotation back. Done at
+    // the rotation itself so no caller can forget it.
+    await mirrorRotatedCredential(
+      resolveLiveStore(this.options.liveStore),
+      credential,
+      cred,
+      this.options.onWarning,
+    );
     return cred;
   }
 }
