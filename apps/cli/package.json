@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "echo \"cli: no tests yet\""
+    "test": "tsc -p tsconfig.json && node --test dist/*.test.js"
   },
   "dependencies": {
     "@swisscode/adapters": "0.1.0",
