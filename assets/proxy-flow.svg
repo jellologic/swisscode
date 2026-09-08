@@ -1,0 +1,57 @@
+<svg width="1200" height="300" viewBox="0 0 1200 300" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="pfbg" x1="0" y1="0" x2="1200" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </linearGradient>
+    <marker id="pfarrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3d444d"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="300" fill="url(#pfbg)"/>
+  <rect x="0.5" y="0.5" width="1199" height="299" fill="none" stroke="#1c2330"/>
+
+  <!-- Claude Code -->
+  <rect x="40" y="55" width="200" height="170" rx="12" fill="#161b22" stroke="#30363d"/>
+  <text x="140" y="122" font-size="21" font-weight="700" fill="#f0f6fc" text-anchor="middle">Claude Code</text>
+  <g font-family="Menlo, monospace" font-size="13" fill="#8b949e" text-anchor="middle">
+    <text x="140" y="152">BASE_URL &#8594;</text>
+    <text x="140" y="172">127.0.0.1:8123</text>
+  </g>
+
+  <!-- Arrow into proxy -->
+  <line x1="252" y1="140" x2="292" y2="140" stroke="#3d444d" stroke-width="2" marker-end="url(#pfarrow)"/>
+
+  <!-- Proxy -->
+  <rect x="300" y="55" width="250" height="170" rx="12" fill="#1c1214" stroke="#da291c" stroke-opacity="0.55"/>
+  <text x="425" y="122" font-size="21" font-weight="700" text-anchor="middle">
+    <tspan fill="#f0f6fc">swiss</tspan><tspan fill="#ff5a4d">code</tspan><tspan fill="#f0f6fc"> proxy</tspan>
+  </text>
+  <text x="425" y="156" font-size="13" fill="#8b949e" text-anchor="middle" font-family="Menlo, monospace">sign &#183; fail over &#183; record</text>
+
+  <!-- Fan-out arrows -->
+  <line x1="562" y1="140" x2="628" y2="70" stroke="#3d444d" stroke-width="2" marker-end="url(#pfarrow)"/>
+  <line x1="562" y1="140" x2="628" y2="140" stroke="#3d444d" stroke-width="2" marker-end="url(#pfarrow)"/>
+  <line x1="562" y1="140" x2="628" y2="210" stroke="#3d444d" stroke-width="2" marker-end="url(#pfarrow)"/>
+
+  <!-- Account boxes -->
+  <g font-family="Menlo, monospace" font-size="15">
+    <rect x="640" y="42" width="520" height="56" rx="10" fill="#161b22" stroke="#27c93f" stroke-opacity="0.5"/>
+    <circle cx="672" cy="70" r="6" fill="#27c93f"/>
+    <text x="690" y="75" fill="#e6edf3">work</text>
+    <text x="1140" y="75" fill="#27c93f" text-anchor="end">200 &#183; 4.2s</text>
+
+    <rect x="640" y="112" width="520" height="56" rx="10" fill="#161b22" stroke="#30363d"/>
+    <circle cx="672" cy="140" r="6" fill="#6e7681"/>
+    <text x="690" y="145" fill="#e6edf3">personal</text>
+    <text x="1140" y="145" fill="#8b949e" text-anchor="end">standby</text>
+
+    <rect x="640" y="182" width="520" height="56" rx="10" fill="#161b22" stroke="#ffbd2e" stroke-opacity="0.45"/>
+    <circle cx="672" cy="210" r="6" fill="#ffbd2e"/>
+    <text x="690" y="215" fill="#e6edf3">lab</text>
+    <text x="1140" y="215" fill="#ffbd2e" text-anchor="end">429 &#183; cooldown 42s</text>
+  </g>
+
+  <text x="600" y="280" font-size="13" fill="#6e7681" text-anchor="middle" font-family="Menlo, monospace">429 / 529 &#8594; next account &#183; 401 &#8594; refresh once &amp; retry &#183; esc &#8594; upstream cancelled</text>
+</svg>

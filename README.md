@@ -1,7 +1,13 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jellologic/swisscode/main/assets/hero.png" alt="swisscode — every Claude Pro and Max account you own, one command away: multi-account vault, rate-limit failover proxy, traffic inspector" width="100%">
+</p>
+
 # swisscode — run Claude Code with multiple accounts, a rate-limit failover proxy, and any Anthropic-compatible provider
 
 <p align="center">
   <a href="https://github.com/jellologic/swisscode/actions/workflows/ci.yml"><img src="https://github.com/jellologic/swisscode/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://www.npmjs.com/package/swisscode"><img src="https://img.shields.io/npm/v/swisscode?logo=npm&logoColor=white" alt="npm version"></a>
+  <img src="https://img.shields.io/npm/dm/swisscode" alt="npm monthly downloads">
   <img src="https://img.shields.io/badge/node-%3E%3D22-5fa04e?logo=node.js&logoColor=white" alt="Node.js 22 or newer">
   <img src="https://img.shields.io/badge/license-MIT-3da639" alt="MIT license">
   <img src="https://img.shields.io/badge/runs%20on-macOS%20%7C%20Linux-8957e5" alt="macOS and Linux">
@@ -58,8 +64,12 @@ and it looks to Anthropic exactly like Claude Code itself.
 
 ## Quick start
 
-swisscode v2 is not yet published to npm (`npm i -g swisscode` installs the older
-0.6.x line). Build from source:
+```sh
+npm i -g swisscode
+```
+
+Requires Node.js 22 or newer and an installed `claude` binary. To build from
+source instead:
 
 ```sh
 git clone https://github.com/jellologic/swisscode.git
@@ -125,6 +135,10 @@ A profile with `"useProxy": true` sets `ANTHROPIC_BASE_URL` to the proxy and tag
 `ANTHROPIC_AUTH_TOKEN` with `swisscode-profile/<name>`. That tag is an attribution
 marker, not a secret: the proxy strips it and signs the upstream request with the vault
 token. Existing `claude` sessions are untouched.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jellologic/swisscode/main/assets/proxy-flow.png" alt="How the swisscode proxy fails over: Claude Code sends requests to localhost:8123, the proxy signs with the work account, and on a 429 rate limit retries automatically with the personal account while the exhausted account cools down" width="100%">
+</p>
 
 What the proxy does per request:
 
