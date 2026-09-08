@@ -74,6 +74,7 @@ export { DEFAULT_PROXY_PORT } from "./proxy/server.js";
 import { DEFAULT_PROXY_PORT } from "./proxy/server.js";
 export type { ProxyOptions, ProxyStatus, ProxyTrafficAttempt, ProxyTrafficEntry } from "./proxy/server.js";
 export { MAX_TRAFFIC_BUFFER_SIZE, parseProfileTag } from "./proxy/server.js";
+export { DEFAULT_TRAFFIC_BODY_BYTES } from "./proxy/server.js";
 export { groupTrafficConversations, parseRequestJson, summarizeTrafficEntry } from "./proxy/trafficSummary.js";
 export type {
   TrafficConversation,

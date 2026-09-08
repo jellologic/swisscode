@@ -5,12 +5,17 @@ import { appendFile, readFile } from "node:fs/promises";
 import {
   AnthropicOAuthClient,
   ClaudeActiveCredentialStore,
+  DEFAULT_TRAFFIC_BODY_BYTES,
   FileAccountRepository,
+  PROXY_TOKEN_HEADER,
   SubscriptionProxy,
+  createProxyToken,
+  defaultProxyTokenPath,
   defaultSubscriptionsDir,
   defaultTrafficLogPath,
   proxyBaseUrl,
   proxyPort,
+  readProxyToken,
 } from "@swisscode/adapters";
 import type { ProxyTrafficEntry } from "@swisscode/adapters";
 
@@ -29,8 +34,10 @@ export function proxyHelp(): string {
     "                          proxied request is appended as redacted JSONL",
     "                          (default ~/.swisscode/proxy-traffic.jsonl) and",
     "                          kept in a memory ring (default 200, 0 disables).",
-    "                          Bodies are kept whole by default; <n> caps bytes",
-    "                          per side (0 = unlimited).",
+    "                          Bodies are capped at 64KB per side by default;",
+    "                          <n> sets the cap (0 = unlimited).",
+    "                          Each run mints a control token (0600) that",
+    "                          `use`/`status` send back on control requests.",
     "  use <id> [--port <n>]   Switch the proxy's active account",
     "  status [--port <n>]     Show proxy status and accounts",
     "  log [--tail <n>] [--traffic-log <path>]",
@@ -64,13 +71,23 @@ async function showTrafficLog(path: string, tail: number): Promise<void> {
 }
 
 async function proxyControl(port: number, path: string, method: string): Promise<unknown> {
+  // Control routes are token-gated: the running proxy minted the secret into
+  // a 0600 file that only this user can read, which is what stops a web page
+  // on this machine from switching the billed account behind our back.
+  const token = await readProxyToken();
+  const headers: Record<string, string> = token ? { [PROXY_TOKEN_HEADER]: token } : {};
   let res: Response;
   try {
-    res = await fetch(`${proxyBaseUrl(port)}${path}`, { method });
+    res = await fetch(`${proxyBaseUrl(port)}${path}`, { method, headers });
   } catch {
     throw new Error(`Proxy is not running on port ${port}. Start it with \`swisscode proxy run\`.`);
   }
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (res.status === 401) {
+    throw new Error(
+      `Proxy rejected the control token in ${defaultProxyTokenPath()}. Restart \`swisscode proxy run\` (a running proxy from an older run mints its own).`,
+    );
+  }
   if (!res.ok) throw new Error(typeof body["error"] === "string" ? body["error"] : `HTTP ${res.status}`);
   return body;
 }
@@ -120,15 +137,19 @@ export async function cmdProxy(args: string[]): Promise<void> {
       const n = parseInt(raw, 10);
       return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
     };
+    // One token per run: a token that outlived its server would keep
+    // authorizing after the port moved to something else.
+    const controlToken = await createProxyToken();
     const proxy = new SubscriptionProxy(
       new FileAccountRepository(defaultSubscriptionsDir()),
       new AnthropicOAuthClient(),
       {
         logBodies,
+        controlToken,
         // Adopt Claude Code's live lineage when the vault copy rotated away.
         liveStore: new ClaudeActiveCredentialStore(),
         trafficBufferSize: keep,
-        trafficBodyBytes: bodyBytes("--traffic-body-bytes", "SWISSCODE_TRAFFIC_BODY_BYTES", Number.POSITIVE_INFINITY),
+        trafficBodyBytes: bodyBytes("--traffic-body-bytes", "SWISSCODE_TRAFFIC_BODY_BYTES", DEFAULT_TRAFFIC_BODY_BYTES),
         maxLoggedBodyBytes: bodyBytes("--log-body-bytes", "SWISSCODE_LOG_BODY_BYTES", 8192),
         onTraffic: trafficLog
           ? (entry) => {
