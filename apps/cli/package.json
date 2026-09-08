@@ -1,6 +1,6 @@
 {
   "name": "swisscode",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "swisscode CLI: launch Claude Code with a named profile \u2014 switch between multiple Claude Pro/Max accounts, run the subscription proxy with rate-limit failover, use OpenRouter or custom providers.",
   "license": "MIT",
   "repository": {
