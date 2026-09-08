@@ -6,22 +6,31 @@
 //   swisscode show <profileName>
 
 import { spawn } from "node:child_process";
+import { accessSync, constants as fsConstants, statSync } from "node:fs";
+import { constants as osConstants } from "node:os";
+import { delimiter, join } from "node:path";
 import {
   FileCustomProviderStore,
   FileProfileRepository,
+  FileProviderAccountRepository,
   createAgentRegistry,
   createProviderRegistry,
   defaultProfilesPath,
   loadCustomProviderPorts,
-} from "@swisscode/adapters";
-import { ProfileError, resolveLaunchSpec, resolveProviderConfig } from "@swisscode/core";
-import { activateAccount, cmdAccounts } from "./accounts.js";
-import { cmdProxy, ensureProxyAccount } from "./proxy.js";
-import {
-  FileProviderAccountRepository,
   proxyBaseUrl,
   proxyPort,
 } from "@swisscode/adapters";
+import {
+  DEFAULT_SECRET_NAME_RE,
+  ProfileError,
+  isDeniedEnvName,
+  redactEnv,
+  resolveLaunchSpec,
+  resolveProviderConfig,
+} from "@swisscode/core";
+import type { LaunchSpec, Profile, ProviderAccount } from "@swisscode/core";
+import { activateAccount, cmdAccounts } from "./accounts.js";
+import { cmdProxy, ensureProxyAccount } from "./proxy.js";
 
 const agents = createAgentRegistry();
 const repo = new FileProfileRepository(defaultProfilesPath());
@@ -50,11 +59,44 @@ function help(): string {
   ].join("\n");
 }
 
-function redact(env: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) {
-    // Profile tags are identifiers, not secrets — leave them visible.
-    out[k] = /TOKEN|KEY|SECRET/i.test(k) && v && !v.startsWith("swisscode-profile/") ? "***redacted***" : v;
+/** A profile plus the stored account (if any) whose config was merged in. */
+interface ResolvedProfile {
+  profile: Profile;
+  /** Kept for redaction: every value it holds is a candidate secret. */
+  account?: ProviderAccount;
+}
+
+/**
+ * Merge a referenced provider account under the profile's inline config.
+ * Launch and show share this so `show` can never describe a launch the
+ * launcher would not produce. Throws ProfileError on a dangling reference.
+ */
+async function resolveProfileForLaunch(stored: Profile): Promise<ResolvedProfile> {
+  if (!stored.providerAccountId) return { profile: stored };
+  const accountStore = new FileProviderAccountRepository();
+  const account = await accountStore.get(stored.providerId, stored.providerAccountId);
+  return {
+    profile: resolveProviderConfig(stored, () => account ?? undefined),
+    account: account ?? undefined,
+  };
+}
+
+/**
+ * Values that must never reach a terminal: whatever is stored under a field the
+ * provider declares secret (or whose key reads like one), from both the resolved
+ * config and the account behind it. Name-based masking alone is not enough — a
+ * custom provider can map its API key to any env name it likes (MY_PASSWORD).
+ */
+async function secretValues(resolved: ResolvedProfile): Promise<string[]> {
+  const provider = (await providerRegistry()).get(resolved.profile.providerId);
+  const secretKeys = new Set(
+    (provider?.fields ?? []).filter((f) => f.secret).map((f) => f.key),
+  );
+  const out: string[] = [];
+  for (const config of [resolved.profile.providerConfig, resolved.account?.config]) {
+    for (const [key, value] of Object.entries(config ?? {})) {
+      if (secretKeys.has(key) || DEFAULT_SECRET_NAME_RE.test(key)) out.push(value);
+    }
   }
   return out;
 }
@@ -71,14 +113,107 @@ async function cmdList(): Promise<void> {
 }
 
 async function cmdShow(name: string): Promise<void> {
-  const profile = await repo.get(name);
-  if (!profile) {
+  const stored = await repo.get(name);
+  if (!stored) {
     console.error(`Unknown profile "${name}".`);
     process.exitCode = 1;
     return;
   }
-  const spec = resolveLaunchSpec(agents, await providerRegistry(), profile);
-  console.log(JSON.stringify({ profile, launch: { ...spec, env: redact(spec.env) } }, null, 2));
+  try {
+    const resolved = await resolveProfileForLaunch(stored);
+    const spec = resolveLaunchSpec(agents, await providerRegistry(), resolved.profile);
+    const secrets = await secretValues(resolved);
+    // The stored profile is echoed (not the merged one) so an account's key
+    // never appears here even unmasked; inline config is masked by the same rule.
+    const profile = stored.providerConfig
+      ? { ...stored, providerConfig: redactEnv(stored.providerConfig, secrets) }
+      : stored;
+    const launch = {
+      ...spec,
+      command: resolveExecutable(spec.command),
+      env: redactEnv(launchEnv(resolved.profile, spec), secrets),
+    };
+    console.log(JSON.stringify({ profile, launch }, null, 2));
+  } catch (err) {
+    if (err instanceof ProfileError) {
+      console.error(`Invalid profile "${name}": ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Drop env names that are code execution rather than configuration (PATH,
+ * NODE_OPTIONS, DYLD_*, …). Stored provider data must never set them; core
+ * rejects them at save time and this is the second line for data already on
+ * disk — a profile that could set PATH chooses which binary "claude" is.
+ */
+function withoutDeniedEnv(env: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (isDeniedEnvName(name)) {
+      console.error(`Ignoring env "${name}" from provider config — reserved by the launcher.`);
+      continue;
+    }
+    out[name] = value;
+  }
+  return out;
+}
+
+/** Proxy routing is a profile-only decision (validated at save time). */
+function usesProxy(profile: Profile): boolean {
+  return profile.providerId === "claude-subscription" && profile.useProxy === true;
+}
+
+/**
+ * The env a launch actually applies. Proxy mode: the proxy strips client auth
+ * and signs with the vault account, so ANTHROPIC_AUTH_TOKEN carries a profile
+ * tag instead of a credential (read for traffic attribution, then discarded).
+ * `show` and the launch path share this, so an inspection can never describe a
+ * launch that would not happen.
+ */
+function launchEnv(profile: Profile, spec: LaunchSpec): Record<string, string> {
+  const env = usesProxy(profile)
+    ? {
+        ...spec.env,
+        ANTHROPIC_BASE_URL: proxyBaseUrl(),
+        ANTHROPIC_AUTH_TOKEN: `swisscode-profile/${profile.name}`,
+      }
+    : spec.env;
+  return withoutDeniedEnv(env);
+}
+
+/**
+ * Resolve `command` against the PARENT process PATH and hand spawn an absolute
+ * path. The child's env is built from stored provider config, so letting spawn
+ * resolve the name there would let that data pick the binary. An explicit path
+ * is used as-is; an unresolvable name is returned unchanged so the caller still
+ * gets the usual ENOENT message.
+ */
+function resolveExecutable(command: string): string {
+  if (command.includes("/")) return command;
+  for (const dir of (process.env["PATH"] ?? "").split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, command);
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      accessSync(candidate, fsConstants.X_OK);
+      return candidate;
+    } catch {
+      // Missing or not executable here — keep searching the remaining entries.
+    }
+  }
+  return command;
+}
+
+/** Signals a foreground launcher must relay, or the agent is orphaned. */
+const FORWARDED_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGHUP", "SIGINT"];
+
+/** Shell convention: a process killed by signal N reports 128+N. */
+function signalExitCode(signal: NodeJS.Signals): number {
+  return 128 + (osConstants.signals[signal] ?? 0);
 }
 
 async function cmdLaunch(
@@ -94,23 +229,22 @@ async function cmdLaunch(
     return;
   }
   // Generic provider account reference: merge stored config under inline config.
-  let profile = stored;
-  if (stored.providerAccountId) {
-    const accountStore = new FileProviderAccountRepository();
-    const account = await accountStore.get(stored.providerId, stored.providerAccountId);
-    try {
-      profile = resolveProviderConfig(stored, () => account ?? undefined);
-    } catch (err) {
-      console.error((err as Error).message);
+  let resolved: ResolvedProfile;
+  try {
+    resolved = await resolveProfileForLaunch(stored);
+  } catch (err) {
+    if (err instanceof ProfileError) {
+      console.error(err.message);
       process.exitCode = 1;
       return;
     }
+    throw err;
   }
+  const profile = resolved.profile;
   // Subscription account binding: activate before resolving the launch.
   // Dry-run never touches the active credential store or the proxy.
-  const useProxy = profile.providerId === "claude-subscription" && profile.useProxy === true;
   if (profile.providerId === "claude-subscription" && profile.subscriptionAccountId && !dryRun) {
-    if (useProxy) {
+    if (usesProxy(profile)) {
       const ok = await ensureProxyAccount(profile.subscriptionAccountId, proxyPort());
       if (!ok) return;
     } else {
@@ -130,21 +264,30 @@ async function cmdLaunch(
     throw err;
   }
   const args = [...spec.args, ...extraArgs];
-  // Proxy mode: the proxy strips client auth and signs with the vault
-  // account, so ANTHROPIC_AUTH_TOKEN carries a profile tag instead of a
-  // credential. The proxy reads it for traffic attribution, then discards it.
-  const env = useProxy
-    ? { ...spec.env, ANTHROPIC_BASE_URL: proxyBaseUrl(), ANTHROPIC_AUTH_TOKEN: `swisscode-profile/${name}` }
-    : spec.env;
+  const env = launchEnv(profile, spec);
+  const command = resolveExecutable(spec.command);
   if (dryRun) {
-    console.log(JSON.stringify({ command: spec.command, args, env: redact(env) }, null, 2));
+    console.log(
+      JSON.stringify({ command, args, env: redactEnv(env, await secretValues(resolved)) }, null, 2),
+    );
     return;
   }
-  const child = spawn(spec.command, args, {
+  const child = spawn(command, args, {
     stdio: "inherit",
     env: { ...process.env, ...env },
   });
+  // Relay signals: without this a SIGTERM to swisscode leaves the agent running
+  // with no parent. SIGINT is relayed too — the terminal already delivers it to
+  // the foreground group, but a programmatic kill of swisscode alone does not.
+  const relays = FORWARDED_SIGNALS.map(
+    (signal) => [signal, () => void child.kill(signal)] as const,
+  );
+  for (const [signal, relay] of relays) process.on(signal, relay);
+  const stopRelaying = () => {
+    for (const [signal, relay] of relays) process.off(signal, relay);
+  };
   child.on("error", (err: Error) => {
+    stopRelaying();
     const e = err as NodeJS.ErrnoException;
     if (e.code === "ENOENT") {
       console.error(`Cannot launch "${spec.command}": binary not found on PATH.`);
@@ -154,18 +297,24 @@ async function cmdLaunch(
     process.exitCode = 1;
   });
   child.on("exit", (code, signal) => {
-    if (signal) process.kill(process.pid, signal);
-    else process.exitCode = code ?? 0;
+    stopRelaying();
+    process.exitCode = signal ? signalExitCode(signal) : (code ?? 0);
   });
 }
 
 async function main(): Promise<void> {
   const raw = process.argv.slice(2);
-  if (raw.length === 0 || raw.includes("-h") || raw.includes("--help")) {
+  // Everything after the first "--" belongs to the agent, verbatim. Scanning it
+  // for our own flags makes `swisscode p -- -h` print swisscode's help instead
+  // of the agent's, and `swisscode p -- --dry-run` refuse to launch.
+  const split = raw.indexOf("--");
+  const head = split >= 0 ? raw.slice(0, split) : raw;
+  const passthrough = split >= 0 ? raw.slice(split + 1) : [];
+  if (head.length === 0 || head.includes("-h") || head.includes("--help")) {
     console.log(help());
     return;
   }
-  const [first, ...rest] = raw;
+  const [first, ...rest] = head as [string, ...string[]];
   if (first === "list") return cmdList();
   if (first === "show") {
     if (!rest[0]) {
@@ -173,19 +322,25 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    return cmdShow(rest[0] as string);
+    return cmdShow(rest[0]);
   }
   if (first === "accounts") return cmdAccounts(rest);
   if (first === "proxy") return cmdProxy(rest);
   // Launch path: swisscode <profile> [--dry-run] [--force] [-- extra...]
+  // A leading flag is an option we do not know, never a profile name.
+  if (first.startsWith("-")) {
+    console.error(`Unknown option "${first}".`);
+    console.error(help());
+    process.exitCode = 1;
+    return;
+  }
   const dryRun = rest.includes("--dry-run");
   const force = rest.includes("--force");
-  const dashDash = rest.indexOf("--");
-  const extraArgs =
-    dashDash >= 0
-      ? rest.slice(dashDash + 1)
-      : rest.filter((a) => a !== "--dry-run" && a !== "--force");
-  await cmdLaunch(first as string, extraArgs, dryRun, force);
+  const extraArgs = [
+    ...rest.filter((a) => a !== "--dry-run" && a !== "--force"),
+    ...passthrough,
+  ];
+  await cmdLaunch(first, extraArgs, dryRun, force);
 }
 
 main().catch((err) => {

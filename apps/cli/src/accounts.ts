@@ -13,13 +13,9 @@ import {
   FileUsageCache,
   defaultSubscriptionsDir,
   findAccountByCredential,
-  liveResyncHook,
+  freshVaultCredential,
 } from "@swisscode/adapters";
-import {
-  OAuthError,
-  ensureFreshCredential,
-  validateAccountId,
-} from "@swisscode/core";
+import { OAuthError, validateAccountId } from "@swisscode/core";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,8 +24,6 @@ const activeStore = new ClaudeActiveCredentialStore();
 const oauth = new AnthropicOAuthClient();
 const usageApi = new AnthropicUsageClient();
 const usageClient = new CachingUsageClient(usageApi, new FileUsageCache());
-/** Adopt Claude Code's live lineage when the vault refresh token rotated away. */
-const resync = liveResyncHook({ accounts, oauth, live: activeStore });
 
 export function accountsHelp(): string {
   return [
@@ -141,8 +135,10 @@ export async function cmdAccountsUsage(id?: string): Promise<void> {
   }
   for (const accountId of targets) {
     try {
-      const { credential } = await ensureFreshCredential(accounts, oauth, accountId as string, {
-        onInvalidGrant: resync,
+      // freshVaultCredential: one refresh per account, and adopt Claude Code's
+      // live lineage when the vault copy was rotated away.
+      const { credential } = await freshVaultCredential(accounts, oauth, accountId as string, {
+        liveStore: activeStore,
       });
       const snapshot = await usageClient.fetchUsage(accountId as string, credential.accessToken);
       const stale = snapshot.stale ? `  (stale, as of ${ago(snapshot.fetchedAt)})` : "";
@@ -172,9 +168,17 @@ export async function cmdAccountsUsage(id?: string): Promise<void> {
   }
 }
 
+/**
+ * Command line of a running Claude Code session. `pgrep -x claude` only sees
+ * the native binary and misses the common npm install, which runs as
+ * `node …/@anthropic-ai/claude-code/cli.js`. Written in the syntax both POSIX
+ * ERE (pgrep -f) and JS RegExp accept, so the test can assert on it directly.
+ */
+const CLAUDE_PROCESS_PATTERN = "(^|/)claude( |$)|claude-code/cli\\.js";
+
 async function otherClaudeSessions(): Promise<boolean> {
   try {
-    const { stdout } = await execFileAsync("pgrep", ["-x", "claude"]);
+    const { stdout } = await execFileAsync("pgrep", ["-f", CLAUDE_PROCESS_PATTERN]);
     const mine = String(process.pid);
     return stdout.split("\n").some((line) => line.trim() && line.trim() !== mine);
   } catch {
@@ -190,18 +194,20 @@ export async function activateAccount(id: string, force: boolean): Promise<boole
     process.exitCode = 1;
     return false;
   }
+  // Ask BEFORE refreshing: a refresh rotates the single-use token and persists
+  // the new one, so aborting afterwards would still have spent the credential.
+  if (!force && (await otherClaudeSessions())) {
+    console.error(
+      "Other `claude` sessions are running — switching the shared credential file " +
+        "will move them to this account too. Re-run with --force to proceed.",
+    );
+    process.exitCode = 1;
+    return false;
+  }
   try {
-    const { credential, refreshed } = await ensureFreshCredential(accounts, oauth, id, {
-      onInvalidGrant: resync,
+    const { credential, refreshed } = await freshVaultCredential(accounts, oauth, id, {
+      liveStore: activeStore,
     });
-    if (!force && (await otherClaudeSessions())) {
-      console.error(
-        "Other `claude` sessions are running — switching the shared credential file " +
-          "will move them to this account too. Re-run with --force to proceed.",
-      );
-      process.exitCode = 1;
-      return false;
-    }
     const before = await activeStore.readActive();
     await activeStore.writeActive(credential);
     console.log(`Switched Claude Code to "${id}"${refreshed ? " (token refreshed)" : ""}.`);
