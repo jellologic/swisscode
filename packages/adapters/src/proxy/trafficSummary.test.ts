@@ -471,4 +471,49 @@ describe("summarizeTrafficEntry", () => {
     assert.equal(merged?.turns, 2);
     assert.equal(merged?.id, "s-9");
   });
+
+  it("falls back to a synthetic id when link keys are not slug-shaped", () => {
+    const keyParser: TrafficParser = {
+      providerId: "test-unsafe",
+      canParse: () => true,
+      parseRequestBody: () => null,
+      summarize: () => ({ request: null, response: null, explanation: ["test"] }),
+      conversationKeys: (exchange) => (exchange as { linkKeys?: string[] }).linkKeys ?? [],
+    };
+    const parsers = [keyParser];
+    const mk = (linkKeys: string[], over: Partial<ProxyTrafficEntry> = {}) => {
+      const entry = { ...base(over), linkKeys } as ProxyTrafficEntry;
+      return { entry, summary: summarizeTrafficEntry(entry, parsers) };
+    };
+    // Session ids come from client-supplied request metadata: text that can
+    // address neither a route nor a local transcript is dropped, not rendered.
+    const [traversal] = groupTrafficConversations([mk(["session:../../etc/passwd"])], parsers);
+    assert.equal(traversal?.sessionId, undefined);
+    assert.equal(traversal?.id, "thread-0");
+    const [spaced] = groupTrafficConversations([mk(["session:hello world"])], parsers);
+    assert.equal(spaced?.id, "thread-0");
+    // An unsafe tool key still yields an address: the entry id when it is safe…
+    const [byEntry] = groupTrafficConversations([mk(["tool:<script>"], { id: "t1-2" })], parsers);
+    assert.equal(byEntry?.id, "t1-2");
+    // …the group's position otherwise, which stays unique per grouping.
+    const both = groupTrafficConversations([mk(["a b"]), mk(["c d"])], parsers);
+    assert.deepEqual(both.map((g) => g.id).sort(), ["thread-0", "thread-1"]);
+    // Slug-shaped keys are untouched.
+    const [ok] = groupTrafficConversations([mk(["session:sess-9"])], parsers);
+    assert.equal(ok?.id, "sess-9");
+    assert.equal(ok?.sessionId, "sess-9");
+  });
+
+  it("does not read a JSON reply that quotes “data:” as a stream", () => {
+    const entry = base({
+      method: "GET",
+      path: "/v1/unknown-thing",
+      reqBytes: 0,
+      resBody: JSON.stringify({ error: { message: "no data: available" } }),
+      resBytes: 44,
+    });
+    const summary = summarizeTrafficEntry(entry);
+    assert.equal(summary.response?.kind, "error");
+    assert.ok(summary.explanation.some((l) => l.includes("no data: available")));
+  });
 });

@@ -1,10 +1,10 @@
 // Session-context reader: transcript + workflow sidecars + agent defs.
 import { strict as assert } from "node:assert";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { findClaudeSession, readSessionContext } from "./sessionContext.js";
+import { findClaudeSession, readFileHead, readSessionContext } from "./sessionContext.js";
 
 const SID = "cf868b08-45c5-4313-9e32-fa2edf88df43";
 
@@ -180,5 +180,84 @@ describe("readSessionContext", () => {
     assert.ok(ctx);
     assert.equal(ctx.workflowScripts[0]!.scriptTruncated, true);
     assert.ok(ctx.workflowScripts[0]!.script.length <= 11);
+  });
+
+  it("stops reading a huge transcript at the byte cap", async () => {
+    const home = await mkdtemp(join(tmpdir(), "swisscode-session-"));
+    const proj = join(home, ".claude", "projects", "-huge-proj");
+    await mkdir(proj, { recursive: true });
+    const first = JSON.stringify({
+      type: "user",
+      cwd: "/work",
+      message: { role: "user", content: "first" },
+    });
+    // Everything past the cap must stay unread: a Workflow call and a second
+    // prompt live there, so their absence proves the cap bit at the read.
+    const beyond = [
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu_x", name: "Workflow", input: { script: "x".repeat(500_000) } },
+          ],
+        },
+      }),
+      JSON.stringify({ type: "user", message: { role: "user", content: "second" } }),
+    ];
+    const path = join(proj, "huge1.jsonl");
+    await writeFile(path, `${[first, ...beyond].join("\n")}\n`);
+    const cap = Buffer.byteLength(first) + 1;
+    const ctx = await readSessionContext("huge1", { home, maxTranscriptBytes: cap });
+    assert.ok(ctx);
+    assert.equal(ctx.transcriptEntries, 1);
+    assert.equal(ctx.userPrompts, 1);
+    assert.equal(ctx.firstPrompt, "first");
+    assert.deepEqual(ctx.toolTally, []);
+    assert.deepEqual(ctx.workflowScripts, []);
+  });
+
+  it("reads a multi-gigabyte transcript without loading it", async () => {
+    const home = await mkdtemp(join(tmpdir(), "swisscode-session-"));
+    const proj = join(home, ".claude", "projects", "-sparse-proj");
+    await mkdir(proj, { recursive: true });
+    const path = join(proj, "huge2.jsonl");
+    await writeFile(
+      path,
+      `${JSON.stringify({ type: "user", message: { role: "user", content: "first" } })}\n`,
+    );
+    // Sparse extension: 3 GiB of holes cost no blocks, but a whole-file read
+    // would allocate gigabytes or throw ERR_FS_FILE_TOO_LARGE.
+    await truncate(path, 3 * 1024 ** 3);
+    const ctx = await readSessionContext("huge2", { home, maxTranscriptBytes: 4_096 });
+    assert.ok(ctx);
+    assert.equal(ctx.firstPrompt, "first");
+    assert.equal(ctx.transcriptEntries, 1);
+  });
+});
+
+describe("readFileHead", () => {
+  it("reads at most the cap, never the whole file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-head-"));
+    const path = join(dir, "big.txt");
+    await writeFile(path, "z".repeat(500_000));
+    const head = await readFileHead(path, 1_000);
+    assert.ok(head);
+    assert.equal(head.bytesRead, 1_000);
+    assert.equal(head.text.length, 1_000);
+    assert.equal(head.truncated, true);
+  });
+
+  it("reads a short file whole and reports it complete", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-head-"));
+    const path = join(dir, "small.txt");
+    await writeFile(path, "hello\n");
+    const head = await readFileHead(path, 1_000);
+    assert.deepEqual(head, { text: "hello\n", bytesRead: 6, truncated: false });
+  });
+
+  it("returns null for a missing file instead of throwing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-head-"));
+    assert.equal(await readFileHead(join(dir, "nope.txt"), 10), null);
   });
 });
