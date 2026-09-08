@@ -31,6 +31,17 @@ export interface FreshCredential {
   refreshed: boolean;
 }
 
+export interface FreshCredentialOptions {
+  /**
+   * Called when the stored refresh token is rejected (invalid_grant).
+   * Rotation-aware owners (e.g. Claude Code) may have moved the lineage
+   * elsewhere — the hook can adopt the current one. Return undefined to
+   * keep the original error. An adopted credential is persisted by this
+   * function before it is returned.
+   */
+  onInvalidGrant?: (accountId: string) => Promise<OAuthCredential | undefined>;
+}
+
 /**
  * Return a usable credential for the account, refreshing + persisting when
  * expired. Throws OAuthError("invalid_grant") when the account needs re-login.
@@ -39,6 +50,7 @@ export async function ensureFreshCredential(
   accounts: AccountRepository,
   oauth: OAuthClient,
   accountId: string,
+  options: FreshCredentialOptions = {},
 ): Promise<FreshCredential> {
   const stored = await accounts.loadCredential(accountId);
   if (!stored) throw new ProfileError(`Unknown subscription account "${accountId}"`);
@@ -49,7 +61,19 @@ export async function ensureFreshCredential(
       `Account "${accountId}" has no refresh token — re-import it.`,
     );
   }
-  const next = await oauth.refresh(stored);
+  let next: OAuthCredential;
+  try {
+    next = await oauth.refresh(stored);
+  } catch (err) {
+    if (err instanceof OAuthError && err.kind === "invalid_grant" && options.onInvalidGrant) {
+      const adopted = await options.onInvalidGrant(accountId);
+      if (adopted) {
+        await accounts.saveCredential(accountId, adopted);
+        return { credential: adopted, refreshed: true };
+      }
+    }
+    throw err;
+  }
   await accounts.saveCredential(accountId, next);
   return { credential: next, refreshed: true };
 }

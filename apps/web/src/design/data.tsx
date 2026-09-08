@@ -11,10 +11,14 @@ interface TableProps<T> {
   rows: T[];
   getKey: (row: T, index: number) => string;
   empty?: ReactNode;
+  /** Optional row click (detail drill-down); makes rows keyboard-focusable. */
+  onRowClick?: (row: T, index: number) => void;
+  /** Key of the highlighted row (see getKey). */
+  selectedKey?: string;
 }
 
 /** Strictly typed table. Columns declare headers + renderers; no raw markup. */
-export function Table<T>({ columns, rows, getKey, empty }: TableProps<T>) {
+export function Table<T>({ columns, rows, getKey, empty, onRowClick, selectedKey }: TableProps<T>) {
   if (rows.length === 0 && empty !== undefined) return <>{empty}</>;
   return (
     <div className="sw-tablewrap">
@@ -27,13 +31,23 @@ export function Table<T>({ columns, rows, getKey, empty }: TableProps<T>) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => (
-            <tr key={getKey(row, i)}>
-              {columns.map((c) => (
-                <td key={c.header}>{c.render(row)}</td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((row, i) => {
+            const key = getKey(row, i);
+            const clickable = onRowClick !== undefined;
+            return (
+              <tr
+                key={key}
+                className={[selectedKey === key ? "sw-selected" : "", clickable ? "sw-clickable" : ""].join(" ").trim() || undefined}
+                onClick={clickable ? () => onRowClick(row, i) : undefined}
+                onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onRowClick(row, i); } } : undefined}
+                tabIndex={clickable ? 0 : undefined}
+              >
+                {columns.map((c) => (
+                  <td key={c.header}>{c.render(row)}</td>
+                ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

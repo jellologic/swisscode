@@ -74,6 +74,7 @@ function RootComponent() {
             { to: "/accounts", label: "Accounts" },
             { to: "/agents", label: "Agents" },
             { to: "/providers", label: "Providers" },
+            { to: "/proxy", label: "Proxy" },
             { to: "/help", label: "Help" },
             { to: "/settings", label: "Settings" },
           ]}

@@ -163,6 +163,8 @@ table.sw-table { border-collapse: collapse; width: 100%; font-size: var(--sw-tex
 .sw-table td { padding: var(--sw-space-2) var(--sw-space-4); border-bottom: 1px solid var(--sw-hairline); vertical-align: top; }
 .sw-table tr:last-child td { border-bottom: none; }
 .sw-table tbody tr:hover { background: var(--sw-accent-soft); }
+.sw-table tbody tr.sw-clickable { cursor: pointer; }
+.sw-table tbody tr.sw-selected { background: var(--sw-accent-soft); box-shadow: inset 2px 0 0 var(--sw-accent); }
 .sw-rowactions { display: flex; gap: var(--sw-space-2); flex-wrap: wrap; align-items: center; }
 
 /* ---------- Badge / meter / notice / misc ---------- */

@@ -12,7 +12,10 @@ import {
   getProviderModels,
   getProviderUsage,
   getProviders,
+  clearProxyTraffic,
   getProxyState,
+  getProxyTraffic,
+  getSessionContext,
   getUsage,
   importConfigBundle,
   validateProviderAccount,
@@ -26,6 +29,7 @@ import {
   saveCustomProvider,
   saveProfile,
   saveProviderAccount,
+  setProxyTrafficSize,
   storePath,
   switchSubscriptionAccount,
   updateProviderAccount,
@@ -105,6 +109,22 @@ export const proxyUseFn = createServerFn({ method: "POST" })
     await useProxyAccount(data.id);
     return { ok: true as const };
   });
+
+export const proxyTrafficFn = createServerFn({ method: "GET" })
+  .validator((data: { profile?: string } = {}) => data)
+  .handler(async ({ data }) => getProxyTraffic(data.profile));
+
+export const proxyTrafficClearFn = createServerFn({ method: "POST" }).handler(
+  async () => clearProxyTraffic(),
+);
+
+export const proxyTrafficSizeFn = createServerFn({ method: "POST" })
+  .validator((data: { size: number }) => data)
+  .handler(async ({ data }) => setProxyTrafficSize(data.size));
+
+export const proxySessionContextFn = createServerFn({ method: "GET" })
+  .validator((data: { sessionId: string }) => data)
+  .handler(async ({ data }) => ({ context: await getSessionContext(data.sessionId) }));
 
 export const switchSubscriptionFn = createServerFn({ method: "POST" })
   .validator((data: { id: string; force?: boolean }) => data)

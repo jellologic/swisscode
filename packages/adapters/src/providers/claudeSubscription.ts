@@ -3,6 +3,7 @@
 // buildEnv returns {} so launches inherit a clean provider slate.
 
 import type { ProviderPort } from "@swisscode/core";
+import { claudeTrafficParser } from "./claudeTrafficParser.js";
 
 export const claudeSubscriptionProvider: ProviderPort = {
   id: "claude-subscription",
@@ -30,4 +31,7 @@ export const claudeSubscriptionProvider: ProviderPort = {
   buildEnv(): Record<string, string> {
     return {};
   },
+
+  /** Claude Code's wire format: Anthropic messages SSE/JSON + model lists. */
+  trafficParser: claudeTrafficParser,
 };

@@ -8,6 +8,7 @@ import type {
   ProviderModel,
   ProviderUsageSnapshot,
 } from "./subscriptions.js";
+import type { TrafficParser } from "./traffic.js";
 
 /** Port: a coding-agent plugin ( Driven by core, implemented by adapters ). */
 export interface AgentPort {
@@ -41,6 +42,12 @@ export interface ProviderPort {
     config: Record<string, string> | undefined,
     profile: Pick<Profile, "model">,
   ): Record<string, string>;
+  /**
+   * How this provider reads its own proxy traffic. Optional: providers whose
+   * agents never go through the inspection proxy omit it, and unmatched
+   * traffic falls back to a shape-only summary.
+   */
+  readonly trafficParser?: TrafficParser;
 }
 
 /** Port: profile persistence. */

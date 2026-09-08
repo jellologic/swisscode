@@ -14,6 +14,7 @@ import {
   FileModelCatalogCache,
   FileProfileRepository,
   FileProviderAccountRepository,
+  liveResyncHook,
   FileUsageCache,
   OpenRouterAccountValidator,
   OpenRouterModelCatalog,
@@ -26,6 +27,12 @@ import {
   createProviderRegistry,
   defaultProfilesPath,
   maskSecret,
+  groupTrafficConversations,
+  summarizeTrafficEntry,
+  type ProxyTrafficEntry,
+  type SessionContext,
+  type TrafficConversation,
+  type TrafficSummary,
 } from "@swisscode/adapters";
 import {
   ensureFreshCredential,
@@ -75,6 +82,8 @@ const profiles = new FileProfileRepository(defaultProfilesPath());
 const vault = new FileAccountRepository();
 const activeStore = new ClaudeActiveCredentialStore();
 const oauth = new AnthropicOAuthClient();
+/** Adopt Claude Code's live lineage when the vault refresh token rotated away. */
+const resync = liveResyncHook({ accounts: vault, oauth, live: activeStore });
 const usageApi = new AnthropicUsageClient();
 const usageClient = new CachingUsageClient(usageApi, new FileUsageCache());
 const providerAccounts = new FileProviderAccountRepository();
@@ -304,13 +313,107 @@ export async function useProxyAccount(id: string): Promise<void> {
   }
 }
 
+export interface ProxyTrafficItem extends ProxyTrafficEntry {
+  summary: TrafficSummary;
+}
+
+export interface ProxyTrafficView {
+  running: boolean;
+  entries: ProxyTrafficItem[];
+  /** Conversation groups over entries (indexes align with entries). */
+  conversations: TrafficConversation[];
+  kept: number;
+  size: number;
+  profiles: string[];
+}
+
+/** Buffered proxy traffic (newest first), each with a plain-English summary. Never throws. */
+export async function getProxyTraffic(profile?: string): Promise<ProxyTrafficView> {
+  const empty: ProxyTrafficView = {
+    running: false,
+    entries: [],
+    conversations: [],
+    kept: 0,
+    size: 0,
+    profiles: [] as string[],
+  };
+  try {
+    const url =
+      profile !== undefined && profile !== ""
+        ? `${proxyBase()}/__swisscode/traffic?profile=${encodeURIComponent(profile)}`
+        : `${proxyBase()}/__swisscode/traffic`;
+    const res = await fetch(url);
+    if (!res.ok) return empty;
+    const body = (await res.json()) as {
+      entries?: ProxyTrafficEntry[];
+      kept?: number;
+      size?: number;
+      profiles?: string[];
+    };
+    const entries = (body.entries ?? []).map((entry) => ({
+      ...entry,
+      summary: summarizeTrafficEntry(entry),
+    }));
+    return {
+      running: true,
+      entries,
+      conversations: groupTrafficConversations(
+        entries.map((entry) => ({ entry, summary: entry.summary })),
+      ),
+      kept: body.kept ?? 0,
+      size: body.size ?? 0,
+      profiles: body.profiles ?? [],
+    };
+  } catch {
+    return empty;
+  }
+}
+
+/**
+ * Local Claude Code session behind a thread (transcript prompts, Workflow
+ * scripts, subagent branches). Null when the proxy is down or the session
+ * is not on this machine. Never throws.
+ */
+export async function getSessionContext(sessionId: string): Promise<SessionContext | null> {
+  try {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) return null;
+    const res = await fetch(`${proxyBase()}/__swisscode/session/${sessionId}`);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { context?: SessionContext | null };
+    return body.context ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearProxyTraffic(): Promise<{ cleared: number }> {
+  const res = await fetch(`${proxyBase()}/__swisscode/traffic`, { method: "DELETE" }).catch(() => {
+    throw new Error("Proxy is not running. Start it with `swisscode proxy run`.");
+  });
+  if (!res.ok) throw new Error(`Proxy returned HTTP ${res.status}`);
+  const body = (await res.json()) as { cleared?: number };
+  return { cleared: body.cleared ?? 0 };
+}
+
+export async function setProxyTrafficSize(size: number): Promise<{ size: number; kept: number }> {
+  const n = Math.min(10000, Math.max(0, Math.floor(size)));
+  const res = await fetch(`${proxyBase()}/__swisscode/traffic/size/${n}`, { method: "POST" }).catch(() => {
+    throw new Error("Proxy is not running. Start it with `swisscode proxy run`.");
+  });
+  if (!res.ok) throw new Error(`Proxy returned HTTP ${res.status}`);
+  const body = (await res.json()) as { size?: number; kept?: number };
+  return { size: body.size ?? n, kept: body.kept ?? 0 };
+}
+
 /** Live usage per account; never throws — errors are reported per account. */
 export async function getUsage(ids?: string[]): Promise<UsageResult[]> {
   const targets = ids ?? (await vault.list()).map((a) => a.id);
   const out: UsageResult[] = [];
   for (const accountId of targets) {
     try {
-      const { credential } = await ensureFreshCredential(vault, oauth, accountId);
+      const { credential } = await ensureFreshCredential(vault, oauth, accountId, {
+        onInvalidGrant: resync,
+      });
       out.push({ usage: await usageClient.fetchUsage(accountId, credential.accessToken) });
     } catch (err) {
       out.push({ error: `${accountId}: ${(err as Error).message}` });
@@ -356,7 +459,9 @@ async function otherClaudeSessionCount(): Promise<number> {
 export async function switchSubscriptionAccount(id: string, force = false): Promise<SwitchResult> {
   const account = await vault.get(id);
   if (!account) throw new Error(`Unknown subscription account "${id}"`);
-  const { credential, refreshed } = await ensureFreshCredential(vault, oauth, id);
+  const { credential, refreshed } = await ensureFreshCredential(vault, oauth, id, {
+    onInvalidGrant: resync,
+  });
   const otherSessions = await otherClaudeSessionCount();
   if (!force && otherSessions > 0) {
     return { switched: false, needsConfirm: true, otherSessions };

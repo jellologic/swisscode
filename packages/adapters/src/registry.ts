@@ -6,6 +6,7 @@ import type {
   AgentRegistry,
   ProviderPort,
   ProviderRegistry,
+  TrafficParser,
 } from "@swisscode/core";
 import { claudeCodeAgent } from "./agents/claudeCode.js";
 import { claudeSubscriptionProvider } from "./providers/claudeSubscription.js";
@@ -39,4 +40,14 @@ export function createProviderRegistry(
     get: (id: string) => map.get(id),
     list: () => [...map.values()],
   };
+}
+
+/**
+ * Every provider adapter's traffic parser, in provider order. The proxy and
+ * the inspection UI consume this — wire-format knowledge stays provider-owned.
+ */
+export function defaultTrafficParsers(extra: ProviderPort[] = []): TrafficParser[] {
+  return [...defaultProviders(), ...extra].flatMap((p) =>
+    p.trafficParser ? [p.trafficParser] : [],
+  );
 }

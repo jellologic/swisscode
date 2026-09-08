@@ -20,6 +20,11 @@ export function validateProfile(profile: Profile): void {
   validateProfileName(profile.name);
   if (!profile.agentId) throw new ProfileError("profile.agentId is required");
   if (!profile.providerId) throw new ProfileError("profile.providerId is required");
+  // The profile alone decides proxy routing, so an unroutable claim must fail
+  // loudly at save time — never silently ignored at launch.
+  if (profile.useProxy === true && !profile.subscriptionAccountId) {
+    throw new ProfileError(`Profile "${profile.name}" sets useProxy but has no subscriptionAccountId.`);
+  }
 }
 
 /** Check required provider fields are present. Throws ProfileError. */

@@ -13,6 +13,7 @@ import {
   FileUsageCache,
   defaultSubscriptionsDir,
   findAccountByCredential,
+  liveResyncHook,
 } from "@swisscode/adapters";
 import {
   OAuthError,
@@ -27,6 +28,8 @@ const activeStore = new ClaudeActiveCredentialStore();
 const oauth = new AnthropicOAuthClient();
 const usageApi = new AnthropicUsageClient();
 const usageClient = new CachingUsageClient(usageApi, new FileUsageCache());
+/** Adopt Claude Code's live lineage when the vault refresh token rotated away. */
+const resync = liveResyncHook({ accounts, oauth, live: activeStore });
 
 export function accountsHelp(): string {
   return [
@@ -138,7 +141,9 @@ export async function cmdAccountsUsage(id?: string): Promise<void> {
   }
   for (const accountId of targets) {
     try {
-      const { credential } = await ensureFreshCredential(accounts, oauth, accountId as string);
+      const { credential } = await ensureFreshCredential(accounts, oauth, accountId as string, {
+        onInvalidGrant: resync,
+      });
       const snapshot = await usageClient.fetchUsage(accountId as string, credential.accessToken);
       const stale = snapshot.stale ? `  (stale, as of ${ago(snapshot.fetchedAt)})` : "";
       console.log(`${accountId}:${stale}`);
@@ -186,7 +191,9 @@ export async function activateAccount(id: string, force: boolean): Promise<boole
     return false;
   }
   try {
-    const { credential, refreshed } = await ensureFreshCredential(accounts, oauth, id);
+    const { credential, refreshed } = await ensureFreshCredential(accounts, oauth, id, {
+      onInvalidGrant: resync,
+    });
     if (!force && (await otherClaudeSessions())) {
       console.error(
         "Other `claude` sessions are running — switching the shared credential file " +

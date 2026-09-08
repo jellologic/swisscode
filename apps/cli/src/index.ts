@@ -53,7 +53,8 @@ function help(): string {
 function redact(env: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
-    out[k] = /TOKEN|KEY|SECRET/i.test(k) && v ? "***redacted***" : v;
+    // Profile tags are identifiers, not secrets — leave them visible.
+    out[k] = /TOKEN|KEY|SECRET/i.test(k) && v && !v.startsWith("swisscode-profile/") ? "***redacted***" : v;
   }
   return out;
 }
@@ -129,8 +130,11 @@ async function cmdLaunch(
     throw err;
   }
   const args = [...spec.args, ...extraArgs];
+  // Proxy mode: the proxy strips client auth and signs with the vault
+  // account, so ANTHROPIC_AUTH_TOKEN carries a profile tag instead of a
+  // credential. The proxy reads it for traffic attribution, then discards it.
   const env = useProxy
-    ? { ...spec.env, ANTHROPIC_BASE_URL: proxyBaseUrl() }
+    ? { ...spec.env, ANTHROPIC_BASE_URL: proxyBaseUrl(), ANTHROPIC_AUTH_TOKEN: `swisscode-profile/${name}` }
     : spec.env;
   if (dryRun) {
     console.log(JSON.stringify({ command: spec.command, args, env: redact(env) }, null, 2));

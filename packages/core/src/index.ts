@@ -52,7 +52,20 @@ export {
   isCredentialExpired,
   validateAccountId,
 } from "./subscriptionService.js";
-export type { FreshCredential } from "./subscriptionService.js";
+export type {
+  TrafficAttempt,
+  TrafficContentBlockCount,
+  TrafficExchange,
+  TrafficMessagePreview,
+  TrafficParser,
+  TrafficRequestSummary,
+  TrafficResponseSummary,
+  TrafficRole,
+  TrafficRoute,
+  TrafficSummary,
+  TrafficToolCall,
+} from "./traffic.js";
+export type { FreshCredential, FreshCredentialOptions } from "./subscriptionService.js";
 export type { CustomProviderDef, CustomProviderTest, ValidateCustomOptions } from "./customProviders.js";
 export { validateCustomProviderDef } from "./customProviders.js";
 export type {
