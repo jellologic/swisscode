@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { Stack } from "./Card";
+import { useState, type ReactNode } from "react";
+import { Stack } from "./Card.js";
 
 export interface Column<T> {
   header: string;
@@ -151,17 +151,28 @@ export function ExtLink(props: { href: string; children: ReactNode }) {
   );
 }
 
-/** Native collapsible section, styled. onOpen fires lazily on first open. */
+/**
+ * Native collapsible section, styled. onOpen fires lazily on first open.
+ *
+ * Children mount on first open, never before: a closed <details> still
+ * renders its subtree, and these hold whole request/response bodies — one
+ * traffic page was megabytes of hidden <pre> text. Once opened they stay
+ * mounted so reopening is instant and nothing typed inside is lost.
+ */
 export function Disclosure(props: DisclosureProps) {
+  const [opened, setOpened] = useState(false);
   return (
     <details
       className="sw-disclosure"
       onToggle={(e) => {
-        if ((e.target as HTMLDetailsElement).open) props.onOpen?.();
+        if ((e.target as HTMLDetailsElement).open) {
+          setOpened(true);
+          props.onOpen?.();
+        }
       }}
     >
       <summary className="sw-disclosure-summary">{props.summary}</summary>
-      {props.children}
+      {opened ? props.children : null}
     </details>
   );
 }

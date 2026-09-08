@@ -7,6 +7,7 @@
     "dev": "vite dev --port 3000",
     "build": "vite build",
     "start": "node server.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/**/*.test.js\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

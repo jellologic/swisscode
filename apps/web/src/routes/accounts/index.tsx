@@ -190,7 +190,11 @@ function AccountsPage() {
               )}
               {confirming && (
                 <span>
-                  <Muted>{pendingSwitch.otherSessions} session(s) move too.</Muted>{" "}
+                  {/* The process list cannot say which sessions read the shared
+                      login — a proxied one does not — so this is an upper bound. */}
+                  <Muted>
+                    {pendingSwitch.otherSessions} other Claude session(s) may move too.
+                  </Muted>{" "}
                   <Button size="sm" variant="primary" onClick={() => void doSwitch(r.id, true)}>Switch anyway</Button>{" "}
                   <Button size="sm" variant="ghost" onClick={() => setPendingSwitch(null)}>Cancel</Button>
                 </span>

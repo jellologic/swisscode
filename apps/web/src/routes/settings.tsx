@@ -52,7 +52,9 @@ const resultColumns: Column<StoreImportResult>[] = [
 function SettingsPage() {
   const { inventory } = Route.useLoaderData();
   const router = useRouter();
-  const [includeSecrets, setIncludeSecrets] = useState(true);
+  // Opt-in: a backup with live credentials is only produced when this session
+  // asks for one, never as the default of a link someone can be sent.
+  const [includeSecrets, setIncludeSecrets] = useState(false);
   const [overwrite, setOverwrite] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<StoreImportResult[] | null>(null);

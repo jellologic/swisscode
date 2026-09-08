@@ -1,5 +1,9 @@
+// Server-function wrappers. Every `.validator` is a real runtime guard from
+// ./validate — the payload comes over HTTP, so the declared type proves
+// nothing — and it runs before the handler touches disk, Keychain or network.
+
 import { createServerFn } from "@tanstack/react-start";
-import type { Profile } from "@swisscode/core";
+import { setResponseHeader } from "@tanstack/react-start/server";
 import {
   deleteProfile,
   exportConfigBundle,
@@ -15,6 +19,7 @@ import {
   clearProxyTraffic,
   getProxyState,
   getProxyTraffic,
+  getProxyTrafficEntries,
   getSessionContext,
   getUsage,
   importConfigBundle,
@@ -35,6 +40,29 @@ import {
   updateProviderAccount,
   useProxyAccount,
 } from "./store.server";
+import {
+  parseAccountRef,
+  parseAccountUsage,
+  parseCustomProvider,
+  parseExportBundle,
+  parseImportAccount,
+  parseImportBundle,
+  parseModelRef,
+  parseOptionalProviderRef,
+  parseProfile,
+  parseProfileRef,
+  parseProviderAccountRef,
+  parseProviderRef,
+  parseRenameAccount,
+  parseSaveProviderAccount,
+  parseSessionRef,
+  parseSwitchAccount,
+  parseTrafficEntryRefs,
+  parseTrafficFilter,
+  parseTrafficSize,
+  parseUpdateProviderAccount,
+  parseValidateProviderAccount,
+} from "./validate";
 
 export const listProfilesFn = createServerFn({ method: "GET" }).handler(async () => ({
   profiles: await getProfiles(),
@@ -47,21 +75,21 @@ export const catalogFn = createServerFn({ method: "GET" }).handler(async () => (
 }));
 
 export const saveProfileFn = createServerFn({ method: "POST" })
-  .validator((data: Profile) => data)
+  .validator(parseProfile)
   .handler(async ({ data }) => {
     await saveProfile(data);
     return { ok: true as const };
   });
 
 export const deleteProfileFn = createServerFn({ method: "POST" })
-  .validator((data: { name: string }) => data)
+  .validator(parseProfileRef)
   .handler(async ({ data }) => {
     await deleteProfile(data.name);
     return { ok: true as const };
   });
 
 export const previewProfileFn = createServerFn({ method: "GET" })
-  .validator((data: { name: string }) => data)
+  .validator(parseProfileRef)
   .handler(async ({ data }) => previewProfile(data.name));
 
 export const listAccountsFn = createServerFn({ method: "GET" }).handler(
@@ -69,34 +97,32 @@ export const listAccountsFn = createServerFn({ method: "GET" }).handler(
 );
 
 export const importAccountFn = createServerFn({ method: "POST" })
-  .validator((data: { id: string; label?: string; overwrite?: boolean }) => data)
+  .validator(parseImportAccount)
   .handler(async ({ data }) => ({ account: await importAccount(data.id, data.label, data.overwrite) }));
 
 export const renameSubscriptionAccountFn = createServerFn({ method: "POST" })
-  .validator((data: { id: string; label: string }) => data)
+  .validator(parseRenameAccount)
   .handler(async ({ data }) => {
     await renameSubscriptionAccount(data.id, data.label);
     return { ok: true as const };
   });
 
 export const updateProviderAccountFn = createServerFn({ method: "POST" })
-  .validator(
-    (data: { providerId: string; id: string; label?: string; config?: Record<string, string> }) => data,
-  )
+  .validator(parseUpdateProviderAccount)
   .handler(async ({ data }) => {
     await updateProviderAccount(data.providerId, data.id, { label: data.label, config: data.config });
     return { ok: true as const };
   });
 
 export const removeAccountFn = createServerFn({ method: "POST" })
-  .validator((data: { id: string }) => data)
+  .validator(parseAccountRef)
   .handler(async ({ data }) => {
     await removeAccount(data.id);
     return { ok: true as const };
   });
 
 export const accountUsageFn = createServerFn({ method: "GET" })
-  .validator((data: { ids?: string[] } = {}) => data)
+  .validator(parseAccountUsage)
   .handler(async ({ data }) => ({ results: await getUsage(data.ids) }));
 
 export const proxyStateFn = createServerFn({ method: "GET" }).handler(
@@ -104,30 +130,35 @@ export const proxyStateFn = createServerFn({ method: "GET" }).handler(
 );
 
 export const proxyUseFn = createServerFn({ method: "POST" })
-  .validator((data: { id: string }) => data)
+  .validator(parseAccountRef)
   .handler(async ({ data }) => {
     await useProxyAccount(data.id);
     return { ok: true as const };
   });
 
 export const proxyTrafficFn = createServerFn({ method: "GET" })
-  .validator((data: { profile?: string } = {}) => data)
+  .validator(parseTrafficFilter)
   .handler(async ({ data }) => getProxyTraffic(data.profile));
+
+/** Bodies for the entries a page actually renders (the list ships none). */
+export const proxyTrafficEntriesFn = createServerFn({ method: "GET" })
+  .validator(parseTrafficEntryRefs)
+  .handler(async ({ data }) => ({ entries: await getProxyTrafficEntries(data.ids) }));
 
 export const proxyTrafficClearFn = createServerFn({ method: "POST" }).handler(
   async () => clearProxyTraffic(),
 );
 
 export const proxyTrafficSizeFn = createServerFn({ method: "POST" })
-  .validator((data: { size: number }) => data)
+  .validator(parseTrafficSize)
   .handler(async ({ data }) => setProxyTrafficSize(data.size));
 
 export const proxySessionContextFn = createServerFn({ method: "GET" })
-  .validator((data: { sessionId: string }) => data)
+  .validator(parseSessionRef)
   .handler(async ({ data }) => ({ context: await getSessionContext(data.sessionId) }));
 
 export const switchSubscriptionFn = createServerFn({ method: "POST" })
-  .validator((data: { id: string; force?: boolean }) => data)
+  .validator(parseSwitchAccount)
   .handler(async ({ data }) => switchSubscriptionAccount(data.id, data.force));
 
 export const currentLoginFn = createServerFn({ method: "GET" }).handler(
@@ -135,16 +166,14 @@ export const currentLoginFn = createServerFn({ method: "GET" }).handler(
 );
 
 export const listProviderAccountsFn = createServerFn({ method: "GET" })
-  .validator((data: { providerId?: string } = {}) => data)
+  .validator(parseOptionalProviderRef)
   .handler(async ({ data }) => ({ accounts: await listProviderAccountSummaries(data.providerId) }));
 
 export const saveProviderAccountFn = createServerFn({ method: "POST" })
-  .validator(
-    (data: { providerId: string; id: string; label: string; config: Record<string, string> }) => data,
-  )
+  .validator(parseSaveProviderAccount)
   .handler(async ({ data }) => {
     await saveProviderAccount({
-      id: data.id.trim(),
+      id: data.id,
       providerId: data.providerId,
       label: data.label,
       config: data.config,
@@ -155,45 +184,26 @@ export const saveProviderAccountFn = createServerFn({ method: "POST" })
   });
 
 export const removeProviderAccountFn = createServerFn({ method: "POST" })
-  .validator((data: { providerId: string; id: string }) => data)
+  .validator(parseProviderAccountRef)
   .handler(async ({ data }) => {
     await removeProviderAccount(data.providerId, data.id);
     return { ok: true as const };
   });
 
 export const providerUsageFn = createServerFn({ method: "GET" })
-  .validator((data: { providerId: string }) => data)
+  .validator(parseProviderRef)
   .handler(async ({ data }) => ({ results: await getProviderUsage(data.providerId) }));
 
 export const providerModelsFn = createServerFn({ method: "GET" })
-  .validator((data: { providerId: string }) => data)
+  .validator(parseProviderRef)
   .handler(async ({ data }) => getProviderModels(data.providerId));
 
 export const providerModelEndpointsFn = createServerFn({ method: "GET" })
-  .validator((data: { providerId: string; modelId: string }) => data)
+  .validator(parseModelRef)
   .handler(async ({ data }) => getProviderModelEndpoints(data.providerId, data.modelId));
 
 export const saveCustomProviderFn = createServerFn({ method: "POST" })
-  .validator((data: {
-    id: string;
-    displayName: string;
-    description?: string;
-    hint?: string;
-    fields: { key: string; label: string; secret: boolean; required: boolean; placeholder?: string; help?: string }[];
-    envStatic?: Record<string, string>;
-    envFromConfig?: Record<string, string>;
-    modelEnvVar?: string;
-    modelConfigKey?: string;
-    test?: {
-      url: string;
-      method?: "GET" | "POST";
-      headerName?: string;
-      authField?: string;
-      authScheme?: string;
-      expectStatus?: number;
-    };
-    help?: { summary?: string; setup?: string[]; commands?: string[]; links?: { label: string; href: string }[] };
-  }) => data)
+  .validator(parseCustomProvider)
   .handler(async ({ data }) => ({
     provider: await saveCustomProvider({
       ...data,
@@ -203,25 +213,31 @@ export const saveCustomProviderFn = createServerFn({ method: "POST" })
   }));
 
 export const removeCustomProviderFn = createServerFn({ method: "POST" })
-  .validator((data: { id: string }) => data)
+  .validator(parseAccountRef)
   .handler(async ({ data }) => ({ removed: await removeCustomProvider(data.id) }));
 
 export const bundleInventoryFn = createServerFn({ method: "GET" }).handler(
   async () => getBundleInventory(),
 );
 
-export const exportBundleFn = createServerFn({ method: "GET" })
-  .validator((data: { includeSecrets: boolean } = { includeSecrets: true }) => data)
+/**
+ * POST, not GET: a bundle can carry every OAuth token and API key on the
+ * machine, and secrets ship only when this request asks for them. no-store
+ * keeps that body out of any cache between here and the browser.
+ */
+export const exportBundleFn = createServerFn({ method: "POST" })
+  .validator(parseExportBundle)
   // JSON round-trip: guarantees the bundle is wire-safe (credential `extra`
   // fields are `unknown` at the type level) and satisfies the serializer.
-  .handler(async ({ data }) =>
-    JSON.parse(JSON.stringify(await exportConfigBundle(data.includeSecrets))),
-  );
+  .handler(async ({ data }) => {
+    setResponseHeader("cache-control", "no-store");
+    return JSON.parse(JSON.stringify(await exportConfigBundle(data.includeSecrets)));
+  });
 
 export const importBundleFn = createServerFn({ method: "POST" })
-  .validator((data: { bundle: unknown; overwrite: boolean }) => data)
+  .validator(parseImportBundle)
   .handler(async ({ data }) => ({ results: await importConfigBundle(data.bundle, data.overwrite) }));
 
 export const validateProviderAccountFn = createServerFn({ method: "POST" })
-  .validator((data: { providerId: string; config: Record<string, string> }) => data)
+  .validator(parseValidateProviderAccount)
   .handler(async ({ data }) => validateProviderAccount(data.providerId, data.config));
