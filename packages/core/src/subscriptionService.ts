@@ -1,7 +1,7 @@
 // Subscription orchestration: pure logic over the subscription ports.
 // Refresh-then-persist lives here so CLI and UI share one code path.
 
-import { ProfileError } from "./service.js";
+import { ProfileError, isRecordId } from "./service.js";
 import { OAuthError } from "./subscriptionPorts.js";
 import type { AccountRepository, OAuthClient } from "./subscriptionPorts.js";
 import type { OAuthCredential } from "./subscriptions.js";
@@ -18,7 +18,7 @@ export function isCredentialExpired(
 }
 
 export function validateAccountId(id: string): void {
-  if (!id || !/^[a-zA-Z0-9][a-zA-Z0-9-_]*$/.test(id)) {
+  if (!isRecordId(id)) {
     throw new ProfileError(
       `Invalid account id "${id}". Use letters, numbers, "-" or "_" and start with an alphanumeric.`,
     );
@@ -49,6 +49,14 @@ export interface FreshCredentialOptions {
    * there the credential came FROM the other owner, which already has it.
    */
   onRefreshed?: (credential: OAuthCredential) => Promise<void>;
+  /**
+   * Rotate even when the stored credential still looks fresh. Set only when
+   * the SERVER rejected that token (a mid-flight 401): our clock says valid,
+   * upstream says revoked, and upstream is right. Without it a forced recovery
+   * would have to bypass this function — and with it the account lock and the
+   * shared-lineage mirror that only live here.
+   */
+  force?: boolean;
 }
 
 /**
@@ -63,7 +71,9 @@ export async function ensureFreshCredential(
 ): Promise<FreshCredential> {
   const stored = await accounts.loadCredential(accountId);
   if (!stored) throw new ProfileError(`Unknown subscription account "${accountId}"`);
-  if (!isCredentialExpired(stored)) return { credential: stored, refreshed: false };
+  if (!options.force && !isCredentialExpired(stored)) {
+    return { credential: stored, refreshed: false };
+  }
   if (!stored.refreshToken) {
     throw new OAuthError(
       "no_refresh_token",

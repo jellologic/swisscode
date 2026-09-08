@@ -1,4 +1,5 @@
 import { mkdtemp } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -8,6 +9,11 @@ import { FileAccountRepository } from "../subscriptions/accountVault.js";
 import { AnthropicOAuthClient } from "../subscriptions/anthropic.js";
 import { PROXY_TOKEN_HEADER } from "./proxyToken.js";
 import { SubscriptionProxy, cooldownMsFromRetryAfter, isLoopbackHost } from "./server.js";
+
+// A refresh takes the vault's `<id>.lock`, whose directory is resolved from
+// SWISSCODE_HOME when the call happens — so the whole file gets a throwaway
+// home before any proxy runs. Nothing here may touch the user's real vault.
+process.env["SWISSCODE_HOME"] = mkdtempSync(join(tmpdir(), "proxy-home-"));
 
 /** A vault in a throwaway dir — never the real ~/.swisscode. */
 async function tempVault(prefix: string): Promise<FileAccountRepository> {
@@ -466,16 +472,20 @@ describe("SubscriptionProxy", () => {
         return { accessToken: "rotated-a", refreshToken: "r-next", expiresAt: future };
       },
     };
+    const mirrored: string[] = [];
     const live = {
       readActive: async () => ({
         backend: "file" as const,
         credential: { accessToken: "stale-a", refreshToken: "r-same", expiresAt: future },
       }),
-      writeActive: async () => {},
+      writeActive: async (credential: { accessToken: string }) => {
+        mirrored.push(credential.accessToken);
+      },
     };
     const proxy = new SubscriptionProxy(repo, oauth as unknown as AnthropicOAuthClient, {
       upstream: `http://127.0.0.1:${upstreamPort}`,
       liveStore: live as unknown as import("@swisscode/core").ActiveCredentialStore,
+      lockDir: join(dir, "subs"),
     });
     const port = await proxy.listen(0);
     try {
@@ -487,6 +497,10 @@ describe("SubscriptionProxy", () => {
     }
     assert.deepEqual(seenAuth, ["Bearer stale-a", "Bearer rotated-a"]);
     assert.equal(refreshCalls, 1);
+    // The vault copy and Claude Code share this refresh token, so our rotation
+    // killed the one Claude holds. Recovering by calling oauth.refresh directly
+    // skipped this write-back and logged the user's own `claude` out.
+    assert.deepEqual(mirrored, ["rotated-a"]);
   });
 
   it("tags entries by profile and filters the traffic endpoint", async () => {
@@ -896,6 +910,47 @@ describe("SubscriptionProxy", () => {
     }
   });
 
+  it("cannot be walked around the token gate with a dot-segment or absolute target", async () => {
+    const repo = await tempVault("proxy-token-bypass-");
+    await repo.save(
+      { id: "solo", label: "Solo", createdAt: "", updatedAt: "" },
+      { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + 3600_000 },
+    );
+    const proxy = new SubscriptionProxy(repo, new AnthropicOAuthClient(), {
+      fetchFn: (async () => new Response("{}", { status: 200 })) as typeof fetch,
+      controlToken: "s3cret-run-token",
+      trafficBufferSize: 10,
+    });
+    const port = await proxy.listen(0);
+    try {
+      // The gate used to test the RAW request-target with startsWith while the
+      // routes matched the WHATWG-normalized pathname, so every one of these
+      // reached the traffic/session data with no token at all.
+      for (const path of [
+        "/x/../__swisscode/traffic",
+        "/__swisscode/../__swisscode/traffic",
+        "/./__swisscode/traffic",
+        "/x/../__swisscode/session/abc",
+        "/x/../__swisscode/traffic/entry/t1-1",
+        `http://127.0.0.1:${port}/__swisscode/traffic`,
+      ]) {
+        const res = await rawRequest(port, { path });
+        assert.equal(res.status, 400, path);
+        assert.ok(!res.body.includes("entries"), `${path} must not answer with traffic`);
+        assert.ok(!res.body.includes("context"), `${path} must not answer with session context`);
+      }
+      // The token still opens the front door, and normal paths still route.
+      const right = await fetch(`http://127.0.0.1:${port}/__swisscode/traffic`, {
+        headers: { [PROXY_TOKEN_HEADER]: "s3cret-run-token" },
+      });
+      assert.equal(right.status, 200);
+      const api = await rawRequest(port, { path: "/v1/messages?beta=true", method: "POST" });
+      assert.equal(api.status, 200);
+    } finally {
+      await proxy.close();
+    }
+  });
+
   it("serves body-less listings and one entry by id", async () => {
     const repo = await tempVault("proxy-views-");
     await repo.save(
@@ -1003,6 +1058,9 @@ describe("SubscriptionProxy", () => {
     assert.equal(cooldownMsFromRetryAfter(null), 60_000);
     assert.equal(cooldownMsFromRetryAfter("30"), 30_000);
     assert.equal(cooldownMsFromRetryAfter("nonsense"), 60_000);
+    // Shared with the usage client: a header that is not delta-seconds is not
+    // a cooldown either — parseInt used to read this as twelve seconds.
+    assert.equal(cooldownMsFromRetryAfter("12abc"), 60_000);
     assert.equal(cooldownMsFromRetryAfter("99999"), 15 * 60_000); // clamped
 
     const repo = await tempVault("proxy-cooldown-");

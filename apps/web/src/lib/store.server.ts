@@ -22,6 +22,7 @@ import {
   defaultProviders,
   findAccountByCredential,
   loadCustomProviderPorts,
+  countOtherClaudeSessions,
   createAgentRegistry,
   createProviderRegistry,
   defaultProfilesPath,
@@ -29,11 +30,14 @@ import {
   groupTrafficConversations,
   proxyPort,
   summarizeTrafficEntry,
+  type ProcessProbe,
   type SessionContext,
   type TrafficConversation,
 } from "@swisscode/adapters";
 import {
+  collectSecretValues,
   ensureFreshCredential,
+  isRecordId,
   redactEnv,
   resolveLaunchSpec,
   resolveProviderConfig,
@@ -55,8 +59,7 @@ import {
   type StoreImportResult,
   type SubscriptionAccount,
 } from "@swisscode/core";
-import { collectSecretValues, mergeAccountConfig } from "./accountConfig.js";
-import { countOtherClaudeSessions, type ProcessProbe } from "./claudeSessions.js";
+import { mergeAccountConfig } from "./accountConfig.js";
 import { ProxyControlClient } from "./proxyClient.server.js";
 import type { ProxyTrafficItem } from "./threadView.js";
 
@@ -385,7 +388,7 @@ export async function getProxyTrafficEntries(ids: string[]): Promise<ProxyTraffi
  */
 export async function getSessionContext(sessionId: string): Promise<SessionContext | null> {
   try {
-    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) return null;
+    if (!isRecordId(sessionId)) return null;
     return await proxyControl.sessionContext(sessionId);
   } catch {
     return null;

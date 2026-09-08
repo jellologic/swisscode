@@ -10,6 +10,11 @@ import type {
   UsageWindow,
 } from "@swisscode/core";
 import { OAuthError } from "@swisscode/core";
+import { MAX_RETRY_AFTER_MS, parseRetryAfterMs } from "./retryAfter.js";
+
+// Re-exported: this module was the Retry-After ceiling's original home and
+// callers (and its tests) still reach for it here.
+export { MAX_RETRY_AFTER_MS };
 
 /** Same public client id Claude Code uses (see claude-swap oauth.py). */
 export const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
@@ -114,28 +119,8 @@ export class UsageError extends Error {
   }
 }
 
-/**
- * Ceiling for a server-sent Retry-After. The header feeds a cooldown that
- * suppresses every later usage fetch, so an hour (or a bogus 86400) would look
- * exactly like "usage is permanently broken" to the user, with no way out but
- * deleting the cache file. 15 minutes is long enough to stop a hammering loop
- * and short enough that a wrong value self-heals.
- */
-export const MAX_RETRY_AFTER_MS = 15 * 60 * 1000;
-
-function clampRetryAfter(ms: number): number {
-  if (!Number.isFinite(ms)) return MAX_RETRY_AFTER_MS;
-  return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, ms));
-}
-
 function retryAfterMs(res: Response): number | undefined {
-  const raw = res.headers.get("retry-after");
-  if (!raw) return undefined;
-  const seconds = Number(raw);
-  if (raw.trim() !== "" && Number.isFinite(seconds)) return clampRetryAfter(seconds * 1000);
-  const date = Date.parse(raw);
-  if (!Number.isNaN(date)) return clampRetryAfter(date - Date.now());
-  return undefined;
+  return parseRetryAfterMs(res.headers.get("retry-after"));
 }
 
 export class AnthropicUsageClient implements UsageClient {

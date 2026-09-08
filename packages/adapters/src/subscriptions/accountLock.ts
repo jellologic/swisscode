@@ -62,11 +62,42 @@ async function tryCreate(path: string): Promise<boolean> {
   }
 }
 
-/** Reclaim a lock whose mtime is older than `staleMs`. */
-async function reclaimIfStale(path: string, staleMs: number): Promise<void> {
-  const info = await stat(path).catch(() => undefined);
-  if (!info) return; // released while we looked — the next attempt wins it
-  if (Date.now() - info.mtimeMs > staleMs) await rm(path, { force: true }).catch(() => undefined);
+/**
+ * Reclaim a lock whose mtime is older than `staleMs`. True when this call is
+ * the one that cleared it.
+ *
+ * Reclaiming is itself a critical section. Several waiters can decide the SAME
+ * lock is stale at once, and a removal issued on that old observation lands
+ * after the winner has already taken a fresh lock — deleting it, so a third
+ * waiter creates its own and two processes now believe they hold the account.
+ * That is precisely the double refresh (and the invalid_grant behind it) this
+ * file exists to prevent, and no by-path removal is atomic enough to avoid it
+ * on its own: `rm` and `rename` both act on whatever is at the path WHEN THEY
+ * RUN, which may be seconds after the stat that judged it.
+ *
+ * So the reclaim runs under its own O_EXCL file and re-reads the mtime inside
+ * it, immediately before removing. One reclaimer at a time, judging what is
+ * actually there.
+ */
+async function reclaimIfStale(path: string, staleMs: number): Promise<boolean> {
+  const guard = `${path}.reclaim`;
+  // A reclaimer killed mid-flight would otherwise block every future reclaim.
+  // Two waiters clearing an orphaned guard together is harmless: the O_EXCL
+  // create below still admits exactly one of them.
+  const orphan = await stat(guard).catch(() => undefined);
+  if (orphan && Date.now() - orphan.mtimeMs > staleMs) {
+    await rm(guard, { force: true }).catch(() => undefined);
+  }
+  if (!(await tryCreate(guard))) return false; // another waiter is already on it
+  try {
+    const info = await stat(path).catch(() => undefined);
+    if (!info) return false; // released while we looked — the next attempt wins it
+    if (Date.now() - info.mtimeMs <= staleMs) return false;
+    await rm(path, { force: true }).catch(() => undefined);
+    return true;
+  } finally {
+    await rm(guard, { force: true }).catch(() => undefined);
+  }
 }
 
 /**
@@ -91,7 +122,10 @@ export async function withAccountLock<T>(
   for (;;) {
     locked = await tryCreate(path);
     if (locked) break;
-    await reclaimIfStale(path, staleMs);
+    // The waiter that won the reclaim retries at once instead of sleeping: the
+    // shorter `path` stays empty, the smaller the chance anyone else's reclaim
+    // lands on the fresh lock rather than the dead one.
+    if (await reclaimIfStale(path, staleMs)) continue;
     if (Date.now() >= deadline) break;
     await sleep(pollMs);
   }

@@ -11,11 +11,8 @@
   "include": [
     "src/lib/accountConfig.ts",
     "src/lib/accountConfig.test.ts",
-    "src/lib/claudeSessions.ts",
-    "src/lib/claudeSessions.test.ts",
     "src/lib/hostGuard.test.ts",
     "src/lib/proxyClient.server.ts",
-    "src/lib/proxyClient.server.test.ts",
     "src/lib/store.server.ts",
     "src/lib/store.server.test.ts",
     "src/lib/threadView.ts",

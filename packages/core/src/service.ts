@@ -5,7 +5,7 @@
 import type { LaunchSpec, Profile } from "./domain.js";
 import { isDeniedEnvName } from "./envPolicy.js";
 import type { AgentRegistry, ProviderRegistry } from "./ports.js";
-import { isProfileShape } from "./shapes.js";
+import { profileShapeProblem } from "./shapes.js";
 import type { ProviderAccount } from "./subscriptions.js";
 
 export class ProfileError extends Error {}
@@ -26,7 +26,19 @@ export const RESERVED_PROFILE_NAMES: readonly string[] = [
   "-h",
 ];
 
-const PROFILE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9-_]*$/;
+/**
+ * Syntax shared by every stored record id — profile names, subscription and
+ * provider account ids, the conversation/session ids that become URL segments.
+ * They all end up as a path segment or a route match, so they all obey one
+ * rule: alphanumeric first, then alphanumerics, "-" and "_". Stated once here
+ * because a laxer copy anywhere is the copy an attacker gets to use.
+ */
+export const RECORD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** True when `value` is a string safe to use as a stored record id. */
+export function isRecordId(value: unknown): value is string {
+  return typeof value === "string" && RECORD_ID_RE.test(value);
+}
 
 export function validateProfileName(name: string): void {
   // Reserved first: "--help" also fails the syntax rule, but "reserved" is the
@@ -37,52 +49,11 @@ export function validateProfileName(name: string): void {
       `Profile name "${name}" is reserved by the CLI (${RESERVED_PROFILE_NAMES.join(", ")}). Pick another name.`,
     );
   }
-  if (typeof name !== "string" || !PROFILE_NAME_RE.test(name)) {
+  if (!isRecordId(name)) {
     throw new ProfileError(
       `Invalid profile name "${name}". Use letters, numbers, "-" or "_" and start with an alphanumeric.`,
     );
   }
-}
-
-/**
- * Explain an isProfileShape rejection. Diagnosis only — the guard stays the
- * single source of truth for accept/reject; this just names the bad field so
- * an import error or a form message is actionable.
- */
-function profileShapeProblem(profile: unknown): string {
-  if (typeof profile !== "object" || profile === null || Array.isArray(profile)) {
-    return "Profile must be an object.";
-  }
-  const rec = profile as Record<string, unknown>;
-  const optionalString = (v: unknown): boolean => v === undefined || typeof v === "string";
-  for (const key of ["name", "agentId", "providerId"] as const) {
-    if (typeof rec[key] !== "string") return `profile.${key} must be a string.`;
-  }
-  const args = rec["agentArgs"];
-  if (args !== undefined && !(Array.isArray(args) && args.every((a) => typeof a === "string"))) {
-    return "profile.agentArgs must be an array of strings.";
-  }
-  const config = rec["providerConfig"];
-  if (
-    config !== undefined &&
-    !(
-      typeof config === "object" &&
-      config !== null &&
-      !Array.isArray(config) &&
-      Object.values(config).every((v) => typeof v === "string")
-    )
-  ) {
-    return "profile.providerConfig must be an object of string values.";
-  }
-  if (!optionalString(rec["model"])) return "profile.model must be a string.";
-  const useProxy = rec["useProxy"];
-  if (useProxy !== undefined && typeof useProxy !== "boolean") {
-    return "profile.useProxy must be true or false.";
-  }
-  for (const key of ["subscriptionAccountId", "providerAccountId"] as const) {
-    if (!optionalString(rec[key])) return `profile.${key} must be a string.`;
-  }
-  return "Profile has an unexpected shape.";
 }
 
 export function validateProfile(profile: Profile): void {
@@ -90,7 +61,8 @@ export function validateProfile(profile: Profile): void {
   // form payloads, where the type system has already stopped applying. Re-check
   // the shape before anything downstream spreads agentArgs into a command line
   // or reads providerConfig values as strings.
-  if (!isProfileShape(profile)) throw new ProfileError(profileShapeProblem(profile));
+  const problem = profileShapeProblem(profile);
+  if (problem !== undefined) throw new ProfileError(problem);
   validateProfileName(profile.name);
   if (!profile.agentId) throw new ProfileError("profile.agentId is required");
   if (!profile.providerId) throw new ProfileError("profile.providerId is required");
@@ -142,12 +114,28 @@ export function resolveProviderConfig(
 }
 
 /** Drop env names that decide how a process loads code (see envPolicy). */
-function stripDeniedEnvNames(env: Record<string, string>): Record<string, string> {
+function stripDeniedEnvNames(
+  env: Record<string, string>,
+  onDropped?: (name: string) => void,
+): Record<string, string> {
   const safe: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
-    if (!isDeniedEnvName(name)) safe[name] = value;
+    if (isDeniedEnvName(name)) {
+      onDropped?.(name);
+      continue;
+    }
+    safe[name] = value;
   }
   return safe;
+}
+
+export interface ResolveLaunchOptions {
+  /**
+   * Called once per env name dropped by the deny list. Exists so a shell can
+   * TELL the operator their stored config was ignored; the drop itself is not
+   * optional.
+   */
+  onDroppedEnv?: (name: string) => void;
 }
 
 /**
@@ -159,6 +147,7 @@ export function resolveLaunchSpec(
   agents: AgentRegistry,
   providers: ProviderRegistry,
   profile: Profile,
+  options: ResolveLaunchOptions = {},
 ): LaunchSpec {
   validateProfile(profile);
   const agent = agents.get(profile.agentId);
@@ -171,7 +160,10 @@ export function resolveLaunchSpec(
   // validator, and PATH/NODE_OPTIONS/DYLD_* in a launch env is code execution
   // rather than configuration. Strip on both sides of buildLaunch so neither the
   // agent adapter nor the spawned process ever sees one.
-  const providerEnv = stripDeniedEnvNames(provider.buildEnv(profile.providerConfig, profile));
+  const providerEnv = stripDeniedEnvNames(
+    provider.buildEnv(profile.providerConfig, profile),
+    options.onDroppedEnv,
+  );
   const spec = agent.buildLaunch(profile, providerEnv);
-  return { ...spec, env: stripDeniedEnvNames(spec.env) };
+  return { ...spec, env: stripDeniedEnvNames(spec.env, options.onDroppedEnv) };
 }

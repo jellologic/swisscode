@@ -18,7 +18,7 @@ import type {
   ActiveCredentialStore,
   OAuthCredential,
 } from "@swisscode/core";
-import { CredentialStoreError } from "@swisscode/core";
+import { CredentialStoreError, isRecord } from "@swisscode/core";
 import { readJsonFile, writeJsonAtomic } from "../store/atomicJson.js";
 
 const execFileAsync = promisify(execFile);
@@ -101,11 +101,9 @@ function fromCredential(cred: OAuthCredential): Record<string, unknown> {
   };
 }
 
+/** core's isRecord in the `Record | undefined` shape the merge sites want. */
 function asObject(value: unknown): Record<string, unknown> | undefined {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return undefined;
+  return isRecord(value) ? value : undefined;
 }
 
 /** Exit status of a failed `security` run, or undefined when it never ran. */
@@ -123,6 +121,17 @@ function spawnFailed(err: unknown): boolean {
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Diagnosis for a failed `security` run that never repeats its argv. Used
+ * wherever the command line carried the credential payload.
+ */
+function execDetail(err: unknown): string {
+  const stderr = (err as { stderr?: unknown }).stderr;
+  if (typeof stderr === "string" && stderr.trim()) return stderr.trim();
+  const code = exitCode(err);
+  return code === undefined ? "`security` failed" : `security exited ${code}`;
 }
 
 type KeychainRead =
@@ -341,11 +350,16 @@ export class ClaudeActiveCredentialStore implements ActiveCredentialStore {
         payload,
       ]);
     } catch (err) {
+      // NEVER `message(err)` here. execFile's message is "Command failed: <file>
+      // <all args>", and the args include `-w <credential JSON>` — so the raw
+      // message carries the access AND refresh token into the terminal, the
+      // browser and the mirror-back warning. Only the exit status and stderr
+      // are safe to repeat.
       throw new CredentialStoreError(
         "write-failed",
         `Could not update the Keychain item "${CLAUDE_KEYCHAIN_SERVICE}" ` +
           `(Keychain access was denied). Approve access for your terminal, then retry. ` +
-          `(${message(err)})`,
+          `(${execDetail(err)})`,
       );
     }
     // Confirm the item now holds what we wrote — guards silent duplicates.

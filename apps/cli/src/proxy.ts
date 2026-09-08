@@ -7,7 +7,9 @@ import {
   ClaudeActiveCredentialStore,
   DEFAULT_TRAFFIC_BODY_BYTES,
   FileAccountRepository,
-  PROXY_TOKEN_HEADER,
+  PROXY_TOKEN_REJECTED,
+  ProxyControlClient,
+  ProxyUnavailableError,
   SubscriptionProxy,
   createProxyToken,
   defaultProxyTokenPath,
@@ -15,7 +17,6 @@ import {
   defaultTrafficLogPath,
   proxyBaseUrl,
   proxyPort,
-  readProxyToken,
 } from "@swisscode/adapters";
 import type { ProxyTrafficEntry } from "@swisscode/adapters";
 
@@ -70,34 +71,25 @@ async function showTrafficLog(path: string, tail: number): Promise<void> {
   if (lines.length === 0) console.log("(empty — no proxied requests yet)");
 }
 
-async function proxyControl(port: number, path: string, method: string): Promise<unknown> {
-  // Control routes are token-gated: the running proxy minted the secret into
-  // a 0600 file that only this user can read, which is what stops a web page
-  // on this machine from switching the billed account behind our back.
-  const token = await readProxyToken();
-  const headers: Record<string, string> = token ? { [PROXY_TOKEN_HEADER]: token } : {};
-  let res: Response;
-  try {
-    res = await fetch(`${proxyBaseUrl(port)}${path}`, { method, headers });
-  } catch {
-    throw new Error(`Proxy is not running on port ${port}. Start it with \`swisscode proxy run\`.`);
-  }
-  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (res.status === 401) {
-    throw new Error(
-      `Proxy rejected the control token in ${defaultProxyTokenPath()}. Restart \`swisscode proxy run\` (a running proxy from an older run mints its own).`,
-    );
-  }
-  if (!res.ok) throw new Error(typeof body["error"] === "string" ? body["error"] : `HTTP ${res.status}`);
-  return body;
+/**
+ * Control-plane client for this invocation. The token read, the header, the
+ * 401/403 reading and the "not running" message all live in adapters — the CLI
+ * and the web UI must not diagnose the same dead proxy differently.
+ */
+function control(port: number): ProxyControlClient {
+  return new ProxyControlClient({ baseUrl: proxyBaseUrl(port) });
+}
+
+/** The token path is the CLI's own advice: it is the file the user can fix. */
+function controlErrorMessage(err: unknown): string {
+  const message = (err as Error).message;
+  return err instanceof ProxyUnavailableError && message === PROXY_TOKEN_REJECTED
+    ? `${message} (token file: ${defaultProxyTokenPath()})`
+    : message;
 }
 
 export async function proxyStatus(port: number): Promise<{ running: boolean; activeAccountId: string | null }> {
-  const body = (await proxyControl(port, "/__swisscode/status", "GET")) as {
-    running?: boolean;
-    activeAccountId?: string | null;
-    accounts?: { id: string; label: string }[];
-  };
+  const body = await control(port).status();
   console.log(`Proxy on :${port} — active: ${body.activeAccountId ?? "(none)"}`);
   for (const a of body.accounts ?? []) console.log(`  ${a.id}\t${a.label}`);
   return { running: body.running ?? true, activeAccountId: body.activeAccountId ?? null };
@@ -105,13 +97,11 @@ export async function proxyStatus(port: number): Promise<{ running: boolean; act
 
 export async function proxyUse(id: string, port: number): Promise<boolean> {
   try {
-    const body = (await proxyControl(port, `/__swisscode/use/${id}`, "POST")) as {
-      activeAccountId?: string;
-    };
-    console.log(`Proxy now using "${body.activeAccountId ?? id}".`);
+    await control(port).use(id);
+    console.log(`Proxy now using "${id}".`);
     return true;
   } catch (err) {
-    console.error((err as Error).message);
+    console.error(controlErrorMessage(err));
     process.exitCode = 1;
     return false;
   }
@@ -186,7 +176,7 @@ export async function cmdProxy(args: string[]): Promise<void> {
     try {
       await proxyStatus(port);
     } catch (err) {
-      console.error((err as Error).message);
+      console.error(controlErrorMessage(err));
       process.exitCode = 1;
     }
     return;

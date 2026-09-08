@@ -1,7 +1,16 @@
 // Provider-account config rules shared by the save path and the launch preview.
 // Pure: the store owns the I/O, this owns the decisions.
 
-import { DEFAULT_SECRET_NAME_RE, maskSecretValue, type FieldDef } from "@swisscode/core";
+import {
+  blankSecretValues,
+  maskSecretValue,
+  secretFieldKeys,
+  type FieldDef,
+} from "@swisscode/core";
+
+// Value-based redaction is core's (collectSecretValues), re-exported here so
+// the pages that already reach for this module keep one import.
+export { collectSecretValues } from "@swisscode/core";
 
 /**
  * Seed values for the edit form. The summary the page loads carries MASKED
@@ -13,12 +22,8 @@ export function blankSecrets(
   config: Record<string, string>,
   fields: readonly FieldDef[],
 ): Record<string, string> {
-  const secretKeys = new Set(fields.filter((f) => f.secret).map((f) => f.key));
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(config)) {
-    out[key] = secretKeys.has(key) ? "" : value;
-  }
-  return out;
+  const secretKeys = secretFieldKeys(fields);
+  return blankSecretValues(config, (key) => secretKeys.has(key));
 }
 
 /**
@@ -46,25 +51,4 @@ export function mergeAccountConfig(
     else config[key] = value;
   }
   return config;
-}
-
-/**
- * The secret VALUES in a config, for value-based redaction.
- *
- * Name-based redaction alone leaks: a custom provider is free to map its
- * `token` field to `MY_PASSWORD`, or to anything else. Feeding the actual
- * stored values to redactEnv masks the secret wherever it landed. A field
- * counts as secret when the provider declared it so, or when its key reads
- * like one — the same widened pattern redactEnv falls back to.
- */
-export function collectSecretValues(
-  config: Record<string, string> | undefined,
-  secretKeys: ReadonlySet<string>,
-): string[] {
-  const out: string[] = [];
-  for (const [key, value] of Object.entries(config ?? {})) {
-    if (!value) continue;
-    if (secretKeys.has(key) || DEFAULT_SECRET_NAME_RE.test(key)) out.push(value);
-  }
-  return out;
 }

@@ -310,3 +310,98 @@ describe("freshVaultCredential", () => {
     assert.equal(h.refreshCalls(), 0);
   });
 });
+
+describe("freshVaultCredential force", () => {
+  it("rotates a still-valid credential and mirrors it to a shared lineage", async () => {
+    // The proxy's 401 path: expiresAt is in the future, but upstream rejected
+    // the token. Rotating here (rather than in the proxy) is what keeps the
+    // account lock and the mirror-back in play.
+    const shared: OAuthCredential = { accessToken: "rejected", refreshToken: "rt-1", expiresAt: future };
+    const h = harness(shared, async () => ({
+      accessToken: "rotated",
+      refreshToken: "rt-2",
+      expiresAt: future,
+    }));
+    const live = recordingLiveStore(shared);
+    const out = await freshVaultCredential(h.accounts, h.oauth, "forced-account", {
+      lockDir: await lockDir(),
+      liveStore: live.store,
+      force: true,
+    });
+    assert.equal(out.credential.accessToken, "rotated");
+    assert.equal(h.refreshCalls(), 1);
+    // Without the mirror the user's next `claude` run would be logged out.
+    assert.deepEqual(live.writes().map((c) => c.accessToken), ["rotated"]);
+  });
+
+  it("does not re-adopt the very token upstream rejected", async () => {
+    // Claude Code holds the SAME access token: adopting it would 401 again.
+    const shared: OAuthCredential = { accessToken: "rejected", refreshToken: "rt-1", expiresAt: future };
+    const h = harness(shared, async () => ({
+      accessToken: "rotated",
+      refreshToken: "rt-2",
+      expiresAt: future,
+    }));
+    const out = await freshVaultCredential(h.accounts, h.oauth, "forced-same", {
+      lockDir: await lockDir(),
+      liveStore: liveStore({ ...shared }),
+      force: true,
+    });
+    assert.equal(out.credential.accessToken, "rotated");
+    assert.equal(h.refreshCalls(), 1);
+  });
+
+  it("adopts a live token that has already moved on, spending no rotation", async () => {
+    const h = harness({ accessToken: "rejected", refreshToken: "rt-1", expiresAt: future }, async () => {
+      throw new Error("must not refresh: Claude Code already rotated the access token");
+    });
+    const out = await freshVaultCredential(h.accounts, h.oauth, "forced-adopt", {
+      lockDir: await lockDir(),
+      liveStore: liveStore({ accessToken: "newer", refreshToken: "rt-1", expiresAt: future }),
+      force: true,
+    });
+    assert.equal(out.credential.accessToken, "newer");
+    assert.equal(h.refreshCalls(), 0);
+  });
+
+  it("never joins an ordinary in-flight ask, which would return the rejected token", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+    const h = harness({ accessToken: "rejected", refreshToken: "rt-1", expiresAt: past }, async () => {
+      await gate;
+      return { accessToken: "rotated", refreshToken: "rt-2", expiresAt: future };
+    });
+    const dir = await lockDir();
+    const ordinary = freshVaultCredential(h.accounts, h.oauth, "mixed-account", { lockDir: dir });
+    const forced = freshVaultCredential(h.accounts, h.oauth, "mixed-account", {
+      lockDir: dir,
+      force: true,
+    });
+    release?.();
+    const [a, b] = await Promise.all([ordinary, forced]);
+    assert.equal(a.credential.accessToken, "rotated");
+    assert.equal(b.credential.accessToken, "rotated");
+  });
+
+  it("still coalesces concurrent forced callers onto one rotation", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+    const h = harness({ accessToken: "rejected", refreshToken: "rt-1", expiresAt: future }, async () => {
+      await gate;
+      return { accessToken: "rotated", refreshToken: "rt-2", expiresAt: future };
+    });
+    const dir = await lockDir();
+    const calls = [0, 1, 2].map(() =>
+      freshVaultCredential(h.accounts, h.oauth, "forced-storm", { lockDir: dir, force: true }),
+    );
+    release?.();
+    const results = await Promise.all(calls);
+    // Three concurrent 401s must cost one rotation, not three invalid_grants.
+    assert.equal(h.refreshCalls(), 1);
+    for (const r of results) assert.equal(r.credential.accessToken, "rotated");
+  });
+});

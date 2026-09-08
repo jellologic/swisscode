@@ -4,8 +4,11 @@ import {
   isOAuthCredentialShape,
   isProfileShape,
   isProviderAccountShape,
+  isRecord,
+  isStringRecord,
   isSubscriptionAccountShape,
   isSubscriptionBackupShape,
+  profileShapeProblem,
 } from "./shapes.js";
 
 const profile = {
@@ -158,5 +161,61 @@ describe("isSubscriptionBackupShape", () => {
     assert.equal(isSubscriptionBackupShape({ account, credential: {} }), false);
     assert.equal(isSubscriptionBackupShape({ account, credential: null }), false);
     assert.equal(isSubscriptionBackupShape(null), false);
+  });
+});
+
+describe("profileShapeProblem", () => {
+  it("names the first bad field, and says nothing about a valid profile", () => {
+    assert.equal(profileShapeProblem(profile), undefined);
+    assert.equal(profileShapeProblem(7), "Profile must be an object.");
+    assert.equal(
+      profileShapeProblem({ ...profile, agentId: null }),
+      "profile.agentId must be a string.",
+    );
+    assert.equal(
+      profileShapeProblem({ ...profile, agentArgs: "--verbose" }),
+      "profile.agentArgs must be an array of strings.",
+    );
+    assert.equal(
+      profileShapeProblem({ ...profile, useProxy: "yes" }),
+      "profile.useProxy must be true or false.",
+    );
+  });
+
+  it("is the same decision isProfileShape makes (one source, not two)", () => {
+    const cases: unknown[] = [
+      profile,
+      { name: "p", agentId: "a", providerId: "b" },
+      null,
+      [],
+      { ...profile, providerConfig: { apiKey: 1 } },
+      { ...profile, model: 4 },
+      { ...profile, providerAccountId: {} },
+    ];
+    for (const value of cases) {
+      assert.equal(
+        isProfileShape(value),
+        profileShapeProblem(value) === undefined,
+        JSON.stringify(value),
+      );
+    }
+  });
+});
+
+describe("isRecord / isStringRecord", () => {
+  it("accepts plain objects only", () => {
+    assert.equal(isRecord({}), true);
+    assert.equal(isRecord({ a: 1 }), true);
+    for (const value of [null, undefined, [], [1], "s", 3, true]) {
+      assert.equal(isRecord(value), false, String(value));
+    }
+  });
+
+  it("demands flat string values — a nested object is what env mapping breaks on", () => {
+    assert.equal(isStringRecord({ a: "1", b: "2" }), true);
+    assert.equal(isStringRecord({}), true);
+    assert.equal(isStringRecord({ a: { b: "1" } }), false);
+    assert.equal(isStringRecord({ a: 1 }), false);
+    assert.equal(isStringRecord(["a"]), false);
   });
 });

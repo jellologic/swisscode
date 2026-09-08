@@ -21,12 +21,12 @@ import {
   proxyPort,
 } from "@swisscode/adapters";
 import {
-  DEFAULT_SECRET_NAME_RE,
   ProfileError,
-  isDeniedEnvName,
+  collectSecretValues,
   redactEnv,
   resolveLaunchSpec,
   resolveProviderConfig,
+  secretFieldKeys,
 } from "@swisscode/core";
 import type { LaunchSpec, Profile, ProviderAccount } from "@swisscode/core";
 import { activateAccount, cmdAccounts } from "./accounts.js";
@@ -89,16 +89,10 @@ async function resolveProfileForLaunch(stored: Profile): Promise<ResolvedProfile
  */
 async function secretValues(resolved: ResolvedProfile): Promise<string[]> {
   const provider = (await providerRegistry()).get(resolved.profile.providerId);
-  const secretKeys = new Set(
-    (provider?.fields ?? []).filter((f) => f.secret).map((f) => f.key),
+  const secretKeys = secretFieldKeys(provider?.fields ?? []);
+  return [resolved.profile.providerConfig, resolved.account?.config].flatMap((config) =>
+    collectSecretValues(config, secretKeys),
   );
-  const out: string[] = [];
-  for (const config of [resolved.profile.providerConfig, resolved.account?.config]) {
-    for (const [key, value] of Object.entries(config ?? {})) {
-      if (secretKeys.has(key) || DEFAULT_SECRET_NAME_RE.test(key)) out.push(value);
-    }
-  }
-  return out;
 }
 
 async function cmdList(): Promise<void> {
@@ -121,7 +115,9 @@ async function cmdShow(name: string): Promise<void> {
   }
   try {
     const resolved = await resolveProfileForLaunch(stored);
-    const spec = resolveLaunchSpec(agents, await providerRegistry(), resolved.profile);
+    const spec = resolveLaunchSpec(agents, await providerRegistry(), resolved.profile, {
+      onDroppedEnv: reportDroppedEnv,
+    });
     const secrets = await secretValues(resolved);
     // The stored profile is echoed (not the merged one) so an account's key
     // never appears here even unmasked; inline config is masked by the same rule.
@@ -145,21 +141,12 @@ async function cmdShow(name: string): Promise<void> {
 }
 
 /**
- * Drop env names that are code execution rather than configuration (PATH,
- * NODE_OPTIONS, DYLD_*, …). Stored provider data must never set them; core
- * rejects them at save time and this is the second line for data already on
- * disk — a profile that could set PATH chooses which binary "claude" is.
+ * Tell the operator which stored env names the launcher refused. The refusal
+ * itself is core's (resolveLaunchSpec strips them on both sides of
+ * buildLaunch); this only gives it a voice.
  */
-function withoutDeniedEnv(env: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [name, value] of Object.entries(env)) {
-    if (isDeniedEnvName(name)) {
-      console.error(`Ignoring env "${name}" from provider config — reserved by the launcher.`);
-      continue;
-    }
-    out[name] = value;
-  }
-  return out;
+function reportDroppedEnv(name: string): void {
+  console.error(`Ignoring env "${name}" from provider config — reserved by the launcher.`);
 }
 
 /** Proxy routing is a profile-only decision (validated at save time). */
@@ -175,14 +162,14 @@ function usesProxy(profile: Profile): boolean {
  * launch that would not happen.
  */
 function launchEnv(profile: Profile, spec: LaunchSpec): Record<string, string> {
-  const env = usesProxy(profile)
-    ? {
-        ...spec.env,
-        ANTHROPIC_BASE_URL: proxyBaseUrl(),
-        ANTHROPIC_AUTH_TOKEN: `swisscode-profile/${profile.name}`,
-      }
-    : spec.env;
-  return withoutDeniedEnv(env);
+  // spec.env is already deny-list filtered by resolveLaunchSpec, and the two
+  // keys added here are the launcher's own.
+  if (!usesProxy(profile)) return spec.env;
+  return {
+    ...spec.env,
+    ANTHROPIC_BASE_URL: proxyBaseUrl(),
+    ANTHROPIC_AUTH_TOKEN: `swisscode-profile/${profile.name}`,
+  };
 }
 
 /**
@@ -254,7 +241,9 @@ async function cmdLaunch(
   }
   let spec;
   try {
-    spec = resolveLaunchSpec(agents, await providerRegistry(), profile);
+    spec = resolveLaunchSpec(agents, await providerRegistry(), profile, {
+      onDroppedEnv: reportDroppedEnv,
+    });
   } catch (err) {
     if (err instanceof ProfileError) {
       console.error(`Invalid profile "${name}": ${err.message}`);

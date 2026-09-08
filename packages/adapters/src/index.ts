@@ -1,6 +1,3 @@
-import { join } from "node:path";
-import { homedir } from "node:os";
-
 export { claudeCodeAgent } from "./agents/claudeCode.js";
 export { claudeSubscriptionProvider } from "./providers/claudeSubscription.js";
 export { OPENROUTER_BASE_URL, openRouterProvider } from "./providers/openRouter.js";
@@ -71,9 +68,29 @@ export {
 } from "./proxy/proxyToken.js";
 export { SubscriptionProxy } from "./proxy/server.js";
 export { DEFAULT_PROXY_PORT } from "./proxy/server.js";
-import { DEFAULT_PROXY_PORT } from "./proxy/server.js";
 export type { ProxyOptions, ProxyStatus, ProxyTrafficAttempt, ProxyTrafficEntry } from "./proxy/server.js";
-export { MAX_TRAFFIC_BUFFER_SIZE, parseProfileTag } from "./proxy/server.js";
+export {
+  PROXY_NOT_RUNNING,
+  PROXY_TOKEN_REJECTED,
+  ProxyControlClient,
+  ProxyUnavailableError,
+} from "./proxy/controlClient.js";
+export type {
+  ProxyControlOptions,
+  TrafficListResponse,
+  TrafficQuery,
+} from "./proxy/controlClient.js";
+export {
+  NATIVE_PROBE,
+  NODE_CLI_PROBE,
+  countOtherClaudeSessions,
+  parsePids,
+} from "./subscriptions/claudeSessions.js";
+export type { ProcessProbe } from "./subscriptions/claudeSessions.js";
+export { MAX_RETRY_AFTER_MS, parseRetryAfterMs } from "./subscriptions/retryAfter.js";
+export type { ParseRetryAfterOptions } from "./subscriptions/retryAfter.js";
+export { defaultTrafficLogPath, proxyBaseUrl, proxyPort } from "./paths.js";
+export { MAX_TRAFFIC_BUFFER_SIZE, isLoopbackHost, parseProfileTag } from "./proxy/server.js";
 export { DEFAULT_TRAFFIC_BODY_BYTES } from "./proxy/server.js";
 export { groupTrafficConversations, parseRequestJson, summarizeTrafficEntry } from "./proxy/trafficSummary.js";
 export type {
@@ -93,21 +110,3 @@ export type {
   SessionWorkflowAgent,
   SessionWorkflowScript,
 } from "./proxy/sessionContext.js";
-
-/** Default JSONL traffic log next to the vault: ~/.swisscode/proxy-traffic.jsonl. */
-export function defaultTrafficLogPath(): string {
-  const base = process.env["SWISSCODE_HOME"] ?? join(homedir(), ".swisscode");
-  return join(base, "proxy-traffic.jsonl");
-}
-
-/** Proxy port: SWISSCODE_PROXY_PORT override, else the default. */
-export function proxyPort(explicit?: number | string): number {
-  const raw = explicit ?? process.env["SWISSCODE_PROXY_PORT"];
-  const n = typeof raw === "number" ? raw : parseInt(String(raw ?? ""), 10);
-  return Number.isFinite(n) && (n as number) > 0 ? (n as number) : DEFAULT_PROXY_PORT;
-}
-
-/** Base URL for a proxy on the given port. */
-export function proxyBaseUrl(port?: number | string): string {
-  return `http://127.0.0.1:${proxyPort(port)}`;
-}

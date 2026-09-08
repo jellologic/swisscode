@@ -15,8 +15,9 @@ import type {
 } from "@swisscode/core";
 import {
   BUNDLE_STORE_KEYS,
-  DEFAULT_SECRET_NAME_RE,
+  blankSecretValues,
   isProfileShape,
+  isSecretConfigKey,
   isProviderAccountShape,
   isSubscriptionBackupShape,
   validateAccountId,
@@ -89,7 +90,7 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
       const secrets = await deps.secretKeysFor(providerId);
       const test = known.has(providerId)
         ? (key: string) => secrets.has(key)
-        : (key: string) => secrets.has(key) || DEFAULT_SECRET_NAME_RE.test(key);
+        : (key: string) => isSecretConfigKey(key, secrets);
       cache.set(providerId, test);
       return test;
     };
@@ -118,9 +119,7 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
         providerAccounts.push(a);
       } else {
         const isSecret = await isSecretKey(a.providerId);
-        const config: Record<string, string> = {};
-        for (const [k, v] of Object.entries(a.config)) config[k] = isSecret(k) ? "" : v;
-        providerAccounts.push({ ...a, config });
+        providerAccounts.push({ ...a, config: blankSecretValues(a.config, isSecret) });
       }
     }
     return {
@@ -148,17 +147,15 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
     const config = profile.providerConfig;
     if (!config || Object.keys(config).length === 0) return profile;
     const isSecret = await isSecretKey(profile.providerId);
-    const next: Record<string, string> = {};
-    for (const [k, v] of Object.entries(config)) next[k] = isSecret(k) ? "" : v;
-    return { ...profile, providerConfig: next };
+    return { ...profile, providerConfig: blankSecretValues(config, isSecret) };
   }
 
   /** `envStatic` values are free text a user may have pasted a token into. */
   function blankEnvStatic(def: CustomProviderDef): CustomProviderDef {
     if (!def.envStatic || Object.keys(def.envStatic).length === 0) return def;
-    const envStatic: Record<string, string> = {};
-    for (const name of Object.keys(def.envStatic)) envStatic[name] = "";
-    return { ...def, envStatic };
+    // Every value, not just the secret-looking ones: envStatic is free text and
+    // there is no field declaration to consult.
+    return { ...def, envStatic: blankSecretValues(def.envStatic, () => true) };
   }
 
   async function importBundle(raw: unknown, opts: ImportBundleOptions): Promise<StoreImportResult[]> {

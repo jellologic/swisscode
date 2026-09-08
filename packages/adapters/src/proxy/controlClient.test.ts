@@ -2,9 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { PROXY_TOKEN_HEADER } from "@swisscode/adapters";
-
-import { ProxyControlClient, ProxyUnavailableError } from "./proxyClient.server.js";
+import { PROXY_TOKEN_HEADER } from "./proxyToken.js";
+import { ProxyControlClient, ProxyUnavailableError } from "./controlClient.js";
 
 interface Recorded {
   url: string;

@@ -11,6 +11,7 @@ import type {
   TrafficResponseSummary,
   TrafficSummary,
 } from "@swisscode/core";
+import { isRecordId } from "@swisscode/core";
 import type { ProxyTrafficEntry } from "./server.js";
 import { defaultTrafficParsers } from "../registry.js";
 import {
@@ -169,15 +170,17 @@ export interface TrafficConversation {
   sessionId?: string;
 }
 
-// A conversation id is a route segment (/proxy/<id>) and the lookup key for
-// on-disk session context, but its raw material — provider link keys — is
-// client-supplied (Claude reads the session id out of request metadata). Ids
-// that are not plain slugs get a synthetic id instead of a broken link.
-const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
-
-/** First candidate safe to use as a thread address, else undefined. */
+/**
+ * First candidate safe to use as a thread address, else undefined.
+ *
+ * A conversation id is a route segment (/proxy/<id>) and the lookup key for
+ * on-disk session context, but its raw material — provider link keys — is
+ * client-supplied (Claude reads the session id out of request metadata), so it
+ * must pass the same record-id rule every stored id does. Ids that are not
+ * plain slugs get a synthetic id instead of a broken link.
+ */
 function safeThreadId(...candidates: (string | undefined)[]): string | undefined {
-  return candidates.find((c): c is string => c !== undefined && SAFE_ID_RE.test(c));
+  return candidates.find((c): c is string => isRecordId(c));
 }
 
 function parserFor(

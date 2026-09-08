@@ -15,7 +15,12 @@ import type {
   OAuthCredential,
   SubscriptionAccount,
 } from "@swisscode/core";
-import { isOAuthCredentialShape, isSubscriptionAccountShape, validateAccountId } from "@swisscode/core";
+import {
+  isOAuthCredentialShape,
+  isRecord,
+  isSubscriptionAccountShape,
+  validateAccountId,
+} from "@swisscode/core";
 import { readJsonFile, writeJsonAtomic } from "../store/atomicJson.js";
 
 interface VaultFile {
@@ -47,9 +52,10 @@ export function defaultSubscriptionsDir(): string {
 }
 
 function isVaultFile(value: unknown): value is VaultFile {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const rec = value as Record<string, unknown>;
-  return isSubscriptionAccountShape(rec["account"]) && isOAuthCredentialShape(rec["credential"]);
+  if (!isRecord(value)) return false;
+  return (
+    isSubscriptionAccountShape(value["account"]) && isOAuthCredentialShape(value["credential"])
+  );
 }
 
 export class FileAccountRepository implements AccountRepository {

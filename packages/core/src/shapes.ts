@@ -11,8 +11,18 @@ import type { Profile } from "./domain.js";
 import type { OAuthCredential, ProviderAccount, SubscriptionAccount } from "./subscriptions.js";
 import type { SubscriptionBackup } from "./configBundle.js";
 
-function isRecord(x: unknown): x is Record<string, unknown> {
+/**
+ * A plain object: not null, not an array. The foundation every other guard
+ * (and every store, form parser and cache reader) stands on, so it is exported
+ * rather than re-typed at each boundary.
+ */
+export function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null && !Array.isArray(x);
+}
+
+/** Record<string,string> with no nested objects — what env mapping assumes. */
+export function isStringRecord(x: unknown): x is Record<string, string> {
+  return isRecord(x) && Object.values(x).every((v) => typeof v === "string");
 }
 
 function isOptionalString(x: unknown): boolean {
@@ -23,13 +33,8 @@ function isOptionalStringArray(x: unknown): boolean {
   return x === undefined || (Array.isArray(x) && x.every((v) => typeof v === "string"));
 }
 
-/** Record<string,string> with no nested objects — what env mapping assumes. */
 function isOptionalStringRecord(x: unknown): boolean {
   return x === undefined || isStringRecord(x);
-}
-
-function isStringRecord(x: unknown): boolean {
-  return isRecord(x) && Object.values(x).every((v) => typeof v === "string");
 }
 
 /** Timestamps are re-stamped by every repository save, so absent is tolerated. */
@@ -37,19 +42,60 @@ function hasValidTimestamps(rec: Record<string, unknown>): boolean {
   return isOptionalString(rec["createdAt"]) && isOptionalString(rec["updatedAt"]);
 }
 
+/**
+ * One rule per profile field: the predicate that accepts it and the sentence
+ * that explains a rejection. Accept/reject and the diagnosis therefore come
+ * from a single list — a second hand-written copy of these predicates (there
+ * used to be one in service.ts) drifts the moment a field is added.
+ */
+const PROFILE_RULES: readonly { key: string; ok: (v: unknown) => boolean; problem: string }[] = [
+  { key: "name", ok: (v) => typeof v === "string", problem: "profile.name must be a string." },
+  { key: "agentId", ok: (v) => typeof v === "string", problem: "profile.agentId must be a string." },
+  { key: "providerId", ok: (v) => typeof v === "string", problem: "profile.providerId must be a string." },
+  {
+    key: "agentArgs",
+    ok: isOptionalStringArray,
+    problem: "profile.agentArgs must be an array of strings.",
+  },
+  {
+    key: "providerConfig",
+    ok: isOptionalStringRecord,
+    problem: "profile.providerConfig must be an object of string values.",
+  },
+  { key: "model", ok: isOptionalString, problem: "profile.model must be a string." },
+  {
+    key: "useProxy",
+    ok: (v) => v === undefined || typeof v === "boolean",
+    problem: "profile.useProxy must be true or false.",
+  },
+  {
+    key: "subscriptionAccountId",
+    ok: isOptionalString,
+    problem: "profile.subscriptionAccountId must be a string.",
+  },
+  {
+    key: "providerAccountId",
+    ok: isOptionalString,
+    problem: "profile.providerAccountId must be a string.",
+  },
+];
+
+/**
+ * Name the first field that makes `x` an invalid Profile, or undefined when it
+ * is one. Callers turn the sentence into their own error type (ProfileError in
+ * core, InputError in the web validator) so an import or a form message says
+ * WHICH field is wrong.
+ */
+export function profileShapeProblem(x: unknown): string | undefined {
+  if (!isRecord(x)) return "Profile must be an object.";
+  for (const rule of PROFILE_RULES) {
+    if (!rule.ok(x[rule.key])) return rule.problem;
+  }
+  return undefined;
+}
+
 export function isProfileShape(x: unknown): x is Profile {
-  if (!isRecord(x)) return false;
-  return (
-    typeof x["name"] === "string" &&
-    typeof x["agentId"] === "string" &&
-    typeof x["providerId"] === "string" &&
-    isOptionalStringArray(x["agentArgs"]) &&
-    isOptionalStringRecord(x["providerConfig"]) &&
-    isOptionalString(x["model"]) &&
-    (x["useProxy"] === undefined || typeof x["useProxy"] === "boolean") &&
-    isOptionalString(x["subscriptionAccountId"]) &&
-    isOptionalString(x["providerAccountId"])
-  );
+  return profileShapeProblem(x) === undefined;
 }
 
 export function isProviderAccountShape(x: unknown): x is ProviderAccount {

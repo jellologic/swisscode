@@ -11,7 +11,7 @@
 // Messages name the field and the expectation but never echo the value —
 // these payloads carry API keys.
 
-import { isProfileShape, type Profile } from "@swisscode/core";
+import { RECORD_ID_RE, isRecord, profileShapeProblem, type Profile } from "@swisscode/core";
 
 /** Rejected input. Typed like ProfileError/OAuthError so callers can tell it apart. */
 export class InputError extends Error {
@@ -24,8 +24,8 @@ export class InputError extends Error {
   }
 }
 
-/** Stored-record ids: the same rule as validateAccountId / validateProfileName. */
-export const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+/** Stored-record ids: literally core's rule, so the UI and the stores agree. */
+export const ID_RE = RECORD_ID_RE;
 
 /** Model ids are vendor strings ("anthropic/claude-sonnet-4.5"), not record ids. */
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/;
@@ -37,10 +37,8 @@ const MAX_LIST = 500;
 const MAX_MAP_KEYS = 200;
 
 function asRecord(value: unknown, field: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new InputError(field, "must be an object");
-  }
-  return value as Record<string, unknown>;
+  if (!isRecord(value)) throw new InputError(field, "must be an object");
+  return value;
 }
 
 export function text(value: unknown, field: string, max = MAX_TEXT): string {
@@ -115,10 +113,15 @@ export function identifierList(value: unknown, field: string, max = MAX_LIST): s
 
 // ---- Per-function parsers (one per server fn that takes input) ----
 
-/** A whole profile submitted by the form. Deep rules stay in validateProfile. */
+/**
+ * A whole profile submitted by the form. Deep rules stay in validateProfile;
+ * the shape check (and the sentence naming the bad field) is core's, so the
+ * form and the store reject the same payloads for the same stated reason.
+ */
 export function parseProfile(data: unknown): Profile {
-  if (!isProfileShape(data)) throw new InputError("profile", "must be a profile record");
-  return data;
+  const problem = profileShapeProblem(data);
+  if (problem !== undefined) throw new InputError("profile", `is invalid — ${problem}`);
+  return data as Profile;
 }
 
 export function parseProfileRef(data: unknown): { name: string } {

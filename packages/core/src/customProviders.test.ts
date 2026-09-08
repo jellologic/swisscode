@@ -82,6 +82,10 @@ describe("validateCustomProviderDef test.url", () => {
       "https://localhost/key",
       "https://LOCALHOST:9000/key",
       "https://api.localhost/key",
+      // Fully-qualified spellings: the URL parser keeps the trailing dot and
+      // the resolver ignores it, so both still name this machine.
+      "https://localhost./key",
+      "https://api.localhost./key",
       "https://127.0.0.1/key",
       "https://127.9.9.9/key",
       "https://0.0.0.0/key",

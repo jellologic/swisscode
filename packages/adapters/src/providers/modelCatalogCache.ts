@@ -9,6 +9,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ModelEndpoint, ProviderModel, ProviderModelCatalog } from "@swisscode/core";
+import { isRecord } from "@swisscode/core";
 import { readJsonOrDefault, withStoreLock, writeJsonAtomic } from "../store/atomicJson.js";
 
 export interface ModelCatalogCacheEntry {
@@ -36,10 +37,7 @@ export class FileModelCatalogCache {
 
   private async readAll(): Promise<Record<string, unknown>> {
     const parsed = await readJsonOrDefault<unknown>(this.path, {});
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-    return {};
+    return isRecord(parsed) ? parsed : {};
   }
 
   private async writeAll(all: Record<string, unknown>): Promise<void> {

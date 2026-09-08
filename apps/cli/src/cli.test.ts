@@ -46,10 +46,11 @@ before(async () => {
     '#!/bin/sh\necho "GOOD-CLAUDE $*"\nif [ -n "$FAKE_CLAUDE_SLEEP" ]; then while :; do sleep 1; done\nfi\n',
   );
   await writeExecutable(join(evilBinDir, "claude"), '#!/bin/sh\necho "EVIL-CLAUDE"\n');
-  // Records how it was called, then reports one foreign pid.
+  // Appends one line per invocation (the session probe runs pgrep twice), then
+  // reports the same foreign pid both times.
   await writeExecutable(
     join(binDir, "pgrep"),
-    '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$SWISSCODE_HOME/pgrep-args"\necho 99999\n',
+    '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$SWISSCODE_HOME/pgrep-args"\necho 99999\n',
   );
 
   await writeJson(join(home, "profiles.json"), [
@@ -321,17 +322,20 @@ describe("swisscode accounts use", () => {
     assert.equal(await readFile(vaultPath, "utf8"), before);
   });
 
-  test("matches claude by command line, not just the native binary name", async () => {
-    const recorded = (await readFile(join(home, "pgrep-args"), "utf8")).split("\n");
-    assert.equal(recorded[0], "-f");
-    const pattern = new RegExp(recorded[1] ?? "");
-    assert.ok(pattern.test("claude"), "bare binary");
-    assert.ok(pattern.test("/usr/local/bin/claude --resume"), "native binary with args");
+  test("probes for both the native binary and the node-launched CLI", async () => {
+    const recorded = (await readFile(join(home, "pgrep-args"), "utf8"))
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+    // Exactly the adapters-side probe set, so the CLI warning and the web UI's
+    // count can never look at different process lists.
+    assert.deepEqual(recorded, ["-x claude", "-f claude-code/cli\\.js"]);
+    // `pgrep -x claude` alone misses the common npm install, which runs as
+    // `node …/@anthropic-ai/claude-code/cli.js`.
+    const nodeCli = new RegExp("claude-code/cli\\.js");
     assert.ok(
-      pattern.test("node /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js"),
+      nodeCli.test("node /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js"),
       "npm install running as node",
     );
-    assert.ok(!pattern.test("node /home/me/.swisscode/apps/cli/dist/index.js claude"), "swisscode itself");
-    assert.ok(!pattern.test("/home/me/.claude/statusline.sh"), "unrelated ~/.claude tooling");
+    assert.ok(!nodeCli.test("/home/me/.claude/statusline.sh"), "unrelated ~/.claude tooling");
   });
 });

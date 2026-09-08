@@ -45,6 +45,13 @@ export interface FreshVaultCredentialOptions {
   profile?: EmailLookup;
   /** Non-fatal problems, e.g. the mirror back into Claude's store failed. */
   onWarning?: (message: string) => void;
+  /**
+   * Rotate even when the stored credential still looks fresh. Set only by a
+   * caller upstream ALREADY rejected (a mid-flight 401): without it such a
+   * caller would have to refresh on its own and would then skip the
+   * cross-process lock and the shared-lineage mirror below.
+   */
+  force?: boolean;
 }
 
 /**
@@ -70,17 +77,25 @@ async function resolveExpired(
 ): Promise<FreshCredential> {
   // Re-read under the lock: another process may have refreshed while we waited.
   const stored = await accounts.loadCredential(accountId);
-  if (stored && !isCredentialExpired(stored)) return { credential: stored, refreshed: false };
+  if (!opts.force && stored && !isCredentialExpired(stored)) {
+    return { credential: stored, refreshed: false };
+  }
 
   const shared = stored ? await sharedLiveCredential(opts.liveStore, stored) : undefined;
-  if (shared && !isCredentialExpired(shared)) {
+  // Under `force` the stored access token is the one upstream just refused, so
+  // adopting an identical copy from Claude's store would only 401 again.
+  if (
+    shared &&
+    !isCredentialExpired(shared) &&
+    (!opts.force || shared.accessToken !== stored?.accessToken)
+  ) {
     // Claude Code already refreshed this lineage (or never let it expire).
     // Adopting its access token costs no rotation at all.
     await accounts.saveCredential(accountId, shared);
     return { credential: shared, refreshed: false };
   }
 
-  const options: FreshCredentialOptions = {};
+  const options: FreshCredentialOptions = opts.force ? { force: true } : {};
   const hook = liveResyncHook({
     accounts,
     oauth,
@@ -118,11 +133,15 @@ export async function freshVaultCredential(
   accountId: string,
   opts: FreshVaultCredentialOptions = {},
 ): Promise<FreshCredential> {
-  return inflight.run(accountId, async () => {
+  // Forced callers get their own coalescing key: joining an in-flight ordinary
+  // ask would hand them back the very token upstream just rejected.
+  return inflight.run(opts.force ? `${accountId}\u0000force` : accountId, async () => {
     // Fast path: a valid credential needs neither the lock file nor a Keychain
     // read, and this runs on every proxied request.
     const stored = await accounts.loadCredential(accountId);
-    if (stored && !isCredentialExpired(stored)) return { credential: stored, refreshed: false };
+    if (!opts.force && stored && !isCredentialExpired(stored)) {
+      return { credential: stored, refreshed: false };
+    }
     const dir = opts.lockDir ?? defaultSubscriptionsDir();
     const run = await withAccountLock(dir, accountId, () =>
       resolveExpired(accounts, oauth, accountId, opts),

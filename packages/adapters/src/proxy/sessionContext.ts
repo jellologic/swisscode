@@ -14,6 +14,7 @@
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isRecordId } from "@swisscode/core";
 
 /** A Workflow tool call found in the transcript, with its script source. */
 export interface SessionWorkflowScript {
@@ -97,7 +98,6 @@ const MAX_AGENT_DEF_BYTES = 2_000;
 const MAX_WORKFLOWS = 8;
 const MAX_TALLY = 12;
 
-const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 function oneLine(text: string, max = MAX_HEAD_CHARS): string {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -229,7 +229,9 @@ export async function findClaudeSession(
   sessionId: string,
   home: string = homedir(),
 ): Promise<{ transcriptPath: string; dir: string } | null> {
-  if (!SESSION_ID_RE.test(sessionId)) return null;
+  // A session id becomes a path segment under ~/.claude, so it obeys the same
+  // record-id rule as every other id that reaches the filesystem.
+  if (!isRecordId(sessionId)) return null;
   let slugs: string[];
   try {
     slugs = await readdir(join(home, ".claude", "projects"));
@@ -485,7 +487,7 @@ export async function readSessionContext(
       ...ctx.taskLaunches.map((l) => l.subagentType).filter((n): n is string => !!n),
     ])].slice(0, MAX_AGENTS);
     for (const name of names) {
-      if (!SESSION_ID_RE.test(name)) continue;
+      if (!isRecordId(name)) continue;
       const path = join(home, ".claude", "agents", `${name}.md`);
       const def = await readFileHead(path, MAX_AGENT_DEF_BYTES);
       // No user-level definition by that name, or an empty one.

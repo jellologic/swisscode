@@ -8,11 +8,12 @@
 // bundle export. So: bind loopback, and refuse any request whose Host is not
 // one this server is meant to answer for.
 //
-// Plain JS with no imports on purpose — server.mjs runs straight from node
-// with no build step, and this file is unit-tested next to the app's sources.
+// Plain JS: server.mjs runs straight from node with no build step. Its ONE
+// import is the loopback test, which the proxy already owns — two copies of
+// that regex is two chances for one of them to drift into accepting a name
+// this process should never answer for.
 
-/** localhost / 127.0.0.1 / [::1], with an optional :port. */
-const LOOPBACK_HOST_RE = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/i;
+import { isLoopbackHost } from "@swisscode/adapters";
 
 /** Wildcards say "bind everywhere"; they are not a name a client can send. */
 const WILDCARD_HOSTS = new Set(["0.0.0.0", "::", "[::]", ""]);
@@ -32,7 +33,7 @@ export function isAllowedHost(host, configuredHost = webHost()) {
   if (typeof host !== "string") return false;
   const value = host.trim().toLowerCase();
   if (value === "") return false;
-  if (LOOPBACK_HOST_RE.test(value)) return true;
+  if (isLoopbackHost(value)) return true;
   const configured = String(configuredHost ?? "").trim().toLowerCase();
   if (WILDCARD_HOSTS.has(configured)) return false;
   // Same host, with or without the port we are serving on.

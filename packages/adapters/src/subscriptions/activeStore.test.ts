@@ -204,6 +204,69 @@ describe("ClaudeActiveCredentialStore keychain diagnosis", () => {
     );
   });
 
+  it("never repeats the argv of a failed Keychain write (it carries the tokens)", async () => {
+    // execFile's message is "Command failed: <file> <all args>", and the args
+    // include `-w <credential JSON>`. Interpolating it printed the access AND
+    // refresh token to the terminal, the browser and the mirror-back warning.
+    const secret: OAuthCredential = {
+      accessToken: "sk-ant-oat01-ACCESS-DO-NOT-PRINT",
+      refreshToken: "sk-ant-ort01-REFRESH-DO-NOT-PRINT",
+      expiresAt: 1000,
+    };
+    const home = await tempDir("claude-argv-");
+    const kc = fakeKeychain({ claudeAiOauth: { accessToken: "a", refreshToken: "r" } });
+    const store = new ClaudeActiveCredentialStore({
+      configHome: home,
+      execFn: async (file, args) => {
+        if (args[0] === "add-generic-password") {
+          throw Object.assign(new Error(`Command failed: ${file} ${args.join(" ")}`), {
+            code: 1,
+            stderr: "security: SecKeychainItemModifyContent: User interaction is not allowed.\n",
+          });
+        }
+        return kc.exec(file, args);
+      },
+    });
+    await assert.rejects(
+      () => store.writeActive(secret),
+      (err: unknown) => {
+        assert.ok(err instanceof CredentialStoreError && err.kind === "write-failed");
+        assert.ok(!err.message.includes(secret.accessToken), "access token leaked into the error");
+        assert.ok(!err.message.includes(secret.refreshToken), "refresh token leaked into the error");
+        assert.ok(!err.message.includes("Command failed"), "argv echoed into the error");
+        // stderr is the part a user can act on, so it is still reported.
+        assert.match(err.message, /User interaction is not allowed/);
+        return true;
+      },
+    );
+  });
+
+  it("falls back to the exit status when a failed Keychain write said nothing", async () => {
+    const home = await tempDir("claude-argv-code-");
+    const kc = fakeKeychain({ claudeAiOauth: { accessToken: "a", refreshToken: "r" } });
+    const store = new ClaudeActiveCredentialStore({
+      configHome: home,
+      execFn: async (file, args) => {
+        if (args[0] === "add-generic-password") {
+          throw Object.assign(new Error(`Command failed: ${file} ${args.join(" ")}`), {
+            code: 51,
+            stderr: "   ",
+          });
+        }
+        return kc.exec(file, args);
+      },
+    });
+    await assert.rejects(
+      () => store.writeActive(credential),
+      (err: unknown) => {
+        assert.ok(err instanceof CredentialStoreError && err.kind === "write-failed");
+        assert.match(err.message, /security exited 51/);
+        assert.ok(!err.message.includes("Command failed"));
+        return true;
+      },
+    );
+  });
+
   it("fails loudly when the Keychain write does not take effect", async () => {
     const home = await tempDir("claude-noop-");
     const item = { claudeAiOauth: { accessToken: "a", refreshToken: "r" } };

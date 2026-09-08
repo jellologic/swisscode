@@ -1,6 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { maskSecretValue, redactEnv } from "./redact.js";
+import {
+  blankSecretValues,
+  collectSecretValues,
+  isSecretConfigKey,
+  maskSecretValue,
+  redactEnv,
+  secretFieldKeys,
+} from "./redact.js";
 
 describe("redactEnv", () => {
   it("masks by value even when the name looks harmless", () => {
@@ -57,5 +64,41 @@ describe("maskSecretValue", () => {
     assert.equal(maskSecretValue("short"), "••••••••");
     assert.equal(maskSecretValue("12345678"), "••••••••");
     assert.equal(maskSecretValue("123456789"), "1234…89");
+  });
+});
+
+describe("secret config helpers", () => {
+  const fields = [
+    { key: "apiKey", label: "API key", secret: true, required: true },
+    { key: "model", label: "Model", secret: false, required: false },
+  ];
+
+  it("takes the secret keys from the provider's own declaration", () => {
+    assert.deepEqual([...secretFieldKeys(fields)], ["apiKey"]);
+  });
+
+  it("also treats a secret-sounding key as secret", () => {
+    const declared = secretFieldKeys(fields);
+    assert.equal(isSecretConfigKey("apiKey", declared), true);
+    assert.equal(isSecretConfigKey("MY_PASSWORD", declared), true);
+    assert.equal(isSecretConfigKey("model", declared), false);
+  });
+
+  it("collects only non-empty secret values (an empty one masks every unset var)", () => {
+    const values = collectSecretValues(
+      { apiKey: "sk-123", model: "sonnet", token: "", CREDENTIAL: "abc" },
+      secretFieldKeys(fields),
+    );
+    assert.deepEqual(values, ["sk-123", "abc"]);
+    assert.deepEqual(collectSecretValues(undefined, new Set()), []);
+  });
+
+  it("blanks secret entries without touching the rest, or the input", () => {
+    const config = { apiKey: "sk-123", model: "sonnet" };
+    const out = blankSecretValues(config, (key) => key === "apiKey");
+    assert.deepEqual(out, { apiKey: "", model: "sonnet" });
+    assert.deepEqual(config, { apiKey: "sk-123", model: "sonnet" });
+    // `() => true` is the envStatic case: free text with no declaration to consult.
+    assert.deepEqual(blankSecretValues(config, () => true), { apiKey: "", model: "" });
   });
 });

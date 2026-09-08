@@ -1,4 +1,4 @@
-import { mkdtemp, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -90,6 +90,57 @@ describe("withAccountLock", () => {
     assert.equal(run.locked, false);
     // Somebody else's lock is left alone.
     assert.ok((await stat(join(dir, "personal.lock"))).isFile());
+  });
+
+  it("takes the lock it reclaimed instead of giving up and running unlocked", async () => {
+    // Reclaim used to be a fire-and-forget `rm` whose result nobody read, so a
+    // waiter cleared the dead lock and then still ran UNLOCKED — the double
+    // refresh the lock exists to prevent. Now the reclaimer knows it won and
+    // takes the freed lock straight away.
+    const dir = await tempDir();
+    const path = join(dir, "personal.lock");
+    await writeFile(path, "999999 crashed\n", { encoding: "utf8", mode: 0o600 });
+    const stale = new Date(Date.now() - LOCK_STALE_MS - 5_000);
+    await utimes(path, stale, stale);
+    const run = await withAccountLock(dir, "personal", async () => "recovered", {
+      pollMs: 5,
+      maxWaitMs: 0,
+    });
+    assert.deepEqual(run, { value: "recovered", locked: true });
+    assert.deepEqual(await readdir(dir), []);
+  });
+
+  it("hands a stale lock to exactly one waiter, and leaves no tombstone", async () => {
+    // Reclaim used to be stat-then-rm with no mutual exclusion: all five
+    // waiters decided this lock was stale, and the removals issued on that old
+    // observation landed AFTER the winner had taken a fresh lock — deleting it,
+    // so three of them ran at once. That is the double refresh the lock exists
+    // to prevent.
+    const dir = await tempDir();
+    const path = join(dir, "personal.lock");
+    await writeFile(path, "999999 crashed\n", { encoding: "utf8", mode: 0o600 });
+    const stale = new Date(Date.now() - LOCK_STALE_MS - 5_000);
+    await utimes(path, stale, stale);
+
+    let active = 0;
+    let peak = 0;
+    const run = () =>
+      withAccountLock(
+        dir,
+        "personal",
+        async () => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await sleep(25);
+          active -= 1;
+        },
+        { pollMs: 1 },
+      );
+    const runs = await Promise.all([run(), run(), run(), run(), run()]);
+    assert.equal(peak, 1, "the stale lock must not produce two concurrent holders");
+    for (const r of runs) assert.equal(r.locked, true);
+    // Neither the lock nor the reclaim guard is left on disk.
+    assert.deepEqual(await readdir(dir), []);
   });
 
   it("creates the lock directory 0700 with a 0600 lock file", async () => {

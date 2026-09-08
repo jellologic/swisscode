@@ -113,6 +113,24 @@ describe("CachingUsageClient", () => {
     assert.equal((await stat(path)).mode & 0o777, 0o600);
   });
 
+  it("serializes two cache instances pointed at the same file", async () => {
+    // The per-instance promise chain this replaced only knew about its own
+    // object: the CLI and a server fn holding separate FileUsageCache handles
+    // on one path could still lose each other's entries.
+    const dir = await mkdtemp(join(tmpdir(), "uc-"));
+    const path = join(dir, "cache.json");
+    const a = new FileUsageCache(path);
+    const b = new FileUsageCache(path);
+    await Promise.all([
+      a.set("one", { snapshot: { ...snapshot(), accountId: "one" } }),
+      b.set("two", { snapshot: { ...snapshot(), accountId: "two" } }),
+      a.set("three", { snapshot: { ...snapshot(), accountId: "three" } }),
+      b.set("four", { snapshot: { ...snapshot(), accountId: "four" } }),
+    ]);
+    const all = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(all).sort(), ["four", "one", "three", "two"]);
+  });
+
   it("survives a corrupt cache file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "uc-"));
     const path = join(dir, "cache.json");

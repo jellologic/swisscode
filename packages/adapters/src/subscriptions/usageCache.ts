@@ -16,7 +16,8 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { AccountRepository, AccountUsage, UsageClient } from "@swisscode/core";
-import { readJsonFile, writeJsonAtomic } from "../store/atomicJson.js";
+import { isRecord } from "@swisscode/core";
+import { readJsonFile, withStoreLock, writeJsonAtomic } from "../store/atomicJson.js";
 import { credentialIdentity } from "./identity.js";
 import { UsageError } from "./anthropic.js";
 
@@ -50,9 +51,6 @@ export function vaultIdentityResolver(
 }
 
 export class FileUsageCache {
-  /** Serializes read-modify-write so concurrent sets cannot lose each other. */
-  private writes: Promise<unknown> = Promise.resolve();
-
   constructor(private readonly path: string = defaultUsageCachePath()) {}
 
   private async readAll(): Promise<Record<string, UsageCacheEntry>> {
@@ -60,9 +58,7 @@ export class FileUsageCache {
     // A cache is regenerable: a corrupt file is worth nothing but must never
     // take down usage display, so it is simply overwritten on the next set.
     if (!read.ok) return {};
-    const value = read.value;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    return value as Record<string, UsageCacheEntry>;
+    return isRecord(read.value) ? (read.value as Record<string, UsageCacheEntry>) : {};
   }
 
   async get(key: string): Promise<UsageCacheEntry | undefined> {
@@ -70,14 +66,14 @@ export class FileUsageCache {
   }
 
   async set(key: string, entry: UsageCacheEntry): Promise<void> {
-    const run = this.writes.then(async () => {
+    // Every set is a read-modify-write over one shared file. withStoreLock keys
+    // on the path, so it also serializes two FileUsageCache instances pointed at
+    // the same file — a per-instance promise chain would not.
+    return withStoreLock(this.path, async () => {
       const all = await this.readAll();
       all[key] = entry;
       await writeJsonAtomic(this.path, all);
     });
-    // Keep the chain alive after a failed write; the next set retries the read.
-    this.writes = run.catch(() => undefined);
-    return run;
   }
 }
 

@@ -26,12 +26,13 @@ import type {
   TrafficParser,
   TrafficRequestSummary,
 } from "@swisscode/core";
-import { SingleFlight, isCredentialExpired } from "@swisscode/core";
+import { SingleFlight } from "@swisscode/core";
 import { defaultTrafficParsers } from "../registry.js";
 import { readSessionContext } from "./sessionContext.js";
 import { resyncSubscriptionCredential } from "../subscriptions/liveResync.js";
 import { freshVaultCredential } from "../subscriptions/freshCredential.js";
 import { PROXY_TOKEN_HEADER } from "./proxyToken.js";
+import { parseRetryAfterMs } from "../subscriptions/retryAfter.js";
 
 export const DEFAULT_PROXY_PORT = 8123;
 
@@ -56,9 +57,6 @@ export const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 60_000;
 
 /** Cooldown applied to an account that answered 429/529 without a Retry-After. */
 const DEFAULT_COOLDOWN_MS = 60_000;
-
-/** Upper bound on a Retry-After honoured as a cooldown (15 min). */
-const MAX_COOLDOWN_MS = 15 * 60_000;
 
 /** Bodies larger than this skip structured pre-truncation parsing (2MB). */
 const MAX_STRUCTURED_PARSE_BYTES = 2 * 1024 * 1024;
@@ -178,6 +176,23 @@ function connectionScopedHeaders(value: string | string[] | undefined): Set<stri
   return names;
 }
 
+/**
+ * The request-target as a URL, but only when it is already the normalized
+ * origin-form it claims to be. Absolute-form ("GET http://host/p"), dot
+ * segments and anything URL parsing would rewrite come back undefined: the
+ * proxy answers one spelling of a path so the token gate and the route table
+ * can never disagree about which path a request named.
+ */
+function parseRequestTarget(target: string): URL | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(target, "http://127.0.0.1");
+  } catch {
+    return undefined;
+  }
+  return target === parsed.pathname + parsed.search ? parsed : undefined;
+}
+
 /** Single place that answers with JSON; never double-writes a sent response. */
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   if (res.headersSent || res.writableEnded) return;
@@ -185,18 +200,13 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-/** Seconds to park an account after a 429/529, from Retry-After when present. */
+/**
+ * How long to park an account after a 429/529. One Retry-After reading for the
+ * whole codebase (see parseRetryAfterMs): a header the usage client called
+ * unparseable must not become a 12-second cooldown here.
+ */
 export function cooldownMsFromRetryAfter(value: string | null | undefined): number {
-  if (!value) return DEFAULT_COOLDOWN_MS;
-  const seconds = Number.parseInt(value.trim(), 10);
-  if (Number.isFinite(seconds) && seconds > 0) {
-    return Math.min(MAX_COOLDOWN_MS, seconds * 1000);
-  }
-  const at = Date.parse(value);
-  if (Number.isFinite(at)) {
-    return Math.min(MAX_COOLDOWN_MS, Math.max(0, at - Date.now()));
-  }
-  return DEFAULT_COOLDOWN_MS;
+  return parseRetryAfterMs(value) ?? DEFAULT_COOLDOWN_MS;
 }
 
 export interface ProxyOptions {
@@ -215,6 +225,12 @@ export interface ProxyOptions {
    * instead of failing — read-only, never writes Claude's store.
    */
   liveStore?: ActiveCredentialStore;
+  /**
+   * Directory holding the vault's `<id>.lock` files. Defaults to the real
+   * vault directory; tests MUST set it so a refresh cannot touch the user's
+   * own ~/.swisscode.
+   */
+  lockDir?: string;
   /**
    * In-memory ring buffer of recent traffic entries for inspection
    * (backs GET /__swisscode/traffic). Default 200; 0 disables.
@@ -307,6 +323,7 @@ export class SubscriptionProxy {
   private readonly fetchFn: typeof fetch;
   private readonly onTraffic?: (entry: ProxyTrafficEntry) => void;
   private readonly liveStore?: ActiveCredentialStore;
+  private readonly lockDir?: string;
   private readonly logBodies: boolean;
   private readonly maxLoggedBodyBytes: number;
   private trafficBufferSize: number;
@@ -318,7 +335,11 @@ export class SubscriptionProxy {
   private readonly traffic: ProxyTrafficEntry[] = [];
   /** accountId → epoch ms until which a 429/529 says not to use it. */
   private readonly cooldowns = new Map<string, number>();
-  /** Concurrent 401s on one account must cost one rotation, not one each. */
+  /**
+   * Concurrent 401s on one account must cost one rotation, not one each.
+   * freshVaultCredential coalesces the rotation itself; this also coalesces
+   * the live-lineage resync in front of it, which it does not.
+   */
   private readonly recovering = new SingleFlight<string | undefined>();
 
   constructor(
@@ -330,6 +351,7 @@ export class SubscriptionProxy {
     this.fetchFn = options.fetchFn ?? fetch;
     this.onTraffic = options.onTraffic;
     this.liveStore = options.liveStore;
+    this.lockDir = options.lockDir;
     this.logBodies = options.logBodies ?? false;
     this.maxLoggedBodyBytes = options.maxLoggedBodyBytes ?? 8192;
     this.trafficBufferSize = clampBufferSize(options.trafficBufferSize ?? 200);
@@ -462,32 +484,33 @@ export class SubscriptionProxy {
       // Its token was never rejected, so retry with it instead of spending
       // another single-use refresh token on the same 401.
       if (stored.accessToken !== rejected) return stored.accessToken;
-      if (isCredentialExpired(stored)) {
-        // Clock agrees: the shared entry point rotates, persists, and
-        // coalesces with any other caller waiting on this account.
-        return (
-          await freshVaultCredential(this.accounts, this.oauth, accountId, {
-            liveStore: this.liveStore,
-          })
-        ).credential.accessToken;
-      }
-      // Upstream rejected a token our clock still calls valid (revoked or
-      // rotated behind our back): rotate anyway — this method is already
-      // single-flighted, so it happens once per account.
-      const next = await this.oauth.refresh(stored);
-      await this.accounts.saveCredential(accountId, next);
-      return next.accessToken;
+      // Upstream rejected this token, whatever our clock says about it, so
+      // rotate through the shared entry point rather than calling
+      // oauth.refresh here: only that path takes the cross-process account
+      // lock and mirrors a rotation back into a lineage shared with Claude
+      // Code (refreshing it privately logs Claude Code out).
+      return (
+        await freshVaultCredential(this.accounts, this.oauth, accountId, {
+          ...this.freshOptions(),
+          force: true,
+        })
+      ).credential.accessToken;
     } catch {
       return undefined;
     }
   }
 
+  /** Shared options for every freshVaultCredential call this proxy makes. */
+  private freshOptions(): { liveStore?: ActiveCredentialStore; lockDir?: string } {
+    return {
+      ...(this.liveStore ? { liveStore: this.liveStore } : {}),
+      ...(this.lockDir !== undefined ? { lockDir: this.lockDir } : {}),
+    };
+  }
+
   private async freshToken(accountId: string): Promise<OAuthCredential> {
-    return (
-      await freshVaultCredential(this.accounts, this.oauth, accountId, {
-        liveStore: this.liveStore,
-      })
-    ).credential;
+    return (await freshVaultCredential(this.accounts, this.oauth, accountId, this.freshOptions()))
+      .credential;
   }
 
   private async forward(
@@ -773,7 +796,7 @@ export class SubscriptionProxy {
    */
   private denyRequest(
     req: IncomingMessage,
-    url: string,
+    pathname: string,
   ): { status: number; error: string } | undefined {
     if (!isLoopbackHost(req.headers["host"])) {
       // Rebinding survives only if the attacker's own hostname reaches us.
@@ -783,7 +806,10 @@ export class SubscriptionProxy {
       // Claude Code sends neither; every browser fetch sends at least one.
       return { status: 403, error: "browser-originated requests are not accepted" };
     }
-    if (this.controlToken !== undefined && url.startsWith("/__swisscode/")) {
+    // Gate on the SAME normalized pathname the routes below match on. A raw
+    // `req.url` here and `new URL(...).pathname` there is the whole bug:
+    // "/x/../__swisscode/traffic" fails startsWith but still routes.
+    if (this.controlToken !== undefined && pathname.startsWith("/__swisscode/")) {
       const sent = req.headers[PROXY_TOKEN_HEADER];
       const value = Array.isArray(sent) ? sent[0] : sent;
       if (value !== this.controlToken) {
@@ -801,16 +827,28 @@ export class SubscriptionProxy {
       void (async () => {
         try {
           const url = req.url ?? "/";
-          const denied = this.denyRequest(req, url);
+          // Parse ONCE, before any decision: the token gate and every control
+          // route must agree on what path this request names. A request-target
+          // that is not already its own normalized origin-form (absolute-form,
+          // or one carrying dot-segments) is refused outright rather than
+          // normalized, because "the same URL two ways" is what let a caller
+          // skip the gate and still reach the traffic and session routes.
+          const parsed = parseRequestTarget(url);
+          if (!parsed) {
+            sendJson(res, 400, { error: "request target must be an absolute path" });
+            return;
+          }
+          const path = parsed.pathname;
+          const denied = this.denyRequest(req, path);
           if (denied) {
             sendJson(res, denied.status, { error: denied.error });
             return;
           }
-          if (url === "/__swisscode/status" && req.method === "GET") {
+          if (path === "/__swisscode/status" && req.method === "GET") {
             sendJson(res, 200, await this.status());
             return;
           }
-          const useMatch = /^\/__swisscode\/use\/([A-Za-z0-9][A-Za-z0-9-_]*)$/.exec(url);
+          const useMatch = /^\/__swisscode\/use\/([A-Za-z0-9][A-Za-z0-9-_]*)$/.exec(path);
           if (useMatch && req.method === "POST") {
             try {
               const account = await this.setActive(useMatch[1] as string);
@@ -820,12 +858,11 @@ export class SubscriptionProxy {
             }
             return;
           }
-          const trafficUrl = new URL(url, "http://127.0.0.1");
-          if (trafficUrl.pathname === "/__swisscode/traffic" && req.method === "GET") {
-            const onlyProfile = trafficUrl.searchParams.get("profile") ?? undefined;
+          if (path === "/__swisscode/traffic" && req.method === "GET") {
+            const onlyProfile = parsed.searchParams.get("profile") ?? undefined;
             // ?bodies=0 is the list view: same entries and metadata, minus the
             // raw bodies that make a full poll tens of megabytes.
-            const withBodies = trafficUrl.searchParams.get("bodies") !== "0";
+            const withBodies = parsed.searchParams.get("bodies") !== "0";
             const found = this.getTraffic(onlyProfile);
             sendJson(res, 200, {
               entries: withBodies ? found : found.map(omitBodies),
@@ -835,7 +872,7 @@ export class SubscriptionProxy {
             });
             return;
           }
-          const entryMatch = /^\/__swisscode\/traffic\/entry\/(.+)$/.exec(trafficUrl.pathname);
+          const entryMatch = /^\/__swisscode\/traffic\/entry\/(.+)$/.exec(path);
           if (entryMatch && req.method === "GET") {
             const id = entryMatch[1] as string;
             const entry = TRAFFIC_ID_RE.test(id) ? this.getTrafficEntry(id) : undefined;
@@ -846,9 +883,7 @@ export class SubscriptionProxy {
             sendJson(res, 200, { entry });
             return;
           }
-          const sessionMatch = /^\/__swisscode\/session\/([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(
-            trafficUrl.pathname,
-          );
+          const sessionMatch = /^\/__swisscode\/session\/([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(path);
           if (sessionMatch && req.method === "GET") {
             // Local Claude Code session behind a thread: transcript prompts,
             // Workflow scripts, Task launches, subagent branches. Read-only,
@@ -857,11 +892,11 @@ export class SubscriptionProxy {
             sendJson(res, 200, { context });
             return;
           }
-          if (url === "/__swisscode/traffic" && req.method === "DELETE") {
+          if (path === "/__swisscode/traffic" && req.method === "DELETE") {
             sendJson(res, 200, { ok: true, cleared: this.clearTraffic() });
             return;
           }
-          const sizeMatch = /^\/__swisscode\/traffic\/size\/(\d+)$/.exec(url);
+          const sizeMatch = /^\/__swisscode\/traffic\/size\/(\d+)$/.exec(path);
           if (sizeMatch && req.method === "POST") {
             const size = this.setTrafficBufferSize(parseInt(sizeMatch[1] as string, 10));
             sendJson(res, 200, { ok: true, size, kept: this.traffic.length });

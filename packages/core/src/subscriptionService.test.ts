@@ -186,3 +186,46 @@ describe("ensureFreshCredential", () => {
     assert.equal(h.saved().length, 0);
   });
 });
+
+describe("ensureFreshCredential force", () => {
+  it("rotates a credential our clock still calls fresh", async () => {
+    // The 401 case: the server rejected a token whose expiresAt is in the
+    // future. Without `force` the caller has to refresh on its own, outside
+    // the lock and the shared-lineage mirror.
+    const h = harness({ accessToken: "rejected", refreshToken: "r", expiresAt: future }, async () => ({
+      accessToken: "rotated",
+      refreshToken: "r2",
+      expiresAt: future,
+    }));
+    const out = await ensureFreshCredential(h.accounts, h.oauth, "personal", { force: true });
+    assert.equal(out.credential.accessToken, "rotated");
+    assert.equal(out.refreshed, true);
+    assert.equal(h.refreshCalls(), 1);
+    assert.deepEqual(h.saved().map((c) => c.accessToken), ["rotated"]);
+  });
+
+  it("still short-circuits without it", async () => {
+    const h = harness({ accessToken: "a", refreshToken: "r", expiresAt: future }, async () => {
+      throw new Error("must not refresh");
+    });
+    const out = await ensureFreshCredential(h.accounts, h.oauth, "personal");
+    assert.equal(out.credential.accessToken, "a");
+    assert.equal(h.refreshCalls(), 0);
+  });
+
+  it("still mirrors a forced rotation back to a shared owner", async () => {
+    const mirrored: string[] = [];
+    const h = harness({ accessToken: "rejected", refreshToken: "r", expiresAt: future }, async () => ({
+      accessToken: "rotated",
+      refreshToken: "r2",
+      expiresAt: future,
+    }));
+    await ensureFreshCredential(h.accounts, h.oauth, "personal", {
+      force: true,
+      onRefreshed: async (credential) => {
+        mirrored.push(credential.accessToken);
+      },
+    });
+    assert.deepEqual(mirrored, ["rotated"]);
+  });
+});

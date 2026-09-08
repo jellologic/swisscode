@@ -11,15 +11,17 @@ export type {
   ProviderRegistry,
   ProviderUsageReader,
 } from "./ports.js";
-export { RESERVED_PROFILE_NAMES } from "./service.js";
+export { RECORD_ID_RE, RESERVED_PROFILE_NAMES } from "./service.js";
 export {
   ProfileError,
+  isRecordId,
   resolveLaunchSpec,
   resolveProviderConfig,
   validateProfile,
   validateProfileName,
   validateProviderConfig,
 } from "./service.js";
+export type { ResolveLaunchOptions } from "./service.js";
 export type {
   AccountSwitchMode,
   AccountUsage,
@@ -69,14 +71,25 @@ export type {
 } from "./traffic.js";
 export type { FreshCredential, FreshCredentialOptions } from "./subscriptionService.js";
 export { DENIED_ENV_NAMES, DENIED_ENV_PREFIXES, isDeniedEnvName } from "./envPolicy.js";
-export { DEFAULT_SECRET_NAME_RE, maskSecretValue, redactEnv } from "./redact.js";
+export {
+  DEFAULT_SECRET_NAME_RE,
+  blankSecretValues,
+  collectSecretValues,
+  isSecretConfigKey,
+  maskSecretValue,
+  redactEnv,
+  secretFieldKeys,
+} from "./redact.js";
 export type { RedactEnvOptions } from "./redact.js";
 export {
   isOAuthCredentialShape,
   isProfileShape,
   isProviderAccountShape,
+  isRecord,
+  isStringRecord,
   isSubscriptionAccountShape,
   isSubscriptionBackupShape,
+  profileShapeProblem,
 } from "./shapes.js";
 export { SingleFlight } from "./singleFlight.js";
 export type { CustomProviderDef, CustomProviderTest, ValidateCustomOptions } from "./customProviders.js";

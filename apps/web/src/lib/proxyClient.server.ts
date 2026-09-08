@@ -1,146 +1,17 @@
-// The web UI's client for the proxy's control routes (/__swisscode/*).
+// Server-only re-export of the shared proxy control client.
 //
-// Three invariants live here so no caller has to remember them:
-//  1. Every control request carries the per-run token (PROXY_TOKEN_HEADER).
-//     "localhost" is not an authorization boundary — a page in any browser can
-//     reach 127.0.0.1 — so the proxy now demands the shared secret from
-//     ~/.swisscode/proxy-token. The token is read per call because the file is
-//     re-minted on every `swisscode proxy run`; a cached one would go stale.
-//  2. Ids are encodeURIComponent'd. They are validated upstream, but a control
-//     URL is the last place to learn that a "/" arrived in an id.
-//  3. A proxy that cannot be reached (down, or a token we cannot present) is a
-//     STATE, not a crash: it surfaces as ProxyUnavailableError, which the store
-//     turns into the existing "proxy not running" view.
-//
-// The `.server.` suffix keeps node:fs (the token read) out of the client bundle.
+// The implementation lives in @swisscode/adapters (the CLI drives the same
+// routes with the same messages); the `.server.` suffix keeps its node:fs
+// token read out of the client bundle.
 
-import {
-  PROXY_TOKEN_HEADER,
-  proxyBaseUrl,
-  readProxyToken,
-  type ProxyStatus,
-  type ProxyTrafficEntry,
-  type SessionContext,
+export {
+  ProxyControlClient,
+  ProxyUnavailableError,
+  PROXY_NOT_RUNNING,
+  PROXY_TOKEN_REJECTED,
 } from "@swisscode/adapters";
-
-/** The proxy is not reachable, or refused our control token. */
-export class ProxyUnavailableError extends Error {
-  constructor(message = "Proxy is not running. Start it with `swisscode proxy run`.") {
-    super(message);
-    this.name = "ProxyUnavailableError";
-  }
-}
-
-const TOKEN_REJECTED =
-  "The proxy refused this request — its control token is missing or stale. Restart it with `swisscode proxy run`.";
-
-export interface ProxyControlOptions {
-  /** Override for tests; defaults to the configured port on 127.0.0.1. */
-  baseUrl?: string;
-  fetchFn?: typeof fetch;
-  /** Reads the per-run control token. Undefined = send no token header. */
-  readToken?: () => Promise<string | undefined>;
-}
-
-export interface TrafficListResponse {
-  entries: ProxyTrafficEntry[];
-  kept: number;
-  size: number;
-  profiles: string[];
-}
-
-export interface TrafficQuery {
-  profile?: string;
-  /** False asks the proxy to drop reqBody/resBody (request facts are kept). */
-  bodies?: boolean;
-}
-
-export class ProxyControlClient {
-  private readonly baseUrl: string | undefined;
-  private readonly fetchFn: typeof fetch;
-  private readonly readToken: () => Promise<string | undefined>;
-
-  constructor(options: ProxyControlOptions = {}) {
-    this.baseUrl = options.baseUrl;
-    this.fetchFn = options.fetchFn ?? fetch;
-    this.readToken = options.readToken ?? (() => readProxyToken());
-  }
-
-  /** Resolved per call: SWISSCODE_PROXY_PORT can change between requests. */
-  private base(): string {
-    return (this.baseUrl ?? proxyBaseUrl()).replace(/\/$/, "");
-  }
-
-  private async call(path: string, method: "GET" | "POST" | "DELETE" = "GET"): Promise<unknown> {
-    const token = await this.readToken();
-    const headers: Record<string, string> = token ? { [PROXY_TOKEN_HEADER]: token } : {};
-    let res: Response;
-    try {
-      res = await this.fetchFn(`${this.base()}${path}`, { method, headers });
-    } catch {
-      throw new ProxyUnavailableError();
-    }
-    if (res.status === 401 || res.status === 403) throw new ProxyUnavailableError(TOKEN_REJECTED);
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(body.error ?? `Proxy returned HTTP ${res.status}`);
-    }
-    return res.json().catch(() => ({}));
-  }
-
-  async status(): Promise<ProxyStatus> {
-    return (await this.call("/__swisscode/status")) as ProxyStatus;
-  }
-
-  async use(accountId: string): Promise<void> {
-    await this.call(`/__swisscode/use/${encodeURIComponent(accountId)}`, "POST");
-  }
-
-  /**
-   * Buffered traffic. `bodies: false` is the polling shape: every entry keeps
-   * its request facts and byte counts, but the megabytes of prompt and
-   * response text stay on the proxy until a page asks for one entry.
-   */
-  async traffic(query: TrafficQuery = {}): Promise<TrafficListResponse> {
-    const params = new URLSearchParams();
-    if (query.profile !== undefined && query.profile !== "") params.set("profile", query.profile);
-    if (query.bodies === false) params.set("bodies", "0");
-    const search = params.toString();
-    const suffix = search === "" ? "" : `?${search}`;
-    const body = (await this.call(`/__swisscode/traffic${suffix}`)) as Partial<TrafficListResponse>;
-    return {
-      entries: body.entries ?? [],
-      kept: body.kept ?? 0,
-      size: body.size ?? 0,
-      profiles: body.profiles ?? [],
-    };
-  }
-
-  /** One entry with its bodies. Null when it has left the ring buffer. */
-  async entry(id: string): Promise<ProxyTrafficEntry | null> {
-    const body = (await this.call(`/__swisscode/traffic/entry/${encodeURIComponent(id)}`)) as {
-      entry?: ProxyTrafficEntry | null;
-    };
-    return body.entry ?? null;
-  }
-
-  async clearTraffic(): Promise<number> {
-    const body = (await this.call("/__swisscode/traffic", "DELETE")) as { cleared?: number };
-    return body.cleared ?? 0;
-  }
-
-  async setTrafficSize(size: number): Promise<{ size: number; kept: number }> {
-    const body = (await this.call(
-      `/__swisscode/traffic/size/${encodeURIComponent(String(size))}`,
-      "POST",
-    )) as { size?: number; kept?: number };
-    return { size: body.size ?? size, kept: body.kept ?? 0 };
-  }
-
-  async sessionContext(sessionId: string): Promise<SessionContext | null> {
-    const body = (await this.call(
-      `/__swisscode/session/${encodeURIComponent(sessionId)}`,
-    )) as { context?: SessionContext | null };
-    return body.context ?? null;
-  }
-}
+export type {
+  ProxyControlOptions,
+  TrafficListResponse,
+  TrafficQuery,
+} from "@swisscode/adapters";

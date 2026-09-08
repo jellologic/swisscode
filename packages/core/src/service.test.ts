@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import {
   OAuthError,
   ProfileError,
+  RECORD_ID_RE,
   RESERVED_PROFILE_NAMES,
   ensureFreshCredential,
+  isRecordId,
   resolveLaunchSpec,
   resolveProviderConfig,
   validateProfile,
@@ -365,5 +367,49 @@ describe("resolveLaunchSpec env policy", () => {
       providerId: "hostile",
     });
     assert.deepEqual(Object.keys(seen), ["ANTHROPIC_BASE_URL"]);
+  });
+
+  it("reports every dropped name so a shell can warn about it", () => {
+    const dropped: string[] = [];
+    resolveLaunchSpec(
+      leakyAgents,
+      hostileProviders,
+      { name: "x", agentId: "claude-code", providerId: "hostile" },
+      { onDroppedEnv: (name) => dropped.push(name) },
+    );
+    // Both sides of buildLaunch: the provider's names and the agent's own.
+    assert.deepEqual(dropped.sort(), [
+      "DYLD_INSERT_LIBRARIES",
+      "LD_PRELOAD",
+      "NODE_OPTIONS",
+      "PATH",
+      "home",
+    ]);
+  });
+
+  it("still strips them when nobody is listening", () => {
+    const spec = resolveLaunchSpec(leakyAgents, hostileProviders, {
+      name: "x",
+      agentId: "claude-code",
+      providerId: "hostile",
+    });
+    assert.deepEqual(Object.keys(spec.env), ["ANTHROPIC_BASE_URL"]);
+  });
+});
+
+describe("isRecordId", () => {
+  it("is the one rule profile names, account ids and route segments share", () => {
+    for (const id of ["work", "work_2-x", "A1", "0"]) {
+      assert.equal(isRecordId(id), true, id);
+      validateProfileName(id);
+    }
+    for (const id of ["", "-leading", "_leading", "../etc/passwd", "a b", "a/b", "a.b"]) {
+      assert.equal(isRecordId(id), false, id);
+      assert.throws(() => validateProfileName(id), ProfileError, id);
+    }
+    for (const value of [undefined, null, 7, {}]) {
+      assert.equal(isRecordId(value), false, String(value));
+    }
+    assert.equal(RECORD_ID_RE.source, "^[A-Za-z0-9][A-Za-z0-9_-]*$");
   });
 });

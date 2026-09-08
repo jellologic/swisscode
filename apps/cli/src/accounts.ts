@@ -11,10 +11,12 @@ import {
   ClaudeActiveCredentialStore,
   FileAccountRepository,
   FileUsageCache,
+  countOtherClaudeSessions,
   defaultSubscriptionsDir,
   findAccountByCredential,
   freshVaultCredential,
 } from "@swisscode/adapters";
+import type { ProcessProbe } from "@swisscode/adapters";
 import { OAuthError, validateAccountId } from "@swisscode/core";
 
 const execFileAsync = promisify(execFile);
@@ -168,22 +170,17 @@ export async function cmdAccountsUsage(id?: string): Promise<void> {
   }
 }
 
-/**
- * Command line of a running Claude Code session. `pgrep -x claude` only sees
- * the native binary and misses the common npm install, which runs as
- * `node …/@anthropic-ai/claude-code/cli.js`. Written in the syntax both POSIX
- * ERE (pgrep -f) and JS RegExp accept, so the test can assert on it directly.
- */
-const CLAUDE_PROCESS_PATTERN = "(^|/)claude( |$)|claude-code/cli\\.js";
+/** Runs pgrep for countOtherClaudeSessions; a failure is "no matches". */
+const pgrepProbe: ProcessProbe = async (command, args) =>
+  (await execFileAsync(command, args)).stdout;
 
+/**
+ * Are other Claude Code sessions running? The probe set lives in adapters so
+ * the CLI warning and the web UI's count can never describe different process
+ * lists.
+ */
 async function otherClaudeSessions(): Promise<boolean> {
-  try {
-    const { stdout } = await execFileAsync("pgrep", ["-f", CLAUDE_PROCESS_PATTERN]);
-    const mine = String(process.pid);
-    return stdout.split("\n").some((line) => line.trim() && line.trim() !== mine);
-  } catch {
-    return false; // pgrep missing or no match: don't block, just don't warn
-  }
+  return (await countOtherClaudeSessions(pgrepProbe)) > 0;
 }
 
 /** File-swap switch. Returns false when the caller should abort. */

@@ -141,7 +141,14 @@ function parseIpv6(host: string): number[] | undefined {
  * that resolves to a private address is out of scope here.
  */
 function isPrivateHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  // The trailing dot of a fully-qualified name ("localhost.") survives URL
+  // parsing but means nothing to the resolver, so it must not survive matching
+  // either — otherwise it is a spelling of localhost this guard does not know.
+  const host = hostname
+    .toLowerCase()
+    .replace(/^\[/, "")
+    .replace(/\]$/, "")
+    .replace(/\.$/, "");
   if (host === "localhost" || host.endsWith(".localhost")) return true;
   const v4 = parseIpv4(host);
   if (v4) return isPrivateIpv4(v4);
