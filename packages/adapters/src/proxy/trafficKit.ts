@@ -35,9 +35,18 @@ export function splitSsePayloads(body: string): string[] {
   return out;
 }
 
-/** True when the kept bytes look like an SSE stream. */
+// SSE is line-oriented: the first non-blank line is always a field name or a
+// ":" comment. Leading whitespace is tolerated because proxies and stubs
+// indent, matching splitSsePayloads' per-line trim.
+const SSE_HEAD_RE = /^\s*(?:(?:event|data|id|retry):|:)/;
+
+/**
+ * True when the kept bytes look like an SSE stream. Only the head decides:
+ * searching the whole body for "data:" reads any JSON reply that merely
+ * quotes the token (an error message, a tool result) as a stream.
+ */
 export function looksLikeSse(body: string): boolean {
-  return body.includes("data:");
+  return SSE_HEAD_RE.test(body);
 }
 
 /** Frequency tally that preserves first-seen order. */

@@ -137,7 +137,10 @@ function routingBullet(entry: TrafficExchange, upstream: string): string {
 
 /** One conversation: chained turns sharing provider link keys. */
 export interface TrafficConversation {
-  /** First link key, or the lone entry's id — stable within one grouping. */
+  /**
+   * Thread address: session id, first link key, or the lone entry's id —
+   * always slug-shaped (see SAFE_ID_RE) and stable within one grouping.
+   */
   id: string;
   /** Positions in the input array, chronological (oldest turn first). */
   indexes: number[];
@@ -164,6 +167,17 @@ export interface TrafficConversation {
    * scripts, subagent branches — via GET /__swisscode/session/<id>.
    */
   sessionId?: string;
+}
+
+// A conversation id is a route segment (/proxy/<id>) and the lookup key for
+// on-disk session context, but its raw material — provider link keys — is
+// client-supplied (Claude reads the session id out of request metadata). Ids
+// that are not plain slugs get a synthetic id instead of a broken link.
+const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** First candidate safe to use as a thread address, else undefined. */
+function safeThreadId(...candidates: (string | undefined)[]): string | undefined {
+  return candidates.find((c): c is string => c !== undefined && SAFE_ID_RE.test(c));
 }
 
 function parserFor(
@@ -238,16 +252,22 @@ export function groupTrafficConversations(
     const sessionKey = indexes
       .flatMap((i) => itemKeys[i]!)
       .find((k) => k.startsWith("session:"));
+    // Only a slug-shaped session id becomes an address: anything else can
+    // neither name a route nor resolve to a local transcript.
+    const sessionId =
+      sessionKey !== undefined ? safeThreadId(sessionKey.slice("session:".length)) : undefined;
     const conv: TrafficConversation = {
       // Thread address: session runs are the raw session (resume) id so the
       // thread page lives at /proxy/<sessionId>; linked runs use their first
-      // key; keyless solos fall back to the entry id.
+      // key; keyless solos fall back to the entry id; anything unsafe falls
+      // back to the group's position, which is unique within one grouping.
       id:
-        sessionKey !== undefined
-          ? sessionKey.slice("session:".length)
-          : firstKeys.length > 0
-            ? `conv-${firstKeys[0]}`
-            : (items[indexes[0]!]!.entry.id ?? `solo-${indexes[0]}`),
+        sessionId ??
+        safeThreadId(
+          firstKeys.length > 0 ? `conv-${firstKeys[0]}` : undefined,
+          items[indexes[0]!]!.entry.id,
+        ) ??
+        `thread-${indexes[0]}`,
       indexes,
       turns: indexes.length,
       models: [],
@@ -264,7 +284,7 @@ export function groupTrafficConversations(
     let read = 0;
     let creation = 0;
     let seenTokens = false;
-    if (sessionKey !== undefined) conv.sessionId = sessionKey.slice("session:".length);
+    if (sessionId !== undefined) conv.sessionId = sessionId;
     let firstTs = Number.POSITIVE_INFINITY;
     let lastTs = 0;
     for (const i of indexes) {

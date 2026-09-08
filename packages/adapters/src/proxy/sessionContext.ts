@@ -11,7 +11,7 @@
 // All reads are bounded and failure-safe: unknown sessions, huge files, or
 // malformed lines yield null/empty fields, never a throw.
 
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -92,6 +92,8 @@ const MAX_TRANSCRIPT_BYTES = 24_000_000;
 const MAX_SCRIPT_CHARS = 12_000;
 const MAX_AGENTS = 24;
 const MAX_HEAD_CHARS = 600;
+/** Only the head of an agent definition is shown, so only the head is read. */
+const MAX_AGENT_DEF_BYTES = 2_000;
 const MAX_WORKFLOWS = 8;
 const MAX_TALLY = 12;
 
@@ -109,6 +111,46 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+/** What a bounded head read saw: decoded text plus how much of the file it is. */
+export interface FileHead {
+  text: string;
+  bytesRead: number;
+  /** The file is longer than what was read, so `text` ends mid-record. */
+  truncated: boolean;
+}
+
+/**
+ * Read at most `maxBytes` from the head of a file. Transcripts reach many
+ * gigabytes, so the cap has to bound the syscall — reading the whole file and
+ * slicing afterwards buys the cap at the cost of the memory it was meant to
+ * save. Never throws: an unreadable file is null.
+ */
+export async function readFileHead(path: string, maxBytes: number): Promise<FileHead | null> {
+  const fh = await open(path, "r").catch(() => null);
+  if (!fh) return null;
+  try {
+    const size = (await fh.stat()).size;
+    const want = Math.max(0, Math.min(maxBytes, size));
+    const buf = Buffer.allocUnsafe(want);
+    let bytesRead = 0;
+    // read(2) may come up short of the request; loop until full or EOF.
+    while (bytesRead < want) {
+      const chunk = await fh.read(buf, bytesRead, want - bytesRead, bytesRead);
+      if (chunk.bytesRead === 0) break;
+      bytesRead += chunk.bytesRead;
+    }
+    return {
+      text: buf.subarray(0, bytesRead).toString("utf8"),
+      bytesRead,
+      truncated: size > bytesRead,
+    };
+  } catch {
+    return null;
+  } finally {
+    await fh.close().catch(() => {});
+  }
 }
 
 /** Message text of a transcript entry (string or text-block content). */
@@ -210,14 +252,9 @@ export async function findClaudeSession(
 }
 
 async function readAgentPromptHead(path: string, maxBytes: number): Promise<string | undefined> {
-  let raw: string;
-  try {
-    const fh = await readFile(path, "utf8");
-    raw = fh.slice(0, maxBytes);
-  } catch {
-    return undefined;
-  }
-  for (const line of raw.split("\n")) {
+  const head = await readFileHead(path, maxBytes);
+  if (!head) return undefined;
+  for (const line of head.text.split("\n")) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
@@ -336,25 +373,14 @@ export async function readSessionContext(
   try {
     const found = await findClaudeSession(sessionId, home);
     if (!found) return null;
-    let size = 0;
-    try {
-      size = (await stat(found.transcriptPath)).size;
-    } catch {
-      return null;
-    }
-    if (size === 0) return null;
-    let raw: string;
-    try {
-      if (size <= maxTranscriptBytes) {
-        raw = await readFile(found.transcriptPath, "utf8");
-      } else {
-        const buf = await readFile(found.transcriptPath);
-        const head = buf.subarray(0, maxTranscriptBytes).toString("utf8");
-        // Drop a possibly cut trailing line.
-        raw = head.slice(0, head.lastIndexOf("\n"));
-      }
-    } catch {
-      return null;
+    const head = await readFileHead(found.transcriptPath, maxTranscriptBytes);
+    if (!head || head.bytesRead === 0) return null;
+    let raw = head.text;
+    if (head.truncated) {
+      // The cap lands mid-record; drop the cut trailing line (and with it any
+      // partial multi-byte character the decoder replaced).
+      const lastNewline = raw.lastIndexOf("\n");
+      raw = lastNewline >= 0 ? raw.slice(0, lastNewline) : "";
     }
     const ctx: SessionContext = {
       sessionId,
@@ -461,13 +487,10 @@ export async function readSessionContext(
     for (const name of names) {
       if (!SESSION_ID_RE.test(name)) continue;
       const path = join(home, ".claude", "agents", `${name}.md`);
-      try {
-        const head = (await readFile(path, "utf8")).slice(0, 2000);
-        if (head.trim() !== "") {
-          ctx.agentDefinitions.push({ name, path, head: oneLine(head, MAX_HEAD_CHARS) });
-        }
-      } catch {
-        // No user-level definition by that name.
+      const def = await readFileHead(path, MAX_AGENT_DEF_BYTES);
+      // No user-level definition by that name, or an empty one.
+      if (def && def.text.trim() !== "") {
+        ctx.agentDefinitions.push({ name, path, head: oneLine(def.text, MAX_HEAD_CHARS) });
       }
     }
     return ctx;

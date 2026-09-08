@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   approxTokens,
   describeJsonShape,
+  looksLikeSse,
   safeJsonParse,
   splitSsePayloads,
   tallyNames,
@@ -40,5 +41,25 @@ describe("trafficKit", () => {
   it("describes JSON shapes", () => {
     assert.equal(describeJsonShape({ data: [1, 2] }), "object with a data array of 2");
     assert.equal(describeJsonShape([1]), "array of 1");
+  });
+});
+
+describe("looksLikeSse", () => {
+  it("reads only the head, so a JSON body quoting \"data:\" is not a stream", () => {
+    assert.equal(looksLikeSse('{"error":{"message":"bad data: field"}}'), false);
+    assert.equal(looksLikeSse('{"data":[{"id":"m1"}]}'), false);
+    assert.equal(looksLikeSse('[{"note":"data: x"}]'), false);
+    assert.equal(looksLikeSse("plain text mentioning data: here"), false);
+    assert.equal(looksLikeSse(""), false);
+  });
+
+  it("accepts every SSE opening line", () => {
+    assert.equal(looksLikeSse('data: {"type":"message_stop"}\n\n'), true);
+    assert.equal(looksLikeSse('event: ping\ndata: {"a":1}\n\n'), true);
+    assert.equal(looksLikeSse("id: 42\ndata: x\n\n"), true);
+    assert.equal(looksLikeSse("retry: 3000\n\n"), true);
+    assert.equal(looksLikeSse(": keep-alive\n\ndata: x\n\n"), true);
+    // Blank lines and indentation before the first field (stubs, proxies).
+    assert.equal(looksLikeSse('\n\n  data: {"a":1}\n'), true);
   });
 });
