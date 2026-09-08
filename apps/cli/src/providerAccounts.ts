@@ -40,6 +40,7 @@ export function providerAccountsHelp(): string {
     "  usage [id]                                    Live usage, when the provider exposes it",
   "  models                                        Model list, when the provider publishes one",
   "  model <id>                                  Model detail + serving providers",
+  "  test [--set key=value ...]                  Test config without saving it",
     "  remove <id>                                   Delete an account",
     "  current                                       Show the current login (importable providers)",
   ].join("\n");
@@ -232,6 +233,35 @@ export async function cmdProviderAccount(providerId: string, args: string[]): Pr
       }
     } catch (err) {
       console.log(`${providerId} model unavailable (${(err as Error).message})`);
+    }
+    return;
+  }
+
+  if (sub === "test") {
+    const { CustomAccountValidator, FileCustomProviderStore, OpenRouterAccountValidator } =
+      await import("@swisscode/adapters");
+    let validator;
+    if (providerId === "openrouter") {
+      validator = new OpenRouterAccountValidator();
+    } else {
+      const def = await new FileCustomProviderStore().get(providerId);
+      if (!def?.test) {
+        console.log(`${provider.displayName} declares no connection test.`);
+        return;
+      }
+      validator = new CustomAccountValidator(def);
+    }
+    const config: Record<string, string> = {};
+    for (const pair of flag(rest, "--set")) {
+      const eq = pair.indexOf("=");
+      if (eq > 0) config[pair.slice(0, eq)] = pair.slice(eq + 1);
+    }
+    const verdict = await validator.validateAccount(config);
+    if (verdict.ok) {
+      console.log(`OK${verdict.detail ? ` — ${verdict.detail}` : ""}${verdict.label ? ` (${verdict.label})` : ""}`);
+    } else {
+      console.error(`FAIL — ${verdict.error ?? "unknown error"}`);
+      process.exitCode = 1;
     }
     return;
   }

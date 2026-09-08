@@ -15,6 +15,7 @@ export const openRouterProvider: ProviderPort = {
     usageMetrics: true,
     modelCatalog: true,
     modelEndpoints: true,
+    connectionTest: true,
     switchVia: [],
     hint: "Store API keys once, reference them from profiles.",
   },

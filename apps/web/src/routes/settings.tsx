@@ -16,6 +16,7 @@ import {
   Stack,
   Table,
 } from "../design";
+import { notify } from "../design";
 import {
   bundleInventoryFn,
   exportBundleFn,
@@ -67,6 +68,7 @@ function SettingsPage() {
       a.download = `swisscode-backup-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
+      notify.success(`Backup downloaded${includeSecrets ? "" : " (secrets excluded)"}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -80,6 +82,13 @@ function SettingsPage() {
       const raw: unknown = JSON.parse(await file.text());
       const { results: imported } = await importBundleFn({ data: { bundle: raw, overwrite } });
       setResults(imported);
+      const total = imported.reduce((n, r) => n + r.imported, 0);
+      const problems = imported.reduce((n, r) => n + r.errors.length, 0);
+      if (problems > 0) {
+        notify.error(`Imported ${total} with ${problems} issue(s) — see table`);
+      } else {
+        notify.success(`Imported ${total} record(s)`);
+      }
       await router.invalidate();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

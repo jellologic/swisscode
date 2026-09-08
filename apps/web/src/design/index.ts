@@ -3,6 +3,7 @@ export type { NavLink } from "./Page";
 export { Card, Grid2, Stack } from "./Card";
 export type { CardPad } from "./Card";
 export { Button, Check, Field, Form, Input, Select, Textarea } from "./controls";
+export { ToastHost, notify } from "./toast";
 export type { ButtonSize, ButtonVariant } from "./controls";
 export { Combobox } from "./combobox";
 export type { ComboColumn } from "./combobox";

@@ -65,6 +65,25 @@ export interface ProviderUsageReader {
   readUsage(account: ProviderAccount): Promise<ProviderUsageSnapshot>;
 }
 
+/** Verdict from a pre-save credential check. Never throws — failure is data. */
+export interface AccountValidation {
+  ok: boolean;
+  /** Suggested label when the endpoint names the credential (key label…). */
+  label?: string;
+  /** Human detail, e.g. "spend $1.50 of $10". */
+  detail?: string;
+  error?: string;
+}
+
+/**
+ * Port: test a provider's config before it is saved (driven by core).
+ * Implemented per provider; customs declare a test endpoint instead of code.
+ */
+export interface ProviderAccountValidator {
+  readonly providerId: string;
+  validateAccount(config: Record<string, string>): Promise<AccountValidation>;
+}
+
 /** Port: a provider's published model list, for pickers (driven by core). */
 export interface ProviderModelCatalog {
   readonly providerId: string;

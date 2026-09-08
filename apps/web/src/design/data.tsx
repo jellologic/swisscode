@@ -85,7 +85,7 @@ export function Meter({ value, label, hint }: MeterProps) {
   );
 }
 
-export type NoticeTone = "info" | "warn" | "danger";
+export type NoticeTone = "info" | "success" | "warn" | "danger";
 
 /** Callout block for errors and notes. */
 export function Notice(props: { tone?: NoticeTone; children: ReactNode }) {

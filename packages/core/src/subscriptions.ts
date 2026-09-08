@@ -154,6 +154,8 @@ export interface ProviderAccountCapabilities {
   modelCatalog?: boolean;
   /** The provider lists serving providers per model (OpenRouter endpoints). */
   modelEndpoints?: boolean;
+  /** The provider can test credentials before they are saved. */
+  connectionTest?: boolean;
   /** Activation modes the accounts UI may offer. Key-based providers: []. */
   switchVia: AccountSwitchMode[];
   /** Human hint for the accounts UI, e.g. "needs an API key". */

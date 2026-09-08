@@ -12,6 +12,7 @@ import {
   FileAccountRepository,
   FileUsageCache,
   defaultSubscriptionsDir,
+  findAccountByCredential,
 } from "@swisscode/adapters";
 import {
   OAuthError,
@@ -33,7 +34,7 @@ export function accountsHelp(): string {
     "swisscode accounts --provider <id> <command>  (per-provider accounts)",
     "",
     "  current                        Show the current Claude Code login",
-    "  import <id> [--label <label>]  Snapshot the current Claude Code login",
+    "  import [id] [--label <label>]  Snapshot the current Claude Code login (id defaults to the login email)",
     "  list                           List stored accounts",
     "  usage [id]                     Show live 5h/7d utilization",
     "  use <id> [--force]             Switch Claude Code to this account (file swap)",
@@ -42,22 +43,13 @@ export function accountsHelp(): string {
 }
 
 export async function cmdAccountsCurrent(): Promise<void> {
-  const { credentialIdentity } = await import("@swisscode/adapters");
   const active = await activeStore.readActive();
   if (!active.credential) {
     console.log("No Claude Code login stored (backend: none). Log in first.");
     return;
   }
   const email = await usageApi.fetchEmail(active.credential.accessToken);
-  const identity = credentialIdentity(active.credential);
-  let matched: string | null = null;
-  for (const a of await accounts.list()) {
-    const cred = await accounts.loadCredential(a.id);
-    if (cred && credentialIdentity(cred) === identity) {
-      matched = a.id;
-      break;
-    }
-  }
+  const matched = (await findAccountByCredential(accounts, active.credential))?.id ?? null;
   console.log(`Backend: ${active.backend}${active.source ? ` (${active.source})` : ""}`);
   console.log(`Login: ${email ?? "(email unavailable)"}`);
   console.log(matched ? `Matches vault account: ${matched}` : "Not imported yet — run `swisscode accounts import <id>`.");
@@ -78,10 +70,11 @@ function ago(iso: string): string {
   return `${Math.floor(hours / 24)}d ${hours % 24}h ago`;
 }
 
-export async function cmdAccountsImport(id: string, label?: string, force = false): Promise<void> {
-  validateAccountId(id);
-  if (!force && (await accounts.get(id))) {
-    console.error(`Account "${id}" already exists. Re-run with --force to re-import.`);
+export async function cmdAccountsImport(id: string | undefined, label?: string, force = false): Promise<void> {
+  const explicitId = (id ?? "").trim();
+  if (explicitId) validateAccountId(explicitId);
+  if (explicitId && !force && (await accounts.get(explicitId))) {
+    console.error(`Account "${explicitId}" already exists. Re-run with --force to re-import.`);
     process.exitCode = 1;
     return;
   }
@@ -96,12 +89,34 @@ export async function cmdAccountsImport(id: string, label?: string, force = fals
     return;
   }
   const email = await usageApi.fetchEmail(active.credential.accessToken);
+  const finalId =
+    explicitId ||
+    (email ? email.toLowerCase().split("@")[0]!.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") : "");
+  if (!finalId) {
+    console.error("Enter an account id — none could be derived from the login.");
+    process.exitCode = 1;
+    return;
+  }
+  validateAccountId(finalId);
+  if (!force && !explicitId && (await accounts.get(finalId))) {
+    console.error(`Account "${finalId}" already exists. Re-run with an explicit id or --force.`);
+    process.exitCode = 1;
+    return;
+  }
+  const duplicate = await findAccountByCredential(accounts, active.credential);
+  if (duplicate && duplicate.id !== finalId) {
+    console.error(
+      `This Claude login is already imported as "${duplicate.id}". Re-run \`swisscode accounts import ${duplicate.id} --force\` to re-import it.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   const now = new Date().toISOString();
   await accounts.save(
-    { id, label: label ?? email ?? id, email, createdAt: now, updatedAt: now },
+    { id: finalId, label: label ?? email ?? finalId, email, createdAt: now, updatedAt: now },
     active.credential,
   );
-  console.log(`Imported "${id}" from ${active.backend}${email ? ` (${email})` : ""}.`);
+  console.log(`Imported "${finalId}" from ${active.backend}${email ? ` (${email})` : ""}.`);
 }
 
 export async function cmdAccountsList(): Promise<void> {
@@ -215,7 +230,7 @@ export async function cmdAccounts(args: string[]): Promise<void> {
   if (sub === "import" && rest[0]) {
     const labelFlag = rest.indexOf("--label");
     const label = labelFlag >= 0 ? rest[labelFlag + 1] : undefined;
-    return cmdAccountsImport(rest[0] as string, label, rest.includes("--force"));
+    return cmdAccountsImport(rest[0] as string | undefined, label, rest.includes("--force"));
   }
   if (sub === "list") return cmdAccountsList();
   if (sub === "usage") return cmdAccountsUsage(rest[0]);

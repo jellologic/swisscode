@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { FileAccountRepository } from "./accountVault.js";
 import { ClaudeActiveCredentialStore } from "./activeStore.js";
 import { AnthropicOAuthClient, AnthropicUsageClient } from "./anthropic.js";
+import { findAccountByCredential } from "./identity.js";
 import { ensureFreshCredential, isCredentialExpired } from "@swisscode/core";
 
 async function tempDir(prefix: string): Promise<string> {
@@ -30,6 +31,26 @@ describe("FileAccountRepository", () => {
     assert.equal(mode, 0o600);
     assert.equal(await repo.remove("personal"), true);
     assert.equal(await repo.remove("personal"), false);
+  });
+
+  it("matches a credential lineage across access-token rotation", async () => {
+    const repo = new FileAccountRepository(join(await tempDir("vault-"), "subs"));
+    await repo.save(
+      { id: "personal", label: "Personal", createdAt: "", updatedAt: "" },
+      { accessToken: "old-at", refreshToken: "same-rt" },
+    );
+    await repo.save(
+      { id: "work", label: "Work", createdAt: "", updatedAt: "" },
+      { accessToken: "at", refreshToken: "other-rt" },
+    );
+    // Rotated access token, same refresh lineage → same account.
+    const matched = await findAccountByCredential(repo, { accessToken: "new-at", refreshToken: "same-rt" });
+    assert.equal(matched?.id, "personal");
+    // Unknown lineage → null (safe to import as new).
+    assert.equal(
+      await findAccountByCredential(repo, { accessToken: "x", refreshToken: "fresh-rt" }),
+      null,
+    );
   });
 });
 

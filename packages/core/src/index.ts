@@ -1,9 +1,11 @@
 export type { FieldDef, LaunchSpec, PluginHelp, PluginLink, Profile } from "./domain.js";
 export type {
+  AccountValidation,
   AgentPort,
   AgentRegistry,
   ProfileRepository,
   ProviderAccountRepository,
+  ProviderAccountValidator,
   ProviderModelCatalog,
   ProviderPort,
   ProviderRegistry,
@@ -51,7 +53,7 @@ export {
   validateAccountId,
 } from "./subscriptionService.js";
 export type { FreshCredential } from "./subscriptionService.js";
-export type { CustomProviderDef, ValidateCustomOptions } from "./customProviders.js";
+export type { CustomProviderDef, CustomProviderTest, ValidateCustomOptions } from "./customProviders.js";
 export { validateCustomProviderDef } from "./customProviders.js";
 export type {
   BundleStoreKey,

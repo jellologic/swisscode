@@ -11,6 +11,8 @@ export {
 export { OpenRouterUsageReader } from "./providers/openRouterUsage.js";
 export type { OpenRouterUsageOptions } from "./providers/openRouterUsage.js";
 export { customProviderPort } from "./providers/customProvider.js";
+export { CustomAccountValidator, OpenRouterAccountValidator } from "./providers/accountValidator.js";
+export type { AccountValidatorOptions, CustomValidatorOptions } from "./providers/accountValidator.js";
 export {
   FileCustomProviderStore,
   defaultCustomProvidersPath,
@@ -33,7 +35,7 @@ export type {
   ModelEndpointsCacheEntry,
   ModelEndpointsSnapshot,
 } from "./providers/modelCatalogCache.js";
-export { credentialIdentity } from "./subscriptions/identity.js";
+export { credentialIdentity, findAccountByCredential } from "./subscriptions/identity.js";
 export { CachingUsageClient, FileUsageCache, defaultUsageCachePath } from "./subscriptions/usageCache.js";
 export type { CachingUsageOptions, UsageCacheEntry } from "./subscriptions/usageCache.js";
 export { UsageError } from "./subscriptions/anthropic.js";

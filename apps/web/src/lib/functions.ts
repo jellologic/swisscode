@@ -15,6 +15,7 @@ import {
   getProxyState,
   getUsage,
   importConfigBundle,
+  validateProviderAccount,
   importAccount,
   listProviderAccountSummaries,
   previewProfile,
@@ -163,6 +164,14 @@ export const saveCustomProviderFn = createServerFn({ method: "POST" })
     envFromConfig?: Record<string, string>;
     modelEnvVar?: string;
     modelConfigKey?: string;
+    test?: {
+      url: string;
+      method?: "GET" | "POST";
+      headerName?: string;
+      authField?: string;
+      authScheme?: string;
+      expectStatus?: number;
+    };
     help?: { summary?: string; setup?: string[]; commands?: string[]; links?: { label: string; href: string }[] };
   }) => data)
   .handler(async ({ data }) => ({
@@ -192,3 +201,7 @@ export const exportBundleFn = createServerFn({ method: "GET" })
 export const importBundleFn = createServerFn({ method: "POST" })
   .validator((data: { bundle: unknown; overwrite: boolean }) => data)
   .handler(async ({ data }) => ({ results: await importConfigBundle(data.bundle, data.overwrite) }));
+
+export const validateProviderAccountFn = createServerFn({ method: "POST" })
+  .validator((data: { providerId: string; config: Record<string, string> }) => data)
+  .handler(async ({ data }) => validateProviderAccount(data.providerId, data.config));

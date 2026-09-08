@@ -7,6 +7,7 @@ import {
   CachingModelCatalog,
   CachingUsageClient,
   ClaudeActiveCredentialStore,
+  CustomAccountValidator,
   DEFAULT_PROXY_PORT,
   FileAccountRepository,
   FileCustomProviderStore,
@@ -14,14 +15,15 @@ import {
   FileProfileRepository,
   FileProviderAccountRepository,
   FileUsageCache,
+  OpenRouterAccountValidator,
   OpenRouterModelCatalog,
   OpenRouterUsageReader,
   createBundleRegistry,
   defaultProviders,
+  findAccountByCredential,
   loadCustomProviderPorts,
   createAgentRegistry,
   createProviderRegistry,
-  credentialIdentity,
   defaultProfilesPath,
   maskSecret,
 } from "@swisscode/adapters";
@@ -31,6 +33,7 @@ import {
   resolveProviderConfig,
   validateAccountId,
   validateProfile,
+  type AccountValidation,
   type AccountUsage,
   type ConfigBundle,
   type CustomProviderDef,
@@ -40,6 +43,7 @@ import {
   type Profile,
   type ProviderAccount,
   type ProviderAccountCapabilities,
+  type ProviderAccountValidator,
   type ProviderModel,
   type ProviderRegistry,
   type StoreImportResult,
@@ -109,6 +113,8 @@ export interface ProviderListItem {
   help?: PluginHelp;
   /** False for user-defined providers (editable on /providers). */
   builtin: boolean;
+  /** True when the provider can test credentials before save. */
+  hasValidator: boolean;
   /** The stored definition, only for customs. */
   custom?: CustomProviderDef;
 }
@@ -117,6 +123,7 @@ export interface ProviderListItem {
 export async function getProviders(): Promise<ProviderListItem[]> {
   const registry = await providerRegistry();
   const customs = new Map((await customProviderStore.list()).map((d) => [d.id, d]));
+  const validators = await accountValidators();
   return registry.list().map((p) => ({
     id: p.id,
     displayName: p.displayName,
@@ -125,8 +132,34 @@ export async function getProviders(): Promise<ProviderListItem[]> {
     accountCapabilities: p.accountCapabilities,
     help: p.help,
     builtin: !customs.has(p.id),
+    hasValidator: validators.has(p.id),
     ...(customs.get(p.id) ? { custom: customs.get(p.id) } : {}),
   }));
+}
+
+/** Validators: built-ins plus customs that declare a test endpoint. */
+async function accountValidators(): Promise<Map<string, ProviderAccountValidator>> {
+  const map = new Map<string, ProviderAccountValidator>([
+    ["openrouter", new OpenRouterAccountValidator()],
+  ]);
+  for (const def of await customProviderStore.list()) {
+    if (def.test) map.set(def.id, new CustomAccountValidator(def));
+  }
+  return map;
+}
+
+/** Pre-save credential check. Never throws — failure is a verdict. */
+export async function validateProviderAccount(
+  providerId: string,
+  config: Record<string, string>,
+): Promise<AccountValidation> {
+  const validator = (await accountValidators()).get(providerId);
+  if (!validator) return { ok: false, error: `No connection test for provider "${providerId}".` };
+  try {
+    return await validator.validateAccount(config);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
 }
 
 export async function getProfiles(): Promise<Profile[]> {
@@ -168,13 +201,20 @@ export async function getAccounts(): Promise<SubscriptionAccount[]> {
   return vault.list();
 }
 
+/** Email local-part → id slug, e.g. "Ada.Lovelace@x.com" → "ada-lovelace". */
+function slugifyId(value: string): string {
+  return value
+    .toLowerCase()
+    .split("@")[0]!
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 export async function importAccount(
   id: string,
   label?: string,
   overwrite = false,
 ): Promise<SubscriptionAccount> {
-  validateAccountId(id);
-  if (!overwrite && (await vault.get(id))) throw new Error(`Account "${id}" already exists.`);
   const active = await activeStore.readActive();
   if (!active.credential) {
     throw new Error(
@@ -184,10 +224,23 @@ export async function importAccount(
     );
   }
   const email = await usageApi.fetchEmail(active.credential.accessToken);
+  // Blank id defaults to what the subscription says (email local-part).
+  const finalId = id.trim() || (email ? slugifyId(email) : "");
+  if (!finalId) throw new Error("Enter an account id — none could be derived from the login.");
+  validateAccountId(finalId);
+  if (!overwrite && (await vault.get(finalId))) {
+    throw new Error(`Account "${finalId}" already exists.`);
+  }
+  const duplicate = await findAccountByCredential(vault, active.credential);
+  if (duplicate && duplicate.id !== finalId) {
+    throw new Error(
+      `This Claude login is already imported as "${duplicate.id}". Use Re-import on that account to refresh its credentials instead of adding it again.`,
+    );
+  }
   const now = new Date().toISOString();
   const account: SubscriptionAccount = {
-    id,
-    label: label?.trim() || email || id,
+    id: finalId,
+    label: label?.trim() || email || finalId,
     email,
     createdAt: now,
     updatedAt: now,
@@ -318,15 +371,8 @@ export async function getCurrentLogin(): Promise<CurrentLogin | null> {
   const active = await activeStore.readActive();
   if (!active.credential) return null;
   const email = await usageApi.fetchEmail(active.credential.accessToken);
-  const identity = credentialIdentity(active.credential);
-  let matchedAccountId: string | null = null;
-  for (const a of await vault.list()) {
-    const cred = await vault.loadCredential(a.id);
-    if (cred && credentialIdentity(cred) === identity) {
-      matchedAccountId = a.id;
-      break;
-    }
-  }
+  const matched = await findAccountByCredential(vault, active.credential);
+  const matchedAccountId = matched?.id ?? null;
   return {
     backend: active.backend,
     source: active.source,

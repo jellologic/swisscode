@@ -1,7 +1,7 @@
 import { Outlet, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import "../design/tokens.css";
 import "../design/components.css";
-import { Button, Card, Code, Muted, Notice, Page, RowActions, Stack, Topbar } from "../design";
+import { Button, Card, Code, Muted, Notice, Page, RowActions, Stack, ToastHost, Topbar } from "../design";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -81,6 +81,7 @@ function RootComponent() {
         <main className="sw-main">
           <Outlet />
         </main>
+        <ToastHost />
         <Scripts />
       </body>
     </html>
