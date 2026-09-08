@@ -1,24 +1,34 @@
 // `swisscode proxy ...` — run the subscription proxy, switch its active
 // account, or check its status. The proxy itself lives in @swisscode/adapters.
 
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, readFile, stat } from "node:fs/promises";
 import {
   AnthropicOAuthClient,
   ClaudeActiveCredentialStore,
   DEFAULT_TRAFFIC_BODY_BYTES,
   FileAccountRepository,
+  FileCustomProviderStore,
+  FileProfileRepository,
+  FileProviderAccountRepository,
   PROXY_TOKEN_REJECTED,
   ProxyControlClient,
   ProxyUnavailableError,
+  SqliteTrafficLog,
   SubscriptionProxy,
   createProxyToken,
+  createProviderRegistry,
   defaultProxyTokenPath,
   defaultSubscriptionsDir,
   defaultTrafficLogPath,
+  defaultTrafficStorePath,
+  loadCustomProviderPorts,
+  openTrafficStore,
   proxyBaseUrl,
   proxyPort,
 } from "@swisscode/adapters";
 import type { ProxyTrafficEntry } from "@swisscode/adapters";
+import { SPEND_ESTIMATE_NOTE, formatSpend, matchTrafficFilter, spendRollup, suggestInsights } from "@swisscode/core";
+import type { TrafficFilter, TrafficRollupGrain } from "@swisscode/core";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -29,29 +39,86 @@ export function proxyHelp(): string {
   return [
     "swisscode proxy <command>",
     "",
-    "  run [--port <n>] [--traffic-log <path>|--no-traffic-log] [--log-bodies]",
-    "      [--traffic-keep <n>] [--traffic-body-bytes <n>] [--log-body-bytes <n>]",
+    "  run [--port <n>] [--traffic-log <path>|--no-traffic-log] [--traffic-store <path>]",
+    "      [--log-bodies] [--traffic-keep <n>] [--traffic-body-bytes <n>] [--log-body-bytes <n>]",
     "                          Run the subscription proxy (foreground). Each",
     "                          proxied request is appended as redacted JSONL",
     "                          (default ~/.swisscode/proxy-traffic.jsonl) and",
-    "                          kept in a memory ring (default 200, 0 disables).",
-    "                          Bodies are capped at 64KB per side by default;",
-    "                          <n> sets the cap (0 = unlimited).",
+    "                          indexed as scalar facts in SQLite (default",
+    "                          ~/.swisscode/proxy-traffic.sqlite) for `report`;",
+    "                          --no-traffic-log disables both. Recent entries",
+    "                          are also kept in a memory ring (default 200,",
+    "                          0 disables). Bodies are capped",
+    "                          at 64KB per side by default; <n> sets the cap",
+    "                          (0 = unlimited). Retention: SWISSCODE_TRAFFIC_STORE_DAYS",
+    "                          (default 30) and SWISSCODE_TRAFFIC_STORE_ROWS",
+    "                          (default 100000), 0 keeps everything.",
     "                          Each run mints a control token (0600) that",
     "                          `use`/`status` send back on control requests.",
     "  use <id> [--port <n>]   Switch the proxy's active account",
     "  status [--port <n>]     Show proxy status and accounts",
-    "  log [--tail <n>] [--traffic-log <path>]",
-    "                          Show recent proxied requests (dev traffic view)",
+    "  log [--tail <n>] [--traffic-log <path>] [--profile <name>] [--route <id>]",
+    "      [--since <iso>] [--errors]",
+    "                          Show recent proxied requests (dev traffic view),",
+    "                          newest last, optionally filtered.",
+    "  report [--profile <name>] [--days <n>] [--by profile|route|day]",
+    "      [--traffic-store <path>]",
+    "                          Roll up recorded traffic: requests, errors, latency",
+    "                          percentiles, token totals, estimated spend, and",
+    "                          read-only route suggestions. Spend is estimated",
+    "                          from a static per-model price table — not a bill.",
+    "",
+    "Profile identity: launches point at <base>/p/<profileName> (path wins)",
+    "or send the swisscode-profile/<name> auth tag (fallback). A path/tag",
+    "mismatch is noted on the traffic entry, never trusted silently.",
+    "Profiles with direct:true skip the proxy entirely.",
   ].join("\n");
 }
 
 function trafficLine(e: ProxyTrafficEntry): string {
   const hops = e.attempts.map((a) => `${a.accountId}:${a.status}`).join("→") || "-";
-  return `${e.ts} ${e.method} ${e.path} → ${e.status} ${e.ms}ms acct=${e.accountId ?? "-"} up=${e.reqBytes}B down=${e.resBytes}B [${hops}]${e.error ? ` err=${e.error}` : ""}`;
+  const route = e.route ? ` route=${e.route}${e.upstreamModel ? ` sent=${e.upstreamModel}` : ""}` : "";
+  return `${e.ts} ${e.method} ${e.path} → ${e.status} ${e.ms}ms prof=${e.profile ?? "-"}${route} acct=${e.accountId ?? "-"} up=${e.reqBytes}B down=${e.resBytes}B [${hops}]${e.error ? ` err=${e.error}` : ""}${e.note ? ` note=${e.note}` : ""}`;
 }
 
-async function showTrafficLog(path: string, tail: number): Promise<void> {
+/**
+ * Shared report filters for `log` and `report`: both surfaces build the same
+ * core filter object, so the JSONL tail and the SQLite rollup answer the same
+ * questions. `filtering` tells the log reader whether unparseable lines are
+ * still worth showing raw (unfiltered tail) or must be skipped (a filter the
+ * line cannot satisfy).
+ */
+function trafficFilterFromArgs(rest: string[]): { filter: TrafficFilter; filtering: boolean } {
+  const filter: TrafficFilter = {};
+  let filtering = false;
+  const profile = flag(rest, "--profile");
+  if (profile !== undefined) {
+    filter.profile = profile;
+    filtering = true;
+  }
+  const route = flag(rest, "--route");
+  if (route !== undefined) {
+    filter.route = route;
+    filtering = true;
+  }
+  const since = flag(rest, "--since");
+  if (since !== undefined) {
+    filter.since = since;
+    filtering = true;
+  }
+  if (rest.includes("--errors")) {
+    filter.errorsOnly = true;
+    filtering = true;
+  }
+  return { filter, filtering };
+}
+
+async function showTrafficLog(
+  path: string,
+  tail: number,
+  filter: TrafficFilter,
+  filtering: boolean,
+): Promise<void> {
   let text: string;
   try {
     text = await readFile(path, "utf8");
@@ -61,14 +128,75 @@ async function showTrafficLog(path: string, tail: number): Promise<void> {
     return;
   }
   const lines = text.split("\n").filter((l) => l.trim().length > 0);
-  for (const line of lines.slice(Math.max(0, lines.length - tail))) {
+  const rows: string[] = [];
+  for (const line of lines) {
+    let entry: ProxyTrafficEntry;
     try {
-      console.log(trafficLine(JSON.parse(line) as ProxyTrafficEntry));
+      entry = JSON.parse(line) as ProxyTrafficEntry;
     } catch {
-      console.log(line);
+      if (!filtering) rows.push(line);
+      continue;
     }
+    if (filtering && !matchTrafficFilter(entry, filter)) continue;
+    rows.push(trafficLine(entry));
   }
-  if (lines.length === 0) console.log("(empty — no proxied requests yet)");
+  for (const row of rows.slice(Math.max(0, rows.length - tail))) console.log(row);
+  if (rows.length === 0) {
+    console.log(filtering ? "(no matching requests)" : "(empty — no proxied requests yet)");
+  }
+}
+
+async function showTrafficReport(
+  storePath: string,
+  filter: TrafficFilter,
+  grain: TrafficRollupGrain,
+  windowLabel?: string,
+): Promise<void> {
+  // Stat first: opening would create an empty DB as a side effect, and a
+  // home that never ran the proxy deserves guidance, not a stray file.
+  try {
+    await stat(storePath);
+  } catch {
+    console.error(
+      `No queryable traffic store yet at ${storePath}. Start the proxy with \`swisscode proxy run\`.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  let store: SqliteTrafficLog;
+  try {
+    store = await openTrafficStore(storePath);
+  } catch (err) {
+    console.error(`Cannot open the traffic store at ${storePath} (${(err as Error).message}).`);
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const rows = await store.rollup(filter, grain);
+    if (rows.length === 0) {
+      console.log("(no traffic recorded for this selection yet)");
+      return;
+    }
+    // Spend prices the same uncapped selection the rollup grouped, so the
+    // figures join row-by-row instead of disagreeing with the table.
+    const spendByKey = new Map(
+      spendRollup(await store.query({ ...filter, limit: 0 }), grain).map((r) => [r.key, r.estSpendUsd]),
+    );
+    console.log("key\trequests\terrors\terr%\tp50ms\tp95ms\tin-tok\tout-tok\test-spend");
+    for (const r of rows) {
+      console.log(
+        `${r.key}\t${r.requests}\t${r.errors}\t${(r.errorRate * 100).toFixed(1)}\t${r.p50Ms}\t${r.p95Ms}\t${r.reqTokens}\t${r.resTokens}\t${formatSpend(spendByKey.get(r.key) ?? 0)}`,
+      );
+    }
+    const spendLookup: Record<string, number> = {};
+    for (const [key, spend] of spendByKey) spendLookup[key] = spend;
+    for (const tip of suggestInsights(rows, spendLookup, windowLabel ? { windowLabel } : {})) {
+      console.log(`- ${tip}`);
+    }
+    console.log(SPEND_ESTIMATE_NOTE);
+  } finally {
+    store.close();
+  }
 }
 
 /**
@@ -107,6 +235,22 @@ export async function proxyUse(id: string, port: number): Promise<boolean> {
   }
 }
 
+/**
+ * Proxy-down preflight for launches without a bound subscription account
+ * (key profiles, account-less subscription profiles). Same diagnosis as
+ * everywhere else: the adapters-owned "not running" message. False = abort.
+ */
+export async function checkProxyUp(port: number): Promise<boolean> {
+  try {
+    await control(port).status();
+    return true;
+  } catch (err) {
+    console.error(controlErrorMessage(err));
+    process.exitCode = 1;
+    return false;
+  }
+}
+
 /** Ensure the proxy is up and set to the account. False = caller should abort. */
 export async function ensureProxyAccount(id: string, port: number): Promise<boolean> {
   return proxyUse(id, port);
@@ -130,12 +274,31 @@ export async function cmdProxy(args: string[]): Promise<void> {
     // One token per run: a token that outlived its server would keep
     // authorizing after the port moved to something else.
     const controlToken = await createProxyToken();
+    const keyAccounts = await new FileProviderAccountRepository().list();
+    // The queryable store opens beside the JSONL firehose unless recording is
+    // off entirely. A store failure (e.g. an old Node without node:sqlite)
+    // degrades to JSONL-only — reporting never breaks proxying.
+    const storePath = noLog ? undefined : (flag(rest, "--traffic-store") ?? defaultTrafficStorePath());
+    let trafficStore: SqliteTrafficLog | undefined;
+    if (storePath) {
+      try {
+        trafficStore = await openTrafficStore(storePath);
+      } catch (err) {
+        console.error(`traffic store unavailable (${(err as Error).message}) — continuing JSONL-only.`);
+      }
+    }
     const proxy = new SubscriptionProxy(
       new FileAccountRepository(defaultSubscriptionsDir()),
       new AnthropicOAuthClient(),
       {
+        profiles: new FileProfileRepository(),
+        providerAccounts: new FileProviderAccountRepository(),
+        providers: createProviderRegistry(
+          await loadCustomProviderPorts(new FileCustomProviderStore()),
+        ),
         logBodies,
         controlToken,
+        trafficStore,
         // Adopt Claude Code's live lineage when the vault copy rotated away.
         liveStore: new ClaudeActiveCredentialStore(),
         trafficBufferSize: keep,
@@ -152,15 +315,31 @@ export async function cmdProxy(args: string[]): Promise<void> {
       },
     );
     const count = (await proxy.status()).accounts.length;
-    if (count === 0) {
-      console.error("No subscription accounts stored. Run `swisscode accounts import <id>` first.");
+    // Key-only users get a working proxy too: subscription requests then fail
+    // per-request with a clear error instead of refusing to start. Only a
+    // home with neither kind of credential is a misconfiguration worth
+    // aborting over.
+    if (count === 0 && keyAccounts.length === 0) {
+      console.error(
+        "No accounts stored. Run `swisscode accounts import <id>` (subscription) or store a provider key first.",
+      );
       process.exitCode = 1;
       return;
     }
     await proxy.listen(port);
-    console.log(`Subscription proxy on ${proxyBaseUrl(port)} (${count} account(s)). Ctrl-C to stop.`);
+    console.log(
+      `Subscription proxy on ${proxyBaseUrl(port)} (${count} vault account(s), ${keyAccounts.length} key account(s)). Ctrl-C to stop.`,
+    );
+    if (count === 0) {
+      console.log("No subscription accounts — subscription requests will fail until one is imported.");
+    }
     if (trafficLog) console.log(`Traffic: ${trafficLog}${logBodies ? " (bodies on)" : ""}`);
     const shutdown = () => {
+      try {
+        trafficStore?.close();
+      } catch {
+        // Already closing down — the original signal is what matters.
+      }
       void proxy.close().finally(() => process.exit(0));
     };
     process.on("SIGINT", shutdown);
@@ -184,7 +363,22 @@ export async function cmdProxy(args: string[]): Promise<void> {
   if (sub === "log") {
     const rawTail = flag(rest, "--tail");
     const tail = rawTail ? Math.max(1, parseInt(rawTail, 10) || 20) : 20;
-    await showTrafficLog(flag(rest, "--traffic-log") ?? defaultTrafficLogPath(), tail);
+    const { filter, filtering } = trafficFilterFromArgs(rest);
+    await showTrafficLog(flag(rest, "--traffic-log") ?? defaultTrafficLogPath(), tail, filter, filtering);
+    return;
+  }
+  if (sub === "report") {
+    const byRaw = flag(rest, "--by") ?? "day";
+    const grain: TrafficRollupGrain = byRaw === "profile" || byRaw === "route" ? byRaw : "day";
+    const { filter } = trafficFilterFromArgs(rest);
+    const daysRaw = flag(rest, "--days");
+    let windowLabel: string | undefined;
+    if (daysRaw !== undefined) {
+      const days = Math.max(0, parseInt(daysRaw, 10) || 0);
+      filter.since = new Date(Date.now() - days * 86_400_000).toISOString();
+      windowLabel = `last ${days} day${days === 1 ? "" : "s"}`;
+    }
+    await showTrafficReport(flag(rest, "--traffic-store") ?? defaultTrafficStorePath(), filter, grain, windowLabel);
     return;
   }
   console.log(proxyHelp());

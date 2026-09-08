@@ -7,8 +7,13 @@ import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { FileAccountRepository } from "../subscriptions/accountVault.js";
 import { AnthropicOAuthClient } from "../subscriptions/anthropic.js";
+import { FileProfileRepository } from "../store/fileProfiles.js";
+import { FileProviderAccountRepository } from "../store/providerAccounts.js";
+import { createProviderRegistry } from "../registry.js";
+import type { Profile, ProviderPort, TrafficLog } from "@swisscode/core";
+import type { ProxyTrafficEntry } from "./server.js";
 import { PROXY_TOKEN_HEADER } from "./proxyToken.js";
-import { SubscriptionProxy, cooldownMsFromRetryAfter, isLoopbackHost } from "./server.js";
+import { SubscriptionProxy, cooldownMsFromRetryAfter, isLoopbackHost, parseProfilePath } from "./server.js";
 
 // A refresh takes the vault's `<id>.lock`, whose directory is resolved from
 // SWISSCODE_HOME when the call happens — so the whole file gets a throwaway
@@ -158,6 +163,37 @@ describe("SubscriptionProxy", () => {
       assert.equal(res.status, 429);
       assert.equal(res.headers.get("content-encoding"), null);
       assert.equal(await res.text(), "plain-error-body");
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it("still serves the request when the traffic store insert fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "proxy-store-fail-"));
+    const repo = new FileAccountRepository(join(dir, "subs"));
+    await repo.save(
+      { id: "solo", label: "Solo", createdAt: "", updatedAt: "" },
+      { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + 3600_000 },
+    );
+    const fetchFn = (async () => new Response("ok-body", { status: 200 })) as typeof fetch;
+    const failingStore: TrafficLog = {
+      append: async () => {
+        throw new Error("disk full");
+      },
+      query: async () => [],
+      rollup: async () => [],
+    };
+    const proxy = new SubscriptionProxy(repo, new AnthropicOAuthClient(), {
+      fetchFn,
+      trafficStore: failingStore,
+    });
+    const port = await proxy.listen(0);
+    try {
+      // Reporting is fire-and-forget: the client gets its 200 while the
+      // insert failure lands on stderr, never on the response.
+      const res = await fetch(`http://127.0.0.1:${port}/v1/messages`, { method: "POST" });
+      assert.equal(res.status, 200);
+      assert.equal(await res.text(), "ok-body");
     } finally {
       await proxy.close();
     }
@@ -1346,5 +1382,503 @@ describe("SubscriptionProxy", () => {
     assert.equal(entry["status"], 503);
     assert.equal(entry["accountId"], null);
     assert.equal(entry["reqBody"], undefined); // bodies off by default
+  });
+});
+
+describe("profile identity + model routing", () => {
+  // Test-only key provider: speaks the same ANTHROPIC_* vars every real key
+  // provider speaks, so the proxy's env translation is what gets exercised.
+  const stubKeyProvider: ProviderPort = {
+    id: "stub-key",
+    displayName: "Stub Key",
+    description: "test-only key provider",
+    fields: [],
+    accountCapabilities: { importActive: false, usageMetrics: false, switchVia: [] },
+    buildEnv: (config) => ({
+      ...(config?.["baseUrl"] ? { ANTHROPIC_BASE_URL: config["baseUrl"] } : {}),
+      ...(config?.["apiKey"] ? { ANTHROPIC_AUTH_TOKEN: config["apiKey"] } : {}),
+    }),
+  };
+
+  interface Seen {
+    url: string;
+    auth: string;
+    apiKey: string;
+    model: unknown;
+  }
+
+  /** Stub upstream: records what the proxy actually sent, answers 200. */
+  async function startRecordingStub(seen: Seen[]): Promise<{
+    server: ReturnType<typeof createServer>;
+    port: number;
+  }> {
+    const server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c: Buffer) => (raw += c.toString("utf8")));
+      req.on("end", () => {
+        let model: unknown;
+        try {
+          model = (JSON.parse(raw) as { model?: unknown }).model;
+        } catch {
+          model = undefined;
+        }
+        const header = (v: string | string[] | undefined) => (Array.isArray(v) ? v.join(",") : (v ?? ""));
+        seen.push({
+          url: req.url ?? "",
+          auth: header(req.headers["authorization"]),
+          apiKey: header(req.headers["x-api-key"]),
+          model,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    return { server, port: (server.address() as { port: number }).port };
+  }
+
+  interface World {
+    vault: FileAccountRepository;
+    profiles: FileProfileRepository;
+    providerAccounts: FileProviderAccountRepository;
+  }
+
+  /** Throwaway stores — never the real ~/.swisscode. */
+  async function routingWorld(options: {
+    profiles: Profile[];
+    keyAccounts?: { providerId: string; id: string; label: string; config: Record<string, string> }[];
+    vaultAccounts?: { id: string; token: string }[];
+  }): Promise<World> {
+    const dir = await mkdtemp(join(tmpdir(), "proxy-route-"));
+    const vault = new FileAccountRepository(join(dir, "subs"));
+    const future = Date.now() + 3600_000;
+    for (const a of options.vaultAccounts ?? []) {
+      await vault.save(
+        { id: a.id, label: a.id, createdAt: "", updatedAt: "" },
+        { accessToken: a.token, refreshToken: `rt-${a.id}`, expiresAt: future },
+      );
+    }
+    const profiles = new FileProfileRepository(join(dir, "profiles.json"));
+    for (const p of options.profiles) await profiles.save(p);
+    const providerAccounts = new FileProviderAccountRepository(join(dir, "accounts"));
+    for (const a of options.keyAccounts ?? []) {
+      await providerAccounts.save({ ...a, createdAt: "", updatedAt: "" });
+    }
+    return { vault, profiles, providerAccounts };
+  }
+
+  const subProfile = (over: Partial<Profile> & { name: string }): Profile => ({
+    agentId: "claude-code",
+    providerId: "claude-subscription",
+    useProxy: true,
+    ...over,
+  });
+
+  function proxied(
+    world: World,
+    extra: { entries?: ProxyTrafficEntry[]; keyUpstream?: string } = {},
+  ): SubscriptionProxy {
+    return new SubscriptionProxy(world.vault, new AnthropicOAuthClient(), {
+      profiles: world.profiles,
+      providerAccounts: world.providerAccounts,
+      providers: createProviderRegistry([stubKeyProvider]),
+      ...(extra.entries ? { onTraffic: (e: ProxyTrafficEntry) => extra.entries?.push(e) } : {}),
+      ...(extra.keyUpstream ? { upstream: extra.keyUpstream } : {}),
+    });
+  }
+
+  const postModel = (port: number, path: string, model: unknown, headers: Record<string, string> = {}) =>
+    fetch(`http://127.0.0.1:${port}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ model, max_tokens: 8 }),
+    });
+
+  it("parses /p/<name> identity prefixes", () => {
+    assert.deepEqual(parseProfilePath("/p/alpha/v1/messages"), { name: "alpha", rest: "/v1/messages" });
+    assert.deepEqual(parseProfilePath("/p/alpha"), { name: "alpha", rest: "/" });
+    assert.deepEqual(parseProfilePath("/p/a-9_Z/x"), { name: "a-9_Z", rest: "/x" });
+    assert.equal(parseProfilePath("/v1/messages"), undefined);
+    assert.equal(parseProfilePath("/p/"), undefined);
+    assert.equal(parseProfilePath("/p/a b/x"), undefined);
+    assert.equal(parseProfilePath("/P/alpha/x"), undefined);
+  });
+
+  it("attributes path identity and strips the prefix before forwarding", async () => {
+    // The key stub's base URL doubles as the vault upstream here: any ANTHROPIC
+    // endpoint answers the same shape, and the vault loop only needs a 200.
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [subProfile({ name: "alpha", subscriptionAccountId: "a1" })],
+      vaultAccounts: [{ id: "a1", token: "tok-a1" }],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    const proxy = proxied(world, { entries, keyUpstream: `http://127.0.0.1:${keyStub.port}` });
+    const port = await proxy.listen(0);
+    try {
+      const res = await postModel(port, "/p/alpha/v1/messages?x=1", "claude-opus-5");
+      assert.equal(res.status, 200);
+      // Prefix stripped, query preserved; vault credential signs the request.
+      assert.deepEqual(keySeen.map((s) => s.url), ["/v1/messages?x=1"]);
+      assert.deepEqual(keySeen.map((s) => s.auth), ["Bearer tok-a1"]);
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0]?.profile, "alpha");
+      assert.equal(entries[0]?.route, undefined);
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
+  });
+
+  it("prefers path over header tag and notes the mismatch", async () => {
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [
+        subProfile({ name: "alpha", subscriptionAccountId: "a1" }),
+        subProfile({ name: "beta", subscriptionAccountId: "a1" }),
+      ],
+      vaultAccounts: [{ id: "a1", token: "tok-a1" }],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    const proxy = proxied(world, { entries, keyUpstream: `http://127.0.0.1:${keyStub.port}` });
+    const port = await proxy.listen(0);
+    try {
+      const res = await postModel(port, "/p/alpha/v1/messages", "m", {
+        Authorization: "Bearer swisscode-profile/beta",
+      });
+      assert.equal(res.status, 200);
+      // The client tag never reaches upstream — the vault token signs it.
+      assert.deepEqual(keySeen.map((s) => s.auth), ["Bearer tok-a1"]);
+      assert.ok(!keySeen.some((s) => s.auth.includes("swisscode-profile")));
+      assert.equal(entries[0]?.profile, "alpha");
+      assert.ok((entries[0]?.note ?? "").includes("beta"));
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
+  });
+
+  it("reads header-tag identity when no path prefix is present", async () => {
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [subProfile({ name: "alpha", subscriptionAccountId: "a1" })],
+      vaultAccounts: [{ id: "a1", token: "tok-a1" }],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    const proxy = proxied(world, { entries, keyUpstream: `http://127.0.0.1:${keyStub.port}` });
+    const port = await proxy.listen(0);
+    try {
+      const res = await postModel(port, "/v1/messages", "m", {
+        Authorization: "Bearer swisscode-profile/alpha",
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(keySeen.map((s) => s.url), ["/v1/messages"]);
+      assert.equal(entries[0]?.profile, "alpha");
+      assert.equal(entries[0]?.note, undefined);
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
+  });
+
+  it("routes a matching model to its account and rewrites upstreamModel", async () => {
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [
+        subProfile({
+          name: "alpha",
+          subscriptionAccountId: "a-base",
+          modelRoutes: [
+            {
+              match: "claude-opus-5",
+              kind: "subscription",
+              subscriptionAccountId: "a-fast",
+              upstreamModel: "claude-sonnet-9",
+            },
+          ],
+        }),
+      ],
+      vaultAccounts: [
+        { id: "a-base", token: "tok-base" },
+        { id: "a-fast", token: "tok-fast" },
+      ],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    const proxy = proxied(world, { entries, keyUpstream: `http://127.0.0.1:${keyStub.port}` });
+    const port = await proxy.listen(0);
+    try {
+      const res = await postModel(port, "/p/alpha/v1/messages", "claude-opus-5");
+      assert.equal(res.status, 200);
+      assert.deepEqual(keySeen.map((s) => s.auth), ["Bearer tok-fast"]);
+      assert.deepEqual(keySeen.map((s) => s.model), ["claude-sonnet-9"]);
+      assert.equal(entries[0]?.route, "claude-opus-5");
+      assert.equal(entries[0]?.upstreamModel, "claude-sonnet-9");
+      // A non-matching model stays on the base binding, un-rewritten.
+      const res2 = await postModel(port, "/p/alpha/v1/messages", "claude-haiku-9");
+      assert.equal(res2.status, 200);
+      assert.deepEqual(keySeen.map((s) => s.auth), ["Bearer tok-fast", "Bearer tok-base"]);
+      assert.deepEqual(keySeen.map((s) => s.model), ["claude-sonnet-9", "claude-haiku-9"]);
+      assert.equal(entries[1]?.route, undefined);
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
+  });
+
+  it("fails a pinned subscription route over to the rest of the vault on 429", async () => {
+    // First upstream hit answers 429; everything after answers 200. The pin is
+    // a preference, not a cage: the route keeps whole-vault failover.
+    const seenAuth: string[] = [];
+    const seenModel: unknown[] = [];
+    let hits = 0;
+    const failoverStub = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c: Buffer) => (raw += c.toString("utf8")));
+      req.on("end", () => {
+        const header = req.headers["authorization"];
+        seenAuth.push(Array.isArray(header) ? header.join(",") : (header ?? ""));
+        try {
+          seenModel.push((JSON.parse(raw) as { model?: unknown }).model);
+        } catch {
+          seenModel.push(undefined);
+        }
+        hits += 1;
+        if (hits === 1) {
+          res.writeHead(429, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "rate_limited" }));
+          return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    await new Promise<void>((r) => failoverStub.listen(0, "127.0.0.1", r));
+    const world = await routingWorld({
+      profiles: [
+        subProfile({
+          name: "alpha",
+          subscriptionAccountId: "a-fresh",
+          modelRoutes: [
+            {
+              match: "claude-opus-5",
+              kind: "subscription",
+              subscriptionAccountId: "a-tired",
+              upstreamModel: "claude-sonnet-9",
+            },
+          ],
+        }),
+      ],
+      vaultAccounts: [
+        { id: "a-tired", token: "tired-token-xyz" },
+        { id: "a-fresh", token: "fresh-token-xyz" },
+      ],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    const proxy = proxied(world, {
+      entries,
+      keyUpstream: `http://127.0.0.1:${(failoverStub.address() as { port: number }).port}`,
+    });
+    const port = await proxy.listen(0);
+    try {
+      const res = await postModel(port, "/p/alpha/v1/messages", "claude-opus-5");
+      assert.equal(res.status, 200);
+      // Pinned account first, then the rest of the vault — and the rewrite
+      // applies to the retried request too (the body is rewritten pre-loop).
+      assert.deepEqual(seenAuth, ["Bearer tired-token-xyz", "Bearer fresh-token-xyz"]);
+      assert.deepEqual(seenModel, ["claude-sonnet-9", "claude-sonnet-9"]);
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0]?.route, "claude-opus-5");
+      assert.equal(entries[0]?.upstreamModel, "claude-sonnet-9");
+      assert.deepEqual(entries[0]?.attempts, [
+        { accountId: "a-tired", status: 429 },
+        { accountId: "a-fresh", status: 200 },
+      ]);
+      // Explicit no-tokens assertion: route + rewrite facts are recorded, but
+      // neither vault token nor the client tag may appear in the entry.
+      const serialized = JSON.stringify(entries[0]);
+      assert.ok(!serialized.includes("tired-token-xyz"));
+      assert.ok(!serialized.includes("fresh-token-xyz"));
+      assert.ok(!serialized.includes("swisscode-profile"));
+    } finally {
+      await proxy.close();
+      failoverStub.close();
+    }
+  });
+
+  it("applies profile edits to the next request without a restart", async () => {
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [
+        subProfile({
+          name: "alpha",
+          subscriptionAccountId: "a-base",
+          modelRoutes: [{ match: "claude-opus-5", kind: "subscription", subscriptionAccountId: "a1" }],
+        }),
+      ],
+      vaultAccounts: [
+        { id: "a-base", token: "tok-base" },
+        { id: "a1", token: "tok-1" },
+        { id: "a2", token: "tok-2" },
+      ],
+    });
+    const proxy = proxied(world, { keyUpstream: `http://127.0.0.1:${keyStub.port}` });
+    const port = await proxy.listen(0);
+    try {
+      assert.equal((await postModel(port, "/p/alpha/v1/messages", "claude-opus-5")).status, 200);
+      // Live edit: same proxy, same running session, new route target.
+      await world.profiles.save(
+        subProfile({
+          name: "alpha",
+          subscriptionAccountId: "a-base",
+          modelRoutes: [{ match: "claude-opus-5", kind: "subscription", subscriptionAccountId: "a2" }],
+        }),
+      );
+      assert.equal((await postModel(port, "/p/alpha/v1/messages", "claude-opus-5")).status, 200);
+      assert.deepEqual(keySeen.map((s) => s.auth), ["Bearer tok-1", "Bearer tok-2"]);
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
+  });
+
+  it("answers 404 for a deleted profile and keeps serving others", async () => {
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [subProfile({ name: "alpha", subscriptionAccountId: "a1" })],
+      vaultAccounts: [{ id: "a1", token: "tok-a1" }],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    const proxy = proxied(world, { entries, keyUpstream: `http://127.0.0.1:${keyStub.port}` });
+    const port = await proxy.listen(0);
+    try {
+      const ghost = await postModel(port, "/p/ghost/v1/messages", "m");
+      assert.equal(ghost.status, 404);
+      assert.ok((await ghost.text()).includes("ghost"));
+      // The proxy itself is fine — the next request resolves from scratch.
+      const ok = await postModel(port, "/p/alpha/v1/messages", "m");
+      assert.equal(ok.status, 200);
+      assert.equal(entries[0]?.status, 404);
+      assert.equal(entries[0]?.profile, "ghost");
+      assert.equal(entries[1]?.status, 200);
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
+  });
+
+  it("falls back to the base provider when the model is unparseable", async () => {
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [subProfile({ name: "alpha", subscriptionAccountId: "a1" })],
+      vaultAccounts: [{ id: "a1", token: "tok-a1" }],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    const proxy = proxied(world, { entries, keyUpstream: `http://127.0.0.1:${keyStub.port}` });
+    const port = await proxy.listen(0);
+    try {
+      const res = await rawRequest(port, {
+        path: "/p/alpha/v1/messages",
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: Buffer.from("not json{{{"),
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(keySeen.map((s) => s.auth), ["Bearer tok-a1"]);
+      assert.equal(entries[0]?.profile, "alpha");
+      assert.equal(entries[0]?.route, undefined);
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
+  });
+
+  it("forwards key profiles with the stored credential, vault empty", async () => {
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [{ agentId: "claude-code", name: "key", providerId: "stub-key", providerAccountId: "k1" }],
+      keyAccounts: [
+        {
+          providerId: "stub-key",
+          id: "k1",
+          label: "K One",
+          config: { apiKey: "k-secret", baseUrl: `http://127.0.0.1:${keyStub.port}` },
+        },
+      ],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    // No vault accounts at all: the key path must not need the vault.
+    const proxy = proxied(world, { entries });
+    const port = await proxy.listen(0);
+    try {
+      const res = await postModel(port, "/p/key/v1/messages", "some-model", {
+        Authorization: "Bearer swisscode-profile/key",
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(keySeen.map((s) => s.auth), ["Bearer k-secret"]);
+      assert.deepEqual(keySeen.map((s) => s.model), ["some-model"]);
+      assert.ok(!keySeen.some((s) => `${s.auth} ${s.apiKey}`.includes("swisscode-profile")));
+      assert.equal(entries[0]?.accountId, "key:stub-key:K One");
+      assert.equal(entries[0]?.profile, "key");
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
+  });
+
+  it("fails closed naming a deleted route account", async () => {
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [
+        subProfile({
+          name: "alpha",
+          subscriptionAccountId: "a1",
+          modelRoutes: [{ match: "claude-opus-5", kind: "subscription", subscriptionAccountId: "gone" }],
+        }),
+      ],
+      vaultAccounts: [{ id: "a1", token: "tok-a1" }],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    const proxy = proxied(world, { entries, keyUpstream: `http://127.0.0.1:${keyStub.port}` });
+    const port = await proxy.listen(0);
+    try {
+      const res = await postModel(port, "/p/alpha/v1/messages", "claude-opus-5");
+      assert.equal(res.status, 500);
+      assert.ok((await res.text()).includes("gone"));
+      assert.deepEqual(keySeen.length, 0);
+      assert.equal(entries[0]?.status, 500);
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
+  });
+
+  it("keeps unattributed requests on the legacy whole-vault flow", async () => {
+    const keySeen: Seen[] = [];
+    const keyStub = await startRecordingStub(keySeen);
+    const world = await routingWorld({
+      profiles: [subProfile({ name: "alpha", subscriptionAccountId: "a1" })],
+      vaultAccounts: [{ id: "a1", token: "tok-a1" }],
+    });
+    const entries: ProxyTrafficEntry[] = [];
+    const proxy = proxied(world, { entries, keyUpstream: `http://127.0.0.1:${keyStub.port}` });
+    const port = await proxy.listen(0);
+    try {
+      const res = await postModel(port, "/v1/messages", "m");
+      assert.equal(res.status, 200);
+      assert.equal(entries[0]?.status, 200);
+      assert.ok(!("profile" in (entries[0] as object)));
+    } finally {
+      await proxy.close();
+      keyStub.server.close();
+    }
   });
 });

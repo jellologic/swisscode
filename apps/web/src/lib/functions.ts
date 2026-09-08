@@ -11,6 +11,7 @@ import {
   getAgents,
   getBundleInventory,
   getCurrentLogin,
+  getPresets,
   getProfiles,
   getProviderModelEndpoints,
   getProviderModels,
@@ -20,12 +21,14 @@ import {
   getProxyState,
   getProxyTraffic,
   getProxyTrafficEntries,
+  getProxyReport,
   getSessionContext,
   getUsage,
   importConfigBundle,
   validateProviderAccount,
   importAccount,
   listProviderAccountSummaries,
+  previewLaunch,
   previewProfile,
   removeAccount,
   removeCustomProvider,
@@ -54,6 +57,7 @@ import {
   parseProviderAccountRef,
   parseProviderRef,
   parseRenameAccount,
+  parseReportFilter,
   parseSaveProviderAccount,
   parseSessionRef,
   parseSwitchAccount,
@@ -74,6 +78,10 @@ export const catalogFn = createServerFn({ method: "GET" }).handler(async () => (
   providers: await getProviders(),
 }));
 
+export const listPresetsFn = createServerFn({ method: "GET" }).handler(
+  async () => getPresets(),
+);
+
 export const saveProfileFn = createServerFn({ method: "POST" })
   .validator(parseProfile)
   .handler(async ({ data }) => {
@@ -91,6 +99,11 @@ export const deleteProfileFn = createServerFn({ method: "POST" })
 export const previewProfileFn = createServerFn({ method: "GET" })
   .validator(parseProfileRef)
   .handler(async ({ data }) => previewProfile(data.name));
+
+/** Unsaved-form preview: the whole profile goes up, the launch JSON comes back. */
+export const previewLaunchFn = createServerFn({ method: "POST" })
+  .validator(parseProfile)
+  .handler(async ({ data }) => previewLaunch(data));
 
 export const listAccountsFn = createServerFn({ method: "GET" }).handler(
   async () => ({ accounts: await getAccounts() }),
@@ -144,6 +157,11 @@ export const proxyTrafficFn = createServerFn({ method: "GET" })
 export const proxyTrafficEntriesFn = createServerFn({ method: "GET" })
   .validator(parseTrafficEntryRefs)
   .handler(async ({ data }) => ({ entries: await getProxyTrafficEntries(data.ids) }));
+
+/** Store-backed history (survives proxy restarts); null-safe when no store yet. */
+export const proxyReportFn = createServerFn({ method: "GET" })
+  .validator(parseReportFilter)
+  .handler(async ({ data }) => getProxyReport(data));
 
 export const proxyTrafficClearFn = createServerFn({ method: "POST" }).handler(
   async () => clearProxyTraffic(),

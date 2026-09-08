@@ -10,27 +10,42 @@ import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { delimiter, join } from "node:path";
 import {
+  FileAccountRepository,
   FileCustomProviderStore,
   FileProfileRepository,
   FileProviderAccountRepository,
   createAgentRegistry,
   createProviderRegistry,
   defaultProfilesPath,
+  defaultSubscriptionsDir,
+  defaultTrafficStorePath,
   loadCustomProviderPorts,
-  proxyBaseUrl,
+  makeEphemeralDir,
+  openTrafficStore,
+  proxyLaunchEnv,
   proxyPort,
+  usesProxy,
+  writeEphemeralFiles,
 } from "@swisscode/adapters";
 import {
   ProfileError,
+  SPEND_ESTIMATE_NOTE,
   collectSecretValues,
+  describeModelRoute,
+  formatSpend,
   redactEnv,
+  resolveEphemeralPaths,
   resolveLaunchSpec,
   resolveProviderConfig,
   secretFieldKeys,
+  spendRollup,
+  spendTotal,
+  suggestInsights,
 } from "@swisscode/core";
-import type { LaunchSpec, Profile, ProviderAccount } from "@swisscode/core";
+import type { LaunchSpec, ModelRouteLabels, Profile, ProviderAccount } from "@swisscode/core";
 import { activateAccount, cmdAccounts } from "./accounts.js";
-import { cmdProxy, ensureProxyAccount } from "./proxy.js";
+import { checkProxyUp, cmdProxy, ensureProxyAccount } from "./proxy.js";
+import { cmdInit } from "./init.js";
 
 const agents = createAgentRegistry();
 const repo = new FileProfileRepository(defaultProfilesPath());
@@ -53,6 +68,7 @@ function help(): string {
     "  swisscode show <profileName>",
     "  swisscode accounts <import|list|usage|use|remove> ...",
     "  swisscode proxy <run|use|status> ...",
+    "  swisscode init [<preset>] [--name <name>] [--dry-run]",
     "",
     "Profiles live in ~/.swisscode/profiles.json (or $SWISSCODE_HOME).",
     "Create them in the TanStack Start UI or by editing that file.",
@@ -102,8 +118,32 @@ async function cmdList(): Promise<void> {
     return;
   }
   for (const p of profiles) {
-    console.log(`${p.name}\tagent=${p.agentId}\tprovider=${p.providerId}${p.model ? `\tmodel=${p.model}` : ""}`);
+    const routes = p.modelRoutes?.length ? `\troutes=${p.modelRoutes.length}` : "";
+    console.log(
+      `${p.name}\tagent=${p.agentId}\tprovider=${p.providerId}${p.model ? `\tmodel=${p.model}` : ""}${p.direct === true ? "\tdirect" : ""}${routes}`,
+    );
   }
+}
+
+/**
+ * Labels for describeModelRoute, read live from the stores so a renamed
+ * account shows under its current label. Missing entries fall back to raw
+ * ids inside the renderer — never blank, never throwing here.
+ */
+async function routeLabels(): Promise<ModelRouteLabels> {
+  const [vault, keys, registry] = await Promise.all([
+    new FileAccountRepository(defaultSubscriptionsDir()).list().catch(() => []),
+    new FileProviderAccountRepository().list().catch(() => []),
+    providerRegistry(),
+  ]);
+  const vaultById = new Map(vault.map((a) => [a.id, a.label]));
+  const keyById = new Map(keys.map((a) => [`${a.providerId}:${a.id}`, a.label]));
+  const providerName = new Map(registry.list().map((p) => [p.id, p.displayName]));
+  return {
+    subscriptionAccountLabel: (id) => vaultById.get(id),
+    providerAccountLabel: (providerId, id) => keyById.get(`${providerId}:${id}`),
+    providerDisplayName: (providerId) => providerName.get(providerId),
+  };
 }
 
 async function cmdShow(name: string): Promise<void> {
@@ -129,7 +169,15 @@ async function cmdShow(name: string): Promise<void> {
       command: resolveExecutable(spec.command),
       env: redactEnv(launchEnv(resolved.profile, spec), secrets),
     };
-    console.log(JSON.stringify({ profile, launch }, null, 2));
+    // Spend at a glance over the same store `proxy report` reads, scoped to
+    // this profile. A home that never ran the proxy has no store file — that
+    // degrades to null, not an error; a present-but-unreadable store warns.
+    const { spend, suggestions } = await profileSpend(name, resolved.profile.modelRoutes ?? []);
+    // Routes read as sentences (the same renderer the web form will use),
+    // not raw JSON — the match string alone says nothing about destination.
+    const labels = await routeLabels();
+    const routes = (resolved.profile.modelRoutes ?? []).map((r) => describeModelRoute(r, labels));
+    console.log(JSON.stringify({ profile, launch, routes, spend, suggestions }, null, 2));
   } catch (err) {
     if (err instanceof ProfileError) {
       console.error(`Invalid profile "${name}": ${err.message}`);
@@ -137,6 +185,63 @@ async function cmdShow(name: string): Promise<void> {
       return;
     }
     throw err;
+  }
+}
+
+/**
+ * Estimated spend + read-only suggestions for one profile, from stored proxy
+ * traffic. Null when the proxy never ran here (no store file yet).
+ */
+async function profileSpend(
+  profileName: string,
+  routes: { match: string }[],
+): Promise<{
+  spend: {
+    requests: number;
+    estSpendUsd: number;
+    estSpend: string;
+    pricedRequests: number;
+    unpricedRequests: number;
+    note: string;
+  } | null;
+  suggestions: string[];
+}> {
+  try {
+    statSync(defaultTrafficStorePath());
+  } catch {
+    return { spend: null, suggestions: [] };
+  }
+  let store;
+  try {
+    store = await openTrafficStore(defaultTrafficStorePath());
+  } catch (err) {
+    console.error(`Cannot open the traffic store (${(err as Error).message}); spend unavailable.`);
+    return { spend: null, suggestions: [] };
+  }
+  try {
+    const filter = { profile: profileName, limit: 0 } as const;
+    const entries = await store.query(filter);
+    if (entries.length === 0) return { spend: null, suggestions: [] };
+    const total = spendTotal(entries);
+    const byRoute = await store.rollup(filter, "route");
+    const spendLookup: Record<string, number> = {};
+    for (const row of spendRollup(entries, "route")) spendLookup[row.key] = row.estSpendUsd;
+    return {
+      spend: {
+        requests: total.requests,
+        estSpendUsd: total.estSpendUsd,
+        estSpend: formatSpend(total.estSpendUsd),
+        pricedRequests: total.pricedRequests,
+        unpricedRequests: total.unpricedRequests,
+        note: SPEND_ESTIMATE_NOTE,
+      },
+      suggestions: suggestInsights(byRoute, spendLookup, {
+        configuredRoutes: routes.map((r) => r.match),
+        windowLabel: "in stored history",
+      }),
+    };
+  } finally {
+    store.close();
   }
 }
 
@@ -149,27 +254,13 @@ function reportDroppedEnv(name: string): void {
   console.error(`Ignoring env "${name}" from provider config — reserved by the launcher.`);
 }
 
-/** Proxy routing is a profile-only decision (validated at save time). */
-function usesProxy(profile: Profile): boolean {
-  return profile.providerId === "claude-subscription" && profile.useProxy === true;
-}
-
 /**
- * The env a launch actually applies. Proxy mode: the proxy strips client auth
- * and signs with the vault account, so ANTHROPIC_AUTH_TOKEN carries a profile
- * tag instead of a credential (read for traffic attribution, then discarded).
- * `show` and the launch path share this, so an inspection can never describe a
- * launch that would not happen.
+ * The env a launch actually applies: the shared adapters rewrite over the
+ * resolved spec env, so `show`, the launch path and the web Preview modal all
+ * describe the launch that would actually happen.
  */
 function launchEnv(profile: Profile, spec: LaunchSpec): Record<string, string> {
-  // spec.env is already deny-list filtered by resolveLaunchSpec, and the two
-  // keys added here are the launcher's own.
-  if (!usesProxy(profile)) return spec.env;
-  return {
-    ...spec.env,
-    ANTHROPIC_BASE_URL: proxyBaseUrl(),
-    ANTHROPIC_AUTH_TOKEN: `swisscode-profile/${profile.name}`,
-  };
+  return proxyLaunchEnv(profile, spec.env);
 }
 
 /**
@@ -228,13 +319,19 @@ async function cmdLaunch(
     throw err;
   }
   const profile = resolved.profile;
-  // Subscription account binding: activate before resolving the launch.
+  // Proxy-mode profiles need a live proxy before the agent spawns — a silent
+  // direct fallback would bill (or leak to) the wrong upstream. Key profiles
+  // and account-less subscription profiles only ping it; a bound subscription
+  // account also selects itself via the control plane (which proves liveness).
   // Dry-run never touches the active credential store or the proxy.
-  if (profile.providerId === "claude-subscription" && profile.subscriptionAccountId && !dryRun) {
+  if (!dryRun) {
     if (usesProxy(profile)) {
-      const ok = await ensureProxyAccount(profile.subscriptionAccountId, proxyPort());
+      const ok =
+        profile.providerId === "claude-subscription" && profile.subscriptionAccountId
+          ? await ensureProxyAccount(profile.subscriptionAccountId, proxyPort())
+          : await checkProxyUp(proxyPort());
       if (!ok) return;
-    } else {
+    } else if (profile.providerId === "claude-subscription" && profile.subscriptionAccountId) {
       const ok = await activateAccount(profile.subscriptionAccountId, force);
       if (!ok) return;
     }
@@ -252,18 +349,53 @@ async function cmdLaunch(
     }
     throw err;
   }
-  const args = [...spec.args, ...extraArgs];
+  let args = [...spec.args, ...extraArgs];
   const env = launchEnv(profile, spec);
   const command = resolveExecutable(spec.command);
   if (dryRun) {
     console.log(
-      JSON.stringify({ command, args, env: redactEnv(env, await secretValues(resolved)) }, null, 2),
+      JSON.stringify(
+        {
+          command,
+          args,
+          env: redactEnv(env, await secretValues(resolved)),
+          ephemeralFiles: spec.ephemeralFiles ?? [],
+          ...(spec.cwd ? { cwd: spec.cwd } : {}),
+        },
+        null,
+        2,
+      ),
     );
     return;
+  }
+  // The working directory is a spawn option, not env: fail loudly when it is
+  // gone instead of letting spawn surface a misleading "binary not found".
+  if (spec.cwd) {
+    try {
+      if (!statSync(spec.cwd).isDirectory()) throw new Error("not a directory");
+    } catch {
+      console.error(`Working directory "${spec.cwd}" from profile "${name}" is missing or not a directory.`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+  // Session files materialize for real launches only: show/--dry-run render
+  // the EPHEMERAL_DIR_TOKEN placeholder plus the file contents, never paths.
+  if (spec.ephemeralFiles && spec.ephemeralFiles.length > 0) {
+    try {
+      const dir = await makeEphemeralDir();
+      await writeEphemeralFiles(spec.ephemeralFiles, dir);
+      args = resolveEphemeralPaths(args, dir);
+    } catch (err) {
+      console.error(`Could not stage session files: ${(err as Error).message}`);
+      process.exitCode = 1;
+      return;
+    }
   }
   const child = spawn(command, args, {
     stdio: "inherit",
     env: { ...process.env, ...env },
+    ...(spec.cwd ? { cwd: spec.cwd } : {}),
   });
   // Relay signals: without this a SIGTERM to swisscode leaves the agent running
   // with no parent. SIGINT is relayed too — the terminal already delivers it to
@@ -315,6 +447,7 @@ async function main(): Promise<void> {
   }
   if (first === "accounts") return cmdAccounts(rest);
   if (first === "proxy") return cmdProxy(rest);
+  if (first === "init") return cmdInit(rest);
   // Launch path: swisscode <profile> [--dry-run] [--force] [-- extra...]
   // A leading flag is an option we do not know, never a profile name.
   if (first.startsWith("-")) {

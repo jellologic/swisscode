@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  Check,
   Code,
   Column,
   Field,
@@ -18,33 +19,69 @@ import {
   notify,
 } from "../../design";
 import {
+  proxyReportFn,
   proxyStateFn,
   proxyTrafficClearFn,
   proxyTrafficFn,
   proxyTrafficSizeFn,
 } from "../../lib/functions";
 import type { TrafficConversation } from "@swisscode/adapters";
+import type { StoredTrafficExchange, SpendRow, TrafficRollupRow } from "@swisscode/core";
+import { SPEND_ESTIMATE_NOTE, formatSpend } from "@swisscode/core";
 import { ago } from "../../components/ModelPicker";
 import { fmtBytes, fmtSpan, statusTone } from "../../components/TrafficEntryDetail";
 
 export const Route = createFileRoute("/proxy/")({
   validateSearch: (search: Record<string, unknown>) => ({
     profile: typeof search["profile"] === "string" ? search["profile"] : "",
+    route: typeof search["route"] === "string" ? search["route"] : "",
+    since: typeof search["since"] === "string" ? search["since"] : "",
+    until: typeof search["until"] === "string" ? search["until"] : "",
+    // The router's default search parser JSON-coerces values, so a hand-typed
+    // ?errorsOnly=1 arrives as the number 1 (and "true" as boolean true).
+    errorsOnly:
+      search["errorsOnly"] === "1" ||
+      search["errorsOnly"] === 1 ||
+      search["errorsOnly"] === "true" ||
+      search["errorsOnly"] === true,
   }),
-  loaderDeps: ({ search }) => ({ profile: search.profile }),
+  loaderDeps: ({ search }) => ({
+    profile: search.profile,
+    route: search.route,
+    since: search.since,
+    until: search.until,
+    errorsOnly: search.errorsOnly,
+  }),
   loader: async ({ deps }) => ({
     proxy: await proxyStateFn(),
     traffic: await proxyTrafficFn({ data: { profile: deps.profile || undefined } }),
+    // Store-backed history: one uncapped port query + core rollups on the
+    // server (see getProxyReport). Re-runs on the live poll below — local
+    // SQLite over a bounded retention, cheap enough to stay fresh.
+    report: await proxyReportFn({
+      data: {
+        ...(deps.profile ? { profile: deps.profile } : {}),
+        ...(deps.route ? { route: deps.route } : {}),
+        ...(deps.since ? { since: deps.since } : {}),
+        ...(deps.until ? { until: deps.until } : {}),
+        ...(deps.errorsOnly ? { errorsOnly: true as const } : {}),
+      },
+    }),
   }),
   component: ProxyPage,
 });
 
 function ProxyPage() {
-  const { proxy, traffic } = Route.useLoaderData();
-  const { profile } = Route.useSearch();
+  const { proxy, traffic, report } = Route.useLoaderData();
+  const search = Route.useSearch();
+  const { profile } = search;
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [keepInput, setKeepInput] = useState<string>(String(traffic.size));
+
+  /** Filter navigation: one shareable URL carries every filter. */
+  const go = (patch: Partial<typeof search>) =>
+    void router.navigate({ to: "/proxy", search: { ...search, ...patch } });
 
   // Live view: re-run the loader every few seconds while the page is visible.
   useEffect(() => {
@@ -105,7 +142,7 @@ function ProxyPage() {
     <Link
       to="/proxy/$threadId"
       params={{ threadId: conv.id }}
-      search={{ profile }}
+      search={search}
       onClick={(e) => e.stopPropagation()}
     >
       {label}
@@ -310,15 +347,7 @@ function ProxyPage() {
               <Stack>
                 <RowActions>
                   <Field label="Profile" hint="Launches via swisscode <profile> tag their traffic.">
-                    <Select
-                      value={profile}
-                      onChange={(e) =>
-                        void router.navigate({
-                          to: "/proxy",
-                          search: { profile: e.target.value },
-                        })
-                      }
-                    >
+                    <Select value={profile} onChange={(e) => go({ profile: e.target.value })}>
                       <option value="">All profiles</option>
                       {traffic.profiles.map((p) => (
                         <option key={p} value={p}>
@@ -327,6 +356,35 @@ function ProxyPage() {
                       ))}
                     </Select>
                   </Field>
+                  <Field label="Route" hint="Exact route match both live and stored.">
+                    <Input
+                      value={search.route}
+                      onChange={(e) => go({ route: e.target.value })}
+                      placeholder="any route"
+                    />
+                  </Field>
+                  <Field label="Since" hint="Stored history from this date.">
+                    <Input type="date" value={search.since} onChange={(e) => go({ since: e.target.value })} />
+                  </Field>
+                  <Field label="Until" hint="Stored history before this date.">
+                    <Input type="date" value={search.until} onChange={(e) => go({ until: e.target.value })} />
+                  </Field>
+                </RowActions>
+                <RowActions>
+                  <Check checked={search.errorsOnly} onChange={(v) => go({ errorsOnly: v })}>
+                    Errors only
+                  </Check>
+                  {(profile || search.route || search.since || search.until || search.errorsOnly) && (
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      onClick={() =>
+                        go({ profile: "", route: "", since: "", until: "", errorsOnly: false })
+                      }
+                    >
+                      Clear filters
+                    </Button>
+                  )}
                 </RowActions>
                 <Table
                   columns={columns}
@@ -346,7 +404,7 @@ function ProxyPage() {
                     void router.navigate({
                       to: "/proxy/$threadId",
                       params: { threadId: conv.id },
-                      search: { profile },
+                      search: search,
                     });
                   }}
                 />
@@ -354,9 +412,184 @@ function ProxyPage() {
             </Card>
           </>
         )}
+        <HistoryCard report={report} />
         {error && <Notice tone="danger">{error}</Notice>}
       </Stack>
     </Page>
+  );
+}
+
+function rollupColumns(label: string, spendByKey?: Map<string, number>): Column<TrafficRollupRow>[] {
+  return [
+    { header: label, render: (r) => <Code>{r.key}</Code> },
+    { header: "Requests", render: (r) => <>{r.requests}</> },
+    {
+      header: "Errors",
+      render: (r) => (
+        <span>
+          {r.errors > 0 ? <Badge tone="danger">{r.errors}</Badge> : <Muted>0</Muted>}{" "}
+          <Muted>{(r.errorRate * 100).toFixed(1)}%</Muted>
+        </span>
+      ),
+    },
+    {
+      header: "Tokens ↑↓",
+      render: (r) => (
+        <Muted>
+          ↑{r.reqTokens.toLocaleString()} ↓{r.resTokens.toLocaleString()}
+        </Muted>
+      ),
+    },
+    {
+      header: "p50 / p95",
+      render: (r) => (
+        <Muted>
+          {r.p50Ms}ms / {r.p95Ms}ms
+        </Muted>
+      ),
+    },
+    {
+      header: "Est. spend",
+      render: (r) => <Muted>{formatSpend(spendByKey?.get(r.key) ?? 0)}</Muted>,
+    },
+  ];
+}
+
+function spendLookup(rows: SpendRow[]): Map<string, number> {
+  return new Map(rows.map((r) => [r.key, r.estSpendUsd]));
+}
+
+const recentColumns: Column<StoredTrafficExchange>[] = [
+  {
+    header: "Time",
+    render: (e) => (
+      <Muted>
+        {new Date(e.ts).toLocaleTimeString()} · {ago(e.ts)}
+      </Muted>
+    ),
+  },
+  {
+    header: "Profile",
+    render: (e) =>
+      e.profile ? <Badge tone="info">{e.profile}</Badge> : <Muted>untagged</Muted>,
+  },
+  {
+    header: "Route",
+    render: (e) => (e.route ? <Code>{e.route}</Code> : <Muted>base</Muted>),
+  },
+  {
+    header: "Model",
+    render: (e) => (
+      <span>
+        <Code>{e.upstreamModel ?? e.model ?? "—"}</Code>{" "}
+        {e.upstreamModel && e.model && e.upstreamModel !== e.model && (
+          <Muted>as {e.model}</Muted>
+        )}
+      </span>
+    ),
+  },
+  {
+    header: "Status",
+    render: (e) => <Badge tone={statusTone(e.status)}>{e.status}</Badge>,
+  },
+  { header: "Took", render: (e) => <Muted>{e.ms}ms</Muted> },
+  {
+    header: "Tokens ↑↓",
+    render: (e) =>
+      e.reqTokens || e.resTokens ? (
+        <Muted>
+          ↑{(e.reqTokens ?? 0).toLocaleString()} ↓{(e.resTokens ?? 0).toLocaleString()}
+        </Muted>
+      ) : (
+        <Muted>—</Muted>
+      ),
+  },
+];
+
+/**
+ * Store-backed history: survives proxy restarts, unlike the live ring buffer
+ * above. Thread detail stays live-only — store rows carry entry ids, not
+ * conversation ids, so they render as facts without thread links.
+ */
+function HistoryCard({ report }: { report: Awaited<ReturnType<typeof proxyReportFn>> }) {
+  if (!report.available) {
+    return (
+      <Card>
+        <Muted>
+          No stored history yet — run <Code>swisscode proxy run</Code> and send
+          traffic through it. History survives restarts; the live list covers
+          only the running process.
+        </Muted>
+      </Card>
+    );
+  }
+  const t = report.total;
+  const spend = report.spendTotal;
+  const byDaySpend = spendLookup(report.spendByDay);
+  const byRouteSpend = spendLookup(report.spendByRoute);
+  const byProfileSpend = spendLookup(report.spendByProfile);
+  return (
+    <Card>
+      <Stack>
+        <Muted>
+          Stored history{" "}
+          {t ? (
+            <span>
+              · <strong>{t.requests}</strong> requests ·{" "}
+              <strong>{t.errors}</strong> errors ({(t.errorRate * 100).toFixed(1)}
+              %) · ↑{t.reqTokens.toLocaleString()} ↓
+              {t.resTokens.toLocaleString()} tokens · p50 {t.p50Ms}ms / p95{" "}
+              {t.p95Ms}ms
+              {spend && spend.pricedRequests > 0 && (
+                <span> · est. <strong>{formatSpend(spend.estSpendUsd)}</strong></span>
+              )}
+            </span>
+          ) : (
+            "· no rows match these filters"
+          )}
+        </Muted>
+        {report.byDay.length > 0 && (
+          <Table
+            columns={rollupColumns("Day", byDaySpend)}
+            rows={report.byDay}
+            getKey={(r) => r.key}
+            empty={<Muted>No rows.</Muted>}
+          />
+        )}
+        {report.byRoute.length > 0 && (
+          <Table
+            columns={rollupColumns("Route", byRouteSpend)}
+            rows={report.byRoute}
+            getKey={(r) => r.key}
+            empty={<Muted>No rows.</Muted>}
+          />
+        )}
+        {report.byProfile.length > 0 && (
+          <Table
+            columns={rollupColumns("Profile", byProfileSpend)}
+            rows={report.byProfile}
+            getKey={(r) => r.key}
+            empty={<Muted>No rows.</Muted>}
+          />
+        )}
+        {report.suggestions.length > 0 && (
+          <Stack>
+            {report.suggestions.map((tip) => (
+              <Muted key={tip}>- {tip}</Muted>
+            ))}
+          </Stack>
+        )}
+        {(spend && spend.requests > 0) || report.suggestions.length > 0 ? (
+          <Muted>{SPEND_ESTIMATE_NOTE}</Muted>
+        ) : null}
+        <Table
+          columns={recentColumns}
+          rows={report.recent}
+          getKey={(e) => e.id}
+          empty={<Muted>No stored requests match these filters.</Muted>}
+        />
+      </Stack>
+    </Card>
   );
 }
 

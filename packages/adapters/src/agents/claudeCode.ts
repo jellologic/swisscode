@@ -3,6 +3,7 @@
 // Provider endpoint/auth arrives via providerEnv; model override via profile.
 
 import type { AgentPort, LaunchSpec, Profile } from "@swisscode/core";
+import { buildClaudeFlags, sessionEphemeralFiles } from "@swisscode/core";
 
 export const claudeCodeAgent: AgentPort = {
   id: "claude-code",
@@ -23,11 +24,27 @@ export const claudeCodeAgent: AgentPort = {
 
   buildLaunch(profile: Profile, providerEnv: Record<string, string>): LaunchSpec {
     const env: Record<string, string> = { ...providerEnv };
-    // Model override: Claude Code respects ANTHROPIC_MODEL.
+    const args: string[] = [];
+    // Model override: `--model` wins over env, but ANTHROPIC_MODEL stays as
+    // back-compat for anything that reads the env (older wrappers, subshells).
     if (profile.model?.trim()) {
+      args.push("--model", profile.model.trim());
       env["ANTHROPIC_MODEL"] ??= profile.model.trim();
     }
-    const args = [...(profile.agentArgs ?? [])];
-    return { command: "claude", args, env };
+    // Curated session fields emit first; agentArgs appends so power users
+    // override (visible in show/--dry-run final order). Stays pure: flags
+    // reference the ephemeral-dir token, file contents ride as descriptors —
+    // only the real CLI launch path materializes them.
+    if (profile.session) {
+      args.push(...buildClaudeFlags(profile.session));
+    }
+    args.push(...(profile.agentArgs ?? []));
+    const ephemeralFiles = profile.session ? sessionEphemeralFiles(profile.session) : [];
+    return {
+      command: "claude",
+      args,
+      env,
+      ...(ephemeralFiles.length > 0 ? { ephemeralFiles } : {}),
+    };
   },
 };

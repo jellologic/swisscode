@@ -1,6 +1,7 @@
 // Server-only data access. The `.server.` suffix keeps node:fs + API keys
 // out of the client bundle. All domain logic goes through @swisscode/core.
 
+import { stat } from "node:fs/promises";
 import {
   AnthropicOAuthClient,
   AnthropicUsageClient,
@@ -13,6 +14,8 @@ import {
   FileModelCatalogCache,
   FileProfileRepository,
   FileProviderAccountRepository,
+  PROFILE_PRESETS,
+  PROMPT_PRESETS,
   freshVaultCredential,
   FileUsageCache,
   OpenRouterAccountValidator,
@@ -26,20 +29,30 @@ import {
   createAgentRegistry,
   createProviderRegistry,
   defaultProfilesPath,
+  defaultTrafficStorePath,
   maskSecret,
   groupTrafficConversations,
+  openTrafficStore,
+  proxyLaunchEnv,
   proxyPort,
   summarizeTrafficEntry,
+  usesProxy,
   type ProcessProbe,
   type SessionContext,
   type TrafficConversation,
 } from "@swisscode/adapters";
 import {
   collectSecretValues,
+  describeModelRoute,
   isRecordId,
   redactEnv,
   resolveLaunchSpec,
   resolveProviderConfig,
+  rollupExchanges,
+  rollupTotal,
+  spendRollup,
+  spendTotal,
+  suggestInsights,
   validateAccountId,
   validateProfile,
   type AccountValidation,
@@ -48,6 +61,7 @@ import {
   type CustomProviderDef,
   type FieldDef,
   type ModelEndpoint,
+  type ModelRouteLabels,
   type PluginHelp,
   type Profile,
   type ProviderAccount,
@@ -55,8 +69,13 @@ import {
   type ProviderAccountValidator,
   type ProviderModel,
   type ProviderRegistry,
+  type ProviderUsageSnapshot,
+  type SpendRow,
+  type StoredTrafficExchange,
   type StoreImportResult,
   type SubscriptionAccount,
+  type TrafficFilter,
+  type TrafficRollupRow,
 } from "@swisscode/core";
 import { mergeAccountConfig } from "./accountConfig.js";
 import { ProxyControlClient } from "./proxyClient.server.js";
@@ -180,6 +199,15 @@ export async function getProfiles(): Promise<Profile[]> {
   return profiles.list();
 }
 
+/**
+ * Starter gallery: pure preset data (no I/O inside — the import only carries
+ * the constant). Copy-fill, never linked: the form takes the values and the
+ * preset stays behind.
+ */
+export async function getPresets() {
+  return { presets: PROFILE_PRESETS, promptPresets: PROMPT_PRESETS };
+}
+
 /** Stored as-is (secrets live in ~/.swisscode, same machine as the CLI). */
 export async function saveProfile(profile: Profile): Promise<void> {
   validateProfile(profile);
@@ -211,7 +239,148 @@ export async function previewProfile(name: string) {
   }
   secretValues.push(...collectSecretValues(profile.providerConfig, secretKeys));
   const spec = resolveLaunchSpec(agents, await providerRegistry(), profile);
-  return { command: spec.command, args: spec.args, env: redactEnv(spec.env, secretValues) };
+  return {
+    command: spec.command,
+    args: spec.args,
+    env: redactEnv(spec.env, secretValues),
+    ...(spec.cwd ? { cwd: spec.cwd } : {}),
+  };
+}
+
+/** Labels for describeModelRoute, read live like the CLI `show` path. */
+async function launchRouteLabels(): Promise<ModelRouteLabels> {
+  const [subscriptions, keys, registry] = await Promise.all([
+    vault.list().catch(() => []),
+    providerAccounts.list().catch(() => []),
+    providerRegistry(),
+  ]);
+  const vaultById = new Map(subscriptions.map((a) => [a.id, a.label]));
+  const keyById = new Map(keys.map((a) => [`${a.providerId}:${a.id}`, a.label]));
+  const providerName = new Map(registry.list().map((p) => [p.id, p.displayName]));
+  return {
+    subscriptionAccountLabel: (id) => vaultById.get(id),
+    providerAccountLabel: (providerId, id) => keyById.get(`${providerId}:${id}`),
+    providerDisplayName: (providerId) => providerName.get(providerId),
+  };
+}
+
+/**
+ * The `show` equivalent for an UNSAVED profile: what launching this form
+ * would run (command, args, redacted env, ephemeral file contents, route
+ * sentences). Throws ProfileError/InputError on invalid input so the form
+ * renders it inline next to Save errors. POST-only: the payload can carry
+ * inline secrets, which never belong in a URL.
+ */
+export async function previewLaunch(profile: Profile) {
+  validateProfile(profile);
+  let resolved = profile;
+  const secretKeys = await secretKeysFor(profile.providerId);
+  const secrets: string[] = [];
+  if (profile.providerAccountId) {
+    const account = await providerAccounts.get(profile.providerId, profile.providerAccountId);
+    if (account) secrets.push(...collectSecretValues(account.config, secretKeys));
+    resolved = resolveProviderConfig(profile, () => account ?? undefined);
+  }
+  secrets.push(...collectSecretValues(resolved.providerConfig, secretKeys));
+  const spec = resolveLaunchSpec(agents, await providerRegistry(), resolved);
+  const labels = await launchRouteLabels();
+  return {
+    profile: resolved.providerConfig
+      ? { ...resolved, providerConfig: redactEnv(resolved.providerConfig, secrets) }
+      : resolved,
+    launch: {
+      command: spec.command,
+      args: spec.args,
+      env: redactEnv(proxyLaunchEnv(resolved, spec.env), secrets),
+      ...(spec.cwd ? { cwd: spec.cwd } : {}),
+    },
+    ephemeralFiles: spec.ephemeralFiles ?? [],
+    routes: (resolved.modelRoutes ?? []).map((r) => describeModelRoute(r, labels)),
+    proxy: usesProxy(resolved),
+  };
+}
+
+/** One store-backed report: totals, three rollup grains, newest-first recents. */
+export interface ProxyReport {
+  available: boolean;
+  total: TrafficRollupRow | null;
+  byDay: TrafficRollupRow[];
+  byRoute: TrafficRollupRow[];
+  byProfile: TrafficRollupRow[];
+  recent: StoredTrafficExchange[];
+  /** Estimated spend over the same uncapped selection (estimates, not bills). */
+  spendTotal: SpendRow | null;
+  spendByDay: SpendRow[];
+  spendByRoute: SpendRow[];
+  spendByProfile: SpendRow[];
+  /** Read-only route suggestions over the route grain + spend lookup. */
+  suggestions: string[];
+}
+
+/** Newest-first request facts backing the report list (bodies live in JSONL). */
+const REPORT_RECENT_LIMIT = 100;
+
+/**
+ * Queryable history via the TrafficLog port — never SQL in the caller, never
+ * the live ring buffer (history survives proxy restarts; the ring does not).
+ * `available:false` when this home never ran the proxy (no store file yet).
+ */
+export async function getProxyReport(filter: TrafficFilter): Promise<ProxyReport> {
+  const empty: ProxyReport = {
+    available: false,
+    total: null,
+    byDay: [],
+    byRoute: [],
+    byProfile: [],
+    recent: [],
+    spendTotal: null,
+    spendByDay: [],
+    spendByRoute: [],
+    spendByProfile: [],
+    suggestions: [],
+  };
+  try {
+    if (!(await stat(defaultTrafficStorePath())).isFile()) return empty;
+  } catch {
+    return empty;
+  }
+  const store = await openTrafficStore(defaultTrafficStorePath());
+  try {
+    const rows = await store.query({ ...filter, limit: 0 });
+    if (rows.length === 0) {
+      return { ...empty, available: true };
+    }
+    const byRoute = rollupExchanges(rows, "route");
+    const spendByRoute = spendRollup(rows, "route");
+    const spendLookup: Record<string, number> = {};
+    for (const row of spendByRoute) spendLookup[row.key] = row.estSpendUsd;
+    // Dead-route tips need the configured match ids — only when the report
+    // is scoped to one profile whose config we can read.
+    let configuredRoutes: string[] | undefined;
+    if (filter.profile) {
+      const profile = await profiles.get(filter.profile).catch(() => undefined);
+      const matches = profile?.modelRoutes?.map((r) => r.match);
+      if (matches && matches.length > 0) configuredRoutes = matches;
+    }
+    return {
+      available: true,
+      total: rollupTotal(rows),
+      byDay: rollupExchanges(rows, "day"),
+      byRoute,
+      byProfile: rollupExchanges(rows, "profile"),
+      recent: rows.slice(-REPORT_RECENT_LIMIT).reverse(),
+      spendTotal: spendTotal(rows),
+      spendByDay: spendRollup(rows, "day"),
+      spendByRoute,
+      spendByProfile: spendRollup(rows, "profile"),
+      suggestions: suggestInsights(byRoute, spendLookup, {
+        ...(configuredRoutes ? { configuredRoutes } : {}),
+        windowLabel: "in this selection",
+      }),
+    };
+  } finally {
+    store.close();
+  }
 }
 
 export function storePath(): string {

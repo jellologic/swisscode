@@ -13,6 +13,12 @@ export function defaultTrafficLogPath(): string {
   return join(base, "proxy-traffic.jsonl");
 }
 
+/** Queryable traffic index beside the firehose: ~/.swisscode/proxy-traffic.sqlite. */
+export function defaultTrafficStorePath(): string {
+  const base = process.env["SWISSCODE_HOME"] ?? join(homedir(), ".swisscode");
+  return join(base, "proxy-traffic.sqlite");
+}
+
 /** Proxy port: SWISSCODE_PROXY_PORT override, else the default. */
 export function proxyPort(explicit?: number | string): number {
   const raw = explicit ?? process.env["SWISSCODE_PROXY_PORT"];

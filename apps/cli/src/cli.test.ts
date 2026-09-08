@@ -6,11 +6,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { openTrafficStore, toStoredExchange } from "@swisscode/adapters";
+import type { ProxyTrafficEntry } from "@swisscode/adapters";
 
 const CLI = fileURLToPath(new URL("./index.js", import.meta.url));
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -63,8 +65,27 @@ before(async () => {
       providerId: "secret-gw",
       providerConfig: { apiKey: GATEWAY_SECRET },
     },
-    // Plain ambient-login profile: launches the fixture binary.
+    // Plain ambient-login profile: now proxy-mode like everything else.
     { name: "sub", agentId: "claude-code", providerId: "claude-subscription" },
+    // Same, but direct: the only profiles that can launch with no proxy up.
+    { name: "dsub", agentId: "claude-code", providerId: "claude-subscription", direct: true },
+    // Direct profile with session options: exercises ephemeral file staging.
+    {
+      name: "sess",
+      agentId: "claude-code",
+      providerId: "claude-subscription",
+      direct: true,
+      session: { permissionMode: "acceptEdits", allowedTools: ["Read"], fallbackModel: ["claude-sonnet-5"] },
+    },
+    // Curated session field vs freeform agentArgs: the freeform tail wins.
+    {
+      name: "sessover",
+      agentId: "claude-code",
+      providerId: "claude-subscription",
+      direct: true,
+      session: { permissionMode: "acceptEdits" },
+      agentArgs: ["--permission-mode", "plan"],
+    },
     // Proxy tag must stay readable (it is a routing label, not a credential).
     {
       name: "prox",
@@ -72,13 +93,31 @@ before(async () => {
       providerId: "claude-subscription",
       subscriptionAccountId: "personal",
       useProxy: true,
+      modelRoutes: [{ match: "claude-opus-5", kind: "subscription", subscriptionAccountId: "personal" }],
     },
-    // Hostile: provider config tries to own PATH (item 7).
+    // Hostile: provider config tries to own PATH (item 7). Direct, so the
+    // test exercises binary resolution instead of the proxy-down abort.
     {
       name: "evil",
       agentId: "claude-code",
       providerId: "path-gw",
+      direct: true,
       providerConfig: { binDir: evilBinDir },
+    },
+    // Working-directory template: the harness home always exists.
+    {
+      name: "cwdp",
+      agentId: "claude-code",
+      providerId: "claude-subscription",
+      direct: true,
+      cwd: home,
+    },    // Same, but pointing nowhere: launching must fail before spawning.
+    {
+      name: "cwdmissing",
+      agentId: "claude-code",
+      providerId: "claude-subscription",
+      direct: true,
+      cwd: join(home, "gone"),
     },
   ]);
 
@@ -177,7 +216,7 @@ function runCli(
   });
 }
 
-function launchJson(stdout: string): { command: string; args: string[]; env: Record<string, string> } {
+function launchJson(stdout: string): { command: string; args: string[]; env: Record<string, string>; cwd?: string } {
   return JSON.parse(stdout) as { command: string; args: string[]; env: Record<string, string> };
 }
 
@@ -189,13 +228,23 @@ describe("swisscode show", () => {
       launch: { env: Record<string, string> };
     };
     // Without the account merge this failed with "missing required config: apiKey".
-    assert.equal(shown.launch.env["ANTHROPIC_BASE_URL"], "https://openrouter.ai/api/v1");
+    // Key profiles launch through the proxy by default, so the upstream URL is
+    // proxy-side now — but the account-merged model override still applies.
+    assert.equal(shown.launch.env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8123/p/ork");
+    assert.equal(shown.launch.env["ANTHROPIC_AUTH_TOKEN"], "swisscode-profile/ork");
     assert.equal(shown.launch.env["ANTHROPIC_MODEL"], "anthropic/claude-sonnet-4");
-    assert.ok(shown.launch.env["ANTHROPIC_AUTH_TOKEN"]);
     assert.ok(
       !result.stdout.includes(OPENROUTER_KEY),
       "the account key must never be printed",
     );
+  });
+
+  test("renders model routes as sentences", async () => {
+    const result = await runCli(["show", "prox"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual((JSON.parse(result.stdout) as { routes: string[] }).routes, [
+      "Requests for `claude-opus-5` → Personal vault account, model sent unchanged.",
+    ]);
   });
 
   test("describes the same env the launch would apply", async () => {
@@ -213,6 +262,80 @@ describe("swisscode show", () => {
   });
 });
 
+describe("swisscode list", () => {
+  test("marks routed and direct profiles", async () => {
+    const result = await runCli(["list"]);
+    assert.equal(result.code, 0, result.stderr);
+    const prox = result.stdout.split("\n").find((l) => l.startsWith("prox\t"));
+    assert.ok(prox?.includes("routes=1"), "routed profiles carry a route marker");
+    const dsub = result.stdout.split("\n").find((l) => l.startsWith("dsub\t"));
+    assert.ok(dsub?.includes("\tdirect"), "direct opt-outs are visible");
+    const ork = result.stdout.split("\n").find((l) => l.startsWith("ork\t"));
+    assert.ok(ork && !ork.includes("routes="), "unrouted profiles stay unmarked");
+  });
+});
+
+describe("swisscode init", () => {
+  test("bare init lists the starter presets", async () => {
+    const result = await runCli(["init"]);
+    assert.equal(result.code, 0, result.stderr);
+    for (const id of ["solo", "heavy-opus", "frugal", "reviewer"]) {
+      assert.match(result.stdout, new RegExp(`\\b${id}\\b`), `preset ${id} is listed`);
+    }
+  });
+
+  test("unknown preset names the available ones", async () => {
+    const result = await runCli(["init", "nope"]);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Unknown preset "nope"/);
+  });
+
+  test("slot-less preset dry-runs without touching the stores", async () => {
+    const before = await readFile(join(home, "profiles.json"), "utf8");
+    const result = await runCli(["init", "reviewer", "--name", "init-probe", "--dry-run"]);
+    assert.equal(result.code, 0, result.stderr);
+    const filled = JSON.parse(result.stdout) as { name: string; session?: { permissionMode?: string } };
+    assert.equal(filled.name, "init-probe");
+    assert.equal(filled.session?.permissionMode, "plan");
+    assert.equal(await readFile(join(home, "profiles.json"), "utf8"), before);
+  });
+
+  test("single stored login auto-fills the subscription slot", async () => {
+    const result = await runCli(["init", "solo", "--name", "init-probe", "--dry-run"]);
+    assert.equal(result.code, 0, result.stderr);
+    const filled = JSON.parse(result.stdout) as { subscriptionAccountId?: string };
+    assert.equal(filled.subscriptionAccountId, "personal");
+  });
+});
+
+describe("profile cwd template", () => {
+  test("dry-run and show render the spawn directory", async () => {
+    const [planned, shown] = await Promise.all([
+      runCli(["cwdp", "--dry-run"]),
+      runCli(["show", "cwdp"]),
+    ]);
+    assert.equal(planned.code, 0, planned.stderr);
+    assert.equal(launchJson(planned.stdout).cwd, home);
+    assert.equal(
+      (JSON.parse(shown.stdout) as { launch: { cwd?: string } }).launch.cwd,
+      home,
+    );
+  });
+
+  test("launching into a missing directory fails before spawning", async () => {
+    const result = await runCli(["cwdmissing"]);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Working directory .* is missing or not a directory/);
+    assert.ok(!result.stdout.includes("GOOD-CLAUDE"), "the agent must never spawn");
+  });
+
+  test("profiles without cwd carry no cwd key (back-compat shape)", async () => {
+    const result = await runCli(["dsub", "--dry-run"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.ok(!("cwd" in launchJson(result.stdout)));
+  });
+});
+
 describe("swisscode <profile> --dry-run", () => {
   test("masks a custom provider secret mapped to an unusual env name", async () => {
     const result = await runCli(["gw", "--dry-run"]);
@@ -225,12 +348,52 @@ describe("swisscode <profile> --dry-run", () => {
     assert.notEqual(plan.env["MY_PASSWORD"], GATEWAY_SECRET);
     // Masking must stay targeted: non-secret env is still readable.
     assert.equal(plan.env["GATEWAY_URL"], "https://gateway.invalid");
+    // Custom providers launch through the proxy by default too.
+    assert.equal(plan.env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8123/p/gw");
   });
 
   test("keeps the proxy profile tag readable", async () => {
     const result = await runCli(["prox", "--dry-run"]);
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(launchJson(result.stdout).env["ANTHROPIC_AUTH_TOKEN"], "swisscode-profile/prox");
+    const env = launchJson(result.stdout).env;
+    assert.equal(env["ANTHROPIC_AUTH_TOKEN"], "swisscode-profile/prox");
+    assert.equal(env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:8123/p/prox");
+  });
+
+  test("dry-run shows ephemeral placeholders plus file contents, writing nothing", async () => {
+    const result = await runCli(["sess", "--dry-run"]);
+    assert.equal(result.code, 0, result.stderr);
+    const plan = JSON.parse(result.stdout) as { args: string[]; ephemeralFiles: { rel: string; content: string }[] };
+    assert.ok(
+      plan.args.some((a) => a.includes("__SWISSCODE_EPHEMERAL_DIR__")),
+      "dry-run renders the placeholder, never a real path",
+    );
+    assert.ok(
+      !plan.args.some((a) => a.startsWith("/tmp/") && a.endsWith(".json")),
+      "dry-run must not leak a materialized path",
+    );
+    const settings = plan.ephemeralFiles.find((f) => f.rel === "settings.json");
+    assert.ok(settings?.content.includes("fallbackModel"), "file contents are inspectable");
+    // Flags still render in emission order alongside the placeholder.
+    const settingsIdx = plan.args.indexOf("--settings");
+    assert.ok(settingsIdx >= 0 && plan.args[settingsIdx + 1]?.includes("__SWISSCODE_EPHEMERAL_DIR__"));
+    assert.deepEqual(
+      plan.args.slice(0, settingsIdx),
+      ["--permission-mode", "acceptEdits", "--allowedTools", "Read"],
+    );
+  });
+
+  test("agentArgs appends after curated fields, so it wins conflicts", async () => {
+    const result = await runCli(["sessover", "--dry-run"]);
+    assert.equal(result.code, 0, result.stderr);
+    const plan = JSON.parse(result.stdout) as { args: string[] };
+    // Curated first, freeform tail: the last --permission-mode is the agent's.
+    assert.deepEqual(plan.args.filter((a) => a === "--permission-mode"), [
+      "--permission-mode",
+      "--permission-mode",
+    ]);
+    assert.equal(plan.args[plan.args.length - 1], "plan");
+    assert.equal(plan.args[plan.args.indexOf("--permission-mode") + 1], "acceptEdits");
   });
 });
 
@@ -249,7 +412,7 @@ describe("argument parsing", () => {
   });
 
   test("--dry-run after -- launches instead of printing a plan", async () => {
-    const result = await runCli(["sub", "--", "--dry-run"]);
+    const result = await runCli(["dsub", "--", "--dry-run"]);
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /GOOD-CLAUDE --dry-run/);
   });
@@ -277,9 +440,38 @@ describe("argument parsing", () => {
 
 describe("launching the agent", () => {
   test("resolves the binary against the parent PATH", async () => {
-    const result = await runCli(["sub"]);
+    const result = await runCli(["dsub"]);
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /GOOD-CLAUDE/);
+  });
+
+  test("aborts with an actionable error when the proxy is down", async () => {
+    const result = await runCli(["prox"]);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /swisscode proxy run/);
+    assert.ok(!result.stdout.includes("GOOD-CLAUDE"), "never a silent direct fallback");
+  });
+
+  test("stages session files to real paths on a real launch", async () => {
+    const result = await runCli(["sess"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.ok(!result.stdout.includes("__SWISSCODE_EPHEMERAL_DIR__"), "placeholder is resolved");
+    const settingsArg = result.stdout.split(/\s+/).find((tok, i, toks) => toks[i - 1] === "--settings");
+    assert.ok(settingsArg, "the agent receives a --settings path");
+    const staged = JSON.parse(await readFile(settingsArg, "utf8")) as { fallbackModel?: string[] };
+    assert.deepEqual(
+      staged.fallbackModel,
+      ["claude-sonnet-5"],
+      "the staged settings carry the profile's session options",
+    );
+  });
+
+  test("a real launch never creates or touches ~/.claude", async () => {
+    // HOME is the temp harness home, so the real ~/.claude is never at risk;
+    // this probe asserts the launch writes nothing to the user's own store.
+    const result = await runCli(["sess"]);
+    assert.equal(result.code, 0, result.stderr);
+    await assert.rejects(stat(join(home, ".claude")), "launch must not create ~/.claude");
   });
 
   test("provider config cannot repoint PATH at another binary", async () => {
@@ -295,7 +487,7 @@ describe("launching the agent", () => {
   });
 
   test("relays SIGTERM to the agent and exits 128+signal", async () => {
-    const result = await runCli(["sub"], { FAKE_CLAUDE_SLEEP: "1" }, (child, stdoutSoFar) => {
+    const result = await runCli(["dsub"], { FAKE_CLAUDE_SLEEP: "1" }, (child, stdoutSoFar) => {
       const poll = setInterval(() => {
         if (!stdoutSoFar().includes("GOOD-CLAUDE")) return;
         clearInterval(poll);
@@ -307,6 +499,290 @@ describe("launching the agent", () => {
     // survived long enough to report it rather than being killed outright.
     assert.equal(result.code, 143);
     assert.equal(result.signal, null);
+  });
+});
+
+describe("swisscode proxy run", () => {
+  test("refuses a home with no accounts at all", async () => {
+    const emptyHome = await mkdtemp(join(tmpdir(), "swisscode-cli-empty-"));
+    try {
+      const result = await runCli(["proxy", "run"], { HOME: emptyHome, SWISSCODE_HOME: emptyHome });
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /No accounts stored/);
+    } finally {
+      await rm(emptyHome, { recursive: true, force: true });
+    }
+  });
+
+  test("starts for key-only users with a subscription notice", async () => {
+    const keyHome = await mkdtemp(join(tmpdir(), "swisscode-cli-keys-"));
+    try {
+      await writeJson(join(keyHome, "accounts", "openrouter", "main.json"), {
+        id: "main",
+        providerId: "openrouter",
+        label: "Main",
+        config: { apiKey: OPENROUTER_KEY },
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const result = await runCli(
+        ["proxy", "run", "--port", "18347", "--no-traffic-log"],
+        { HOME: keyHome, SWISSCODE_HOME: keyHome },
+        (child, stdoutSoFar) => {
+          const poll = setInterval(() => {
+            if (!stdoutSoFar().includes("key account(s)")) return;
+            clearInterval(poll);
+            child.kill("SIGTERM");
+          }, 20);
+          child.on("close", () => clearInterval(poll));
+        },
+      );
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /1 key account\(s\)/);
+      assert.match(result.stdout, /No subscription accounts/);
+    } finally {
+      await rm(keyHome, { recursive: true, force: true });
+    }
+  });
+
+  test("opens the queryable store by default", async () => {
+    const keyHome = await mkdtemp(join(tmpdir(), "swisscode-cli-store-"));
+    try {
+      await writeJson(join(keyHome, "accounts", "openrouter", "main.json"), {
+        id: "main",
+        providerId: "openrouter",
+        label: "Main",
+        config: { apiKey: OPENROUTER_KEY },
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const result = await runCli(
+        ["proxy", "run", "--port", "18348"],
+        { HOME: keyHome, SWISSCODE_HOME: keyHome },
+        (child, stdoutSoFar) => {
+          const poll = setInterval(() => {
+            if (!stdoutSoFar().includes("key account(s)")) return;
+            clearInterval(poll);
+            child.kill("SIGTERM");
+          }, 20);
+          child.on("close", () => clearInterval(poll));
+        },
+      );
+      assert.equal(result.code, 0, result.stderr);
+      // The store file exists before any traffic flows — report is ready.
+      await readFile(join(keyHome, "proxy-traffic.sqlite"));
+    } finally {
+      await rm(keyHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("swisscode proxy log/report", () => {
+  let trafficSeq = 0;
+  function trafficEntry(overrides: Partial<ProxyTrafficEntry> = {}): ProxyTrafficEntry {
+    trafficSeq += 1;
+    return {
+      id: `cli-t-${trafficSeq}`,
+      ts: `2026-01-${String(10 + trafficSeq).padStart(2, "0")}T10:00:00.000Z`,
+      method: "POST",
+      path: "/v1/messages",
+      status: 200,
+      ms: 100,
+      accountId: "vault-a",
+      reqBytes: 12,
+      resBytes: 34,
+      attempts: [{ accountId: "vault-a", status: 200 }],
+      ...overrides,
+    };
+  }
+
+  async function logHome(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-cli-log-"));
+    trafficSeq = 0; // fixed dates, so --since assertions hold every run
+    const lines = [
+      trafficEntry({ profile: "work", route: "opus", request: { model: "opus" } }),
+      trafficEntry({ profile: "home", route: "codex", status: 429 }),
+      trafficEntry({ profile: "work", route: "opus", error: "client hung up" }),
+      trafficEntry({ profile: undefined, route: undefined, accountId: null }),
+    ];
+    await writeFile(join(dir, "proxy-traffic.jsonl"), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    return dir;
+  }
+
+  test("log tails the firehose unfiltered", async () => {
+    const dir = await logHome();
+    try {
+      const result = await runCli(["proxy", "log"], { HOME: dir, SWISSCODE_HOME: dir });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stdout.trim().split("\n").length, 4);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("log filters share the core predicate", async () => {
+    const dir = await logHome();
+    try {
+      const lines = async (args: string[]) =>
+        (await runCli(["proxy", "log", ...args], { HOME: dir, SWISSCODE_HOME: dir })).stdout.trim().split("\n");
+      assert.equal((await lines(["--profile", "work"])).length, 2);
+      assert.equal((await lines(["--route", "opus"])).length, 2);
+      assert.equal((await lines(["--errors"])).length, 2);
+      assert.equal((await lines(["--since", "2026-01-13T00:00:00.000Z"])).length, 2);
+      assert.match((await lines(["--profile", "nobody"])).join("\n"), /no matching requests/);
+      const tail = await lines(["--profile", "work", "--tail", "1"]);
+      assert.equal(tail.length, 1);
+      assert.match(tail[0] ?? "", /err=client hung up/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  async function reportHome(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-cli-report-"));
+    trafficSeq = 0;
+    // Hours ago, not fixed dates: --days windows must hold whatever today is.
+    const hour = 3_600_000;
+    const now = Date.now();
+    const store = await openTrafficStore(join(dir, "proxy-traffic.sqlite"));
+    try {
+      const seeds: Array<Partial<ProxyTrafficEntry>> = [
+        { ts: new Date(now - 4 * hour).toISOString(), profile: "work", route: "opus", ms: 100, request: { approxInputTokens: 10 } },
+        { ts: new Date(now - 3 * hour).toISOString(), profile: "work", route: "opus", ms: 200, status: 429, request: { approxInputTokens: 20 } },
+        { ts: new Date(now - 2 * hour).toISOString(), profile: "home", route: "codex", ms: 300, request: { approxInputTokens: 30 } },
+        { ts: new Date(now - 1 * hour).toISOString(), profile: "work", route: "opus", ms: 400, error: "client hung up", request: { approxInputTokens: 40 } },
+      ];
+      for (const seed of seeds) await store.append(toStoredExchange(trafficEntry(seed)));
+    } finally {
+      store.close();
+    }
+    return dir;
+  }
+
+  test("report rolls up the store by grain", async () => {
+    const dir = await reportHome();
+    try {
+      const env = { HOME: dir, SWISSCODE_HOME: dir };
+      const byProfile = await runCli(["proxy", "report", "--by", "profile"], env);
+      assert.equal(byProfile.code, 0, byProfile.stderr);
+      assert.match(byProfile.stdout, /key\trequests\terrors\terr%\tp50ms\tp95ms\tin-tok\tout-tok/);
+      assert.match(byProfile.stdout, /work\t3\t2\t66\.7\t200\t400\t70\t0/);
+      assert.match(byProfile.stdout, /home\t1\t0\t0\.0\t300\t300\t30\t0/);
+
+      const workRoutes = await runCli(["proxy", "report", "--profile", "work", "--by", "route"], env);
+      assert.equal(workRoutes.code, 0, workRoutes.stderr);
+      assert.match(workRoutes.stdout, /opus\t3\t2\t66\.7\t200\t400\t70\t0/);
+
+      const recent = await runCli(["proxy", "report", "--days", "1"], env);
+      assert.equal(recent.code, 0, recent.stderr);
+      // Default grain is day: one row covering all four seeds.
+      assert.match(recent.stdout, /\t4\t2\t50\.0\t200\t400\t100\t0/);
+      const none = await runCli(["proxy", "report", "--days", "0"], env);
+      assert.match(none.stdout, /no traffic recorded for this selection yet/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("report prices spend, suggests, and caveats estimates", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-cli-spend-"));
+    try {
+      const store = await openTrafficStore(join(dir, "proxy-traffic.sqlite"));
+      try {
+        const now = Date.now();
+        for (const [i, ms] of [100, 200].entries()) {
+          await store.append(
+            toStoredExchange(
+              trafficEntry({
+                ts: new Date(now - (2 - i) * 3_600_000).toISOString(),
+                profile: "work",
+                route: "opus",
+                ms,
+                request: { model: "claude-haiku-4-5", approxInputTokens: 1_000_000 },
+              }),
+            ),
+          );
+        }
+      } finally {
+        store.close();
+      }
+      const env = { HOME: dir, SWISSCODE_HOME: dir };
+      const result = await runCli(["proxy", "report", "--by", "route", "--days", "1"], env);
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /est-spend/);
+      // 2M Haiku input tokens ≈ $2.00.
+      assert.match(result.stdout, /opus\t2\t0\t0\.0\t100\t200\t2000000\t0\t\$2\.00/);
+      assert.match(result.stdout, /`opus` burned ≈\$2\.00 last 1 day/);
+      assert.match(result.stdout, /Estimated spend, not a bill/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("show carries a spend summary with suggestions for the profile", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-cli-showspend-"));
+    try {
+      await writeJson(join(dir, "profiles.json"), [
+        {
+          name: "work",
+          agentId: "claude-code",
+          providerId: "claude-subscription",
+          modelRoutes: [
+            { match: "opus", kind: "subscription", subscriptionAccountId: "personal" },
+            { match: "sonnet", kind: "subscription", subscriptionAccountId: "personal" },
+          ],
+        },
+      ]);
+      const store = await openTrafficStore(join(dir, "proxy-traffic.sqlite"));
+      try {
+        await store.append(
+          toStoredExchange(
+            trafficEntry({
+              profile: "work",
+              route: "opus",
+              request: { model: "claude-haiku-4-5", approxInputTokens: 1_000_000 },
+            }),
+          ),
+        );
+      } finally {
+        store.close();
+      }
+      const env = { HOME: dir, SWISSCODE_HOME: dir };
+      const result = await runCli(["show", "work"], env);
+      assert.equal(result.code, 0, result.stderr);
+      const shown = JSON.parse(result.stdout) as {
+        spend: { requests: number; estSpendUsd: number; estSpend: string; note: string } | null;
+        suggestions: string[];
+      };
+      assert.equal(shown.spend?.requests, 1);
+      assert.equal(shown.spend?.estSpendUsd, 1);
+      assert.equal(shown.spend?.estSpend, "$1.00");
+      assert.match(shown.spend?.note ?? "", /not a bill/);
+      // The opus route burned spend; the sonnet route never fired.
+      assert.ok(shown.suggestions.some((s) => s.includes("`opus` burned")));
+      assert.ok(shown.suggestions.some((s) => s.includes("`sonnet` saw no traffic")));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("show degrades to null spend when the proxy never ran", async () => {
+    const result = await runCli(["show", "sub"]);
+    assert.equal(result.code, 0, result.stderr);
+    const shown = JSON.parse(result.stdout) as { spend: unknown; suggestions: unknown };
+    assert.equal(shown.spend, null);
+    assert.deepEqual(shown.suggestions, []);
+  });
+
+  test("report without a store explains itself", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-cli-nostore-"));
+    try {
+      const result = await runCli(["proxy", "report"], { HOME: dir, SWISSCODE_HOME: dir });
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /No queryable traffic store/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

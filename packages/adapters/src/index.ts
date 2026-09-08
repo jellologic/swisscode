@@ -89,10 +89,21 @@ export {
 export type { ProcessProbe } from "./subscriptions/claudeSessions.js";
 export { MAX_RETRY_AFTER_MS, parseRetryAfterMs } from "./subscriptions/retryAfter.js";
 export type { ParseRetryAfterOptions } from "./subscriptions/retryAfter.js";
-export { defaultTrafficLogPath, proxyBaseUrl, proxyPort } from "./paths.js";
-export { MAX_TRAFFIC_BUFFER_SIZE, isLoopbackHost, parseProfileTag } from "./proxy/server.js";
+export { defaultTrafficLogPath, defaultTrafficStorePath, proxyBaseUrl, proxyPort } from "./paths.js";
+export { MAX_TRAFFIC_BUFFER_SIZE, isLoopbackHost, parseProfilePath, parseProfileTag } from "./proxy/server.js";
+export { makeEphemeralDir, writeEphemeralFiles } from "./agents/ephemeralFiles.js";
 export { DEFAULT_TRAFFIC_BODY_BYTES } from "./proxy/server.js";
 export { groupTrafficConversations, parseRequestJson, summarizeTrafficEntry } from "./proxy/trafficSummary.js";
+export { SqliteTrafficLog, openTrafficStore, toStoredExchange } from "./proxy/trafficStore.js";
+export type { TrafficStoreOptions } from "./proxy/trafficStore.js";
+export { proxyLaunchEnv, usesProxy } from "./proxy/launch.js";
+export {
+  PROFILE_PRESETS,
+  PROMPT_PRESETS,
+  fillPresetSlots,
+  presetById,
+} from "./presets.js";
+export type { PresetSlotDef, ProfilePreset, PromptPreset } from "./presets.js";
 export type {
   TrafficConversation,
   TrafficMessagePreview,

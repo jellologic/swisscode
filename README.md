@@ -86,6 +86,7 @@ Then either use the web UI or the CLI:
 cd apps/web && npm run dev
 
 # CLI
+swisscode init                                # scaffold a profile from a starter preset
 swisscode accounts import personal      # snapshot the current `claude login`
 swisscode accounts usage                # 5h / 7d utilization per account
 swisscode list                          # profiles (create them in the UI or profiles.json)
@@ -129,12 +130,16 @@ swisscode proxy run                 # http://127.0.0.1:8123 (SWISSCODE_PROXY_POR
 swisscode proxy use <id>            # change the account new requests are signed with
 swisscode proxy status
 swisscode proxy log [--tail <n>]    # recent requests, redacted
+swisscode proxy report [--profile <name>] [--days N] [--by profile|route|day]
 ```
 
-A profile with `"useProxy": true` sets `ANTHROPIC_BASE_URL` to the proxy and tags
+Every profile launches through the proxy unless it sets `"direct": true`.
+The launch points `ANTHROPIC_BASE_URL` at `<proxy>/p/<profileName>` and tags
 `ANTHROPIC_AUTH_TOKEN` with `swisscode-profile/<name>`. That tag is an attribution
 marker, not a secret: the proxy strips it and signs the upstream request with the vault
-token. Existing `claude` sessions are untouched.
+token (or the profile's key-provider account, resolved proxy-side). Existing `claude`
+sessions are untouched. The old per-profile `"useProxy"` flag is legacy — still stored,
+no longer read; `"direct": true` is the opt-out.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/jellologic/swisscode/main/assets/proxy-flow.png" alt="How the swisscode proxy fails over: Claude Code sends requests to localhost:8123, the proxy signs with the work account, and on a 429 rate limit retries automatically with the personal account while the exhausted account cools down" width="100%">
@@ -154,7 +159,17 @@ What the proxy does per request:
 
 Open `/proxy` in the web UI to browse **conversation threads** across requests: the
 verdict of each turn, the reply, tool calls decoded, cache-aware token usage, and links
-to the local Claude Code session that produced them.
+to the local Claude Code session that produced them. Below the live view, **stored
+history** survives restarts: totals plus per-day, per-route, and per-profile rollups
+over a queryable SQLite index (`~/.swisscode/proxy-traffic.sqlite`;
+`SWISSCODE_TRAFFIC_STORE_DAYS` default 30, `SWISSCODE_TRAFFIC_STORE_ROWS` default
+100000, `0` = unbounded on either bound), filterable by profile, route, date, and errors-only — the same
+filters as `proxy report`, and the URL carries them so a view is shareable. Token
+counts are estimates from usage payloads, not bills. Spend is estimated from a
+static per-model price table — the `est-spend` column on `proxy report`, a spend
+summary on `swisscode show <profile>`, and per-route tables on `/proxy` — with
+read-only route suggestions alongside. Estimated spend, not a bill:
+subscriptions don't meter per token.
 
 `run` flags: `--port`, `--traffic-log <path>` / `--no-traffic-log` (JSONL at
 `~/.swisscode/proxy-traffic.jsonl`), `--log-bodies`, `--traffic-keep <n>` (ring buffer,
@@ -188,7 +203,13 @@ loader variables, and test endpoints must be public HTTPS hosts.
 
 ## Profiles
 
-A profile is one line of JSON in `~/.swisscode/profiles.json`, or a form in the UI:
+A profile is one line of JSON in `~/.swisscode/profiles.json`, or a form in the UI.
+Skip the blank page with a starter preset: `swisscode init` lists four (solo dev,
+heavy-Opus split, frugal Haiku, reviewer) and `swisscode init <preset> [--name
+<name>] [--dry-run]` fills its account slots from your stored logins and keys,
+prints the profile before saving, and refuses an existing name. The same gallery
+sits atop `/profiles/new` as *"Start from…"* — presets copy values in, never
+link, so later preset edits never surprise existing profiles.
 
 ```json
 {
@@ -196,7 +217,6 @@ A profile is one line of JSON in `~/.swisscode/profiles.json`, or a form in the 
   "agentId": "claude-code",
   "providerId": "claude-subscription",
   "subscriptionAccountId": "work",
-  "useProxy": true,
   "model": "claude-opus-5",
   "agentArgs": ["--verbose"]
 }
@@ -204,8 +224,18 @@ A profile is one line of JSON in `~/.swisscode/profiles.json`, or a form in the 
 
 - `providerId` + `providerAccountId` or inline `providerConfig` (inline wins) choose the
   backend and its key.
-- `subscriptionAccountId` picks the Claude login; `useProxy` routes through the proxy
-  instead of rewriting the shared credential store.
+- `subscriptionAccountId` picks the Claude login. Launches go through the proxy by
+  default; `"direct": true` bypasses it (loses failover, model routes, inspection).
+- `modelRoutes` sends different models to different backends inside one session —
+  exact match, first row wins, with an optional per-route `upstreamModel` rewrite.
+- `session` holds Claude Code knobs (effort, permission mode, tools, system prompt,
+  MCP, setting sources) emitted as flags plus an ephemeral `--settings` file — your
+  own settings files are never rewritten. `session.promptPreset` only records which
+  snippet the append text came from (reviewer/planner/explainer in the form); the
+  text is what launches, so hand-edits keep working. The `/help` page cheatsheets every knob.
+- `cwd` is the working directory the agent spawns in — an absolute path only
+  (relative is refused at save time), blank inherits swisscode's directory. It is a
+  spawn option, never env, and `show` / `--dry-run` / Preview render it.
 - `model` overrides the provider default for this profile.
 - `swisscode show <profile>` and `--dry-run` print the resolved command and env with
   every secret masked, by value as well as by name.

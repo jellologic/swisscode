@@ -124,6 +124,106 @@ describe("resolveLaunchSpec", () => {
   });
 });
 
+describe("C2 templates: cwd + promptPreset", () => {
+  it("carries an absolute cwd into the launch spec", () => {
+    const spec = resolveLaunchSpec(agents, providers, {
+      name: "x",
+      agentId: "claude-code",
+      providerId: "openrouter",
+      providerConfig: { apiKey: "sk-or-test" },
+      cwd: "/Users/x/work",
+    });
+    assert.equal(spec.cwd, "/Users/x/work");
+  });
+
+  it("omits cwd when the profile has none (back-compat shape)", () => {
+    const spec = resolveLaunchSpec(agents, providers, {
+      name: "x",
+      agentId: "claude-code",
+      providerId: "openrouter",
+      providerConfig: { apiKey: "sk-or-test" },
+    });
+    assert.ok(!("cwd" in spec));
+  });
+
+  it("rejects relative and blank cwd at save time", () => {
+    for (const cwd of ["work/proj", "", "   "]) {
+      assert.throws(
+        () =>
+          validateProfile({
+            name: "x",
+            agentId: "claude-code",
+            providerId: "openrouter",
+            providerConfig: { apiKey: "sk-or-test" },
+            cwd,
+          }),
+        /not an absolute path/,
+      );
+    }
+  });
+
+  it("rejects a blank promptPreset like any other blank session string", () => {
+    assert.throws(
+      () =>
+        validateProfile({
+          name: "x",
+          agentId: "claude-code",
+          providerId: "openrouter",
+          providerConfig: { apiKey: "sk-or-test" },
+          session: { promptPreset: "  " },
+        }),
+      /promptPreset must be a non-empty string/,
+    );
+  });
+
+  it("keeps a promptPreset id alongside hand-edited append text", () => {
+    validateProfile({
+      name: "x",
+      agentId: "claude-code",
+      providerId: "openrouter",
+      providerConfig: { apiKey: "sk-or-test" },
+      session: { promptPreset: "reviewer", appendSystemPrompt: "Be extra careful." },
+    });
+  });
+});
+
+describe("back-compat golden: pre-feature profiles", () => {
+  // Profiles stored before modelRoutes/session/direct existed must resolve
+  // byte-identical — the new fields are read nowhere on this path, so the
+  // golden below pins that. If this test breaks, a launch env changed for
+  // someone who never touched the new knobs.
+  const oldProfile: Profile = {
+    name: "legacy",
+    agentId: "claude-code",
+    providerId: "openrouter",
+    providerConfig: { apiKey: "sk-or-legacy" },
+    agentArgs: ["--verbose"],
+    model: "anthropic/claude-opus-4-6",
+  };
+
+  it("resolves the full spec byte-identical", () => {
+    // The stub registries above emit only the provider's two vars (the real
+    // adapters add ANTHROPIC_MODEL on top) — the point is the whole spec,
+    // not selected fields, matches exactly.
+    assert.deepEqual(resolveLaunchSpec(agents, providers, oldProfile), {
+      command: "claude",
+      args: ["--verbose"],
+      env: {
+        ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
+        ANTHROPIC_AUTH_TOKEN: "sk-or-legacy",
+      },
+    });
+  });
+
+  it("ignores the legacy useProxy flag either way", () => {
+    const golden = resolveLaunchSpec(agents, providers, oldProfile);
+    assert.deepEqual(
+      resolveLaunchSpec(agents, providers, { ...oldProfile, useProxy: false }),
+      golden,
+    );
+  });
+});
+
 describe("ensureFreshCredential onInvalidGrant", () => {
   const expired = (refreshToken: string): OAuthCredential => ({
     accessToken: "old-access",

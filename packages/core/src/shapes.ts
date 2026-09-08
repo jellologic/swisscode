@@ -37,6 +37,49 @@ function isOptionalStringRecord(x: unknown): boolean {
   return x === undefined || isStringRecord(x);
 }
 
+/** Structural only: kind values and cross-field pairing stay with validateModelRoutes. */
+function isModelRouteShape(x: unknown): boolean {
+  if (!isRecord(x)) return false;
+  if (typeof x["match"] !== "string" || typeof x["kind"] !== "string") return false;
+  return (
+    isOptionalString(x["subscriptionAccountId"]) &&
+    isOptionalString(x["providerId"]) &&
+    isOptionalString(x["providerAccountId"]) &&
+    isOptionalString(x["upstreamModel"])
+  );
+}
+
+function isOptionalModelRouteArray(x: unknown): boolean {
+  return x === undefined || (Array.isArray(x) && x.every(isModelRouteShape));
+}
+
+/**
+ * Structural only: every session field optional with the right primitive
+ * type. Enum membership, non-blank entries and inline-JSON parseability are
+ * value judgements — they stay with validateSessionOptions.
+ */
+function isClaudeSessionOptionsShape(x: unknown): boolean {
+  if (x === undefined) return true;
+  if (!isRecord(x)) return false;
+  return (
+    isOptionalString(x["effort"]) &&
+    isOptionalString(x["permissionMode"]) &&
+    isOptionalStringArray(x["allowedTools"]) &&
+    isOptionalStringArray(x["disallowedTools"]) &&
+    isOptionalString(x["tools"]) &&
+    isOptionalStringArray(x["addDirs"]) &&
+    isOptionalString(x["systemPrompt"]) &&
+    isOptionalString(x["appendSystemPrompt"]) &&
+    isOptionalString(x["promptPreset"]) &&
+    isOptionalString(x["agent"]) &&
+    isOptionalString(x["mcpConfig"]) &&
+    (x["strictMcp"] === undefined || typeof x["strictMcp"] === "boolean") &&
+    isOptionalStringArray(x["settingSources"]) &&
+    isOptionalStringArray(x["fallbackModel"]) &&
+    (x["claudeSettings"] === undefined || isRecord(x["claudeSettings"]))
+  );
+}
+
 /** Timestamps are re-stamped by every repository save, so absent is tolerated. */
 function hasValidTimestamps(rec: Record<string, unknown>): boolean {
   return isOptionalString(rec["createdAt"]) && isOptionalString(rec["updatedAt"]);
@@ -77,6 +120,28 @@ const PROFILE_RULES: readonly { key: string; ok: (v: unknown) => boolean; proble
     key: "providerAccountId",
     ok: isOptionalString,
     problem: "profile.providerAccountId must be a string.",
+  },
+  {
+    key: "modelRoutes",
+    ok: isOptionalModelRouteArray,
+    problem:
+      "profile.modelRoutes must be an array of { match, kind, subscriptionAccountId?, providerId?, providerAccountId?, upstreamModel? }.",
+  },
+  {
+    key: "direct",
+    ok: (v) => v === undefined || typeof v === "boolean",
+    problem: "profile.direct must be true or false.",
+  },
+  {
+    key: "session",
+    ok: isClaudeSessionOptionsShape,
+    problem:
+      "profile.session must be an object of Claude Code session options (effort, permissionMode, allowedTools, disallowedTools, tools, addDirs, systemPrompt, appendSystemPrompt, promptPreset, agent, mcpConfig, strictMcp, settingSources, fallbackModel, claudeSettings).",
+  },
+  {
+    key: "cwd",
+    ok: isOptionalString,
+    problem: "profile.cwd must be a string.",
   },
 ];
 

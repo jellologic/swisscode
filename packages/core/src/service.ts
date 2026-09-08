@@ -3,7 +3,9 @@
 // and the TanStack Start UI, so env resolution can never drift.
 
 import type { LaunchSpec, Profile } from "./domain.js";
+import { validateSessionOptions } from "./claudeSession.js";
 import { isDeniedEnvName } from "./envPolicy.js";
+import { validateModelRoutes } from "./modelRoutes.js";
 import type { AgentRegistry, ProviderRegistry } from "./ports.js";
 import { profileShapeProblem } from "./shapes.js";
 import type { ProviderAccount } from "./subscriptions.js";
@@ -21,6 +23,7 @@ export const RESERVED_PROFILE_NAMES: readonly string[] = [
   "show",
   "accounts",
   "proxy",
+  "init",
   "help",
   "--help",
   "-h",
@@ -71,6 +74,20 @@ export function validateProfile(profile: Profile): void {
   if (profile.useProxy === true && !profile.subscriptionAccountId) {
     throw new ProfileError(`Profile "${profile.name}" sets useProxy but has no subscriptionAccountId.`);
   }
+  // Route consistency without store access (existence checks need lookups, so
+  // save paths call validateModelRoutes again with getters — launch stays I/O-free).
+  validateModelRoutes(profile);
+  // A relative cwd would resolve against wherever swisscode happened to start
+  // (a launchd job, someone else's shell) — refuse it at save time. Absolute
+  // means root-anchored; the platforms swisscode supports are all POSIX.
+  if (profile.cwd !== undefined && (!profile.cwd.trim() || !profile.cwd.startsWith("/"))) {
+    throw new ProfileError(
+      `Profile "${profile.name}" sets cwd but it is not an absolute path (got ${JSON.stringify(profile.cwd)}).`,
+    );
+  }
+  // Session value checks (enums, blanks, inline-JSON parsing). Shape already
+  // proved the primitives above; no store access needed here either.
+  validateSessionOptions(profile);
 }
 
 /** Check required provider fields are present. Throws ProfileError. */
@@ -165,5 +182,9 @@ export function resolveLaunchSpec(
     options.onDroppedEnv,
   );
   const spec = agent.buildLaunch(profile, providerEnv);
-  return { ...spec, env: stripDeniedEnvNames(spec.env, options.onDroppedEnv) };
+  // The working directory is profile-owned (a spawn option, not env): the
+  // agent never sets it, so the profile value passes straight through for the
+  // CLI to apply — show/dry-run/Preview render it from the same place.
+  const cwd = profile.cwd?.trim() ? { cwd: profile.cwd } : {};
+  return { ...spec, ...cwd, env: stripDeniedEnvNames(spec.env, options.onDroppedEnv) };
 }

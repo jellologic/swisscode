@@ -80,8 +80,19 @@ async function loadThread(threadId: string): Promise<ThreadPayload> {
 }
 
 export const Route = createFileRoute("/proxy/$threadId")({
+  // Filter params ride along untouched so the back link restores the list
+  // exactly; only `profile` feeds this page (the live thread lookup).
   validateSearch: (search: Record<string, unknown>) => ({
     profile: typeof search["profile"] === "string" ? search["profile"] : "",
+    route: typeof search["route"] === "string" ? search["route"] : "",
+    since: typeof search["since"] === "string" ? search["since"] : "",
+    until: typeof search["until"] === "string" ? search["until"] : "",
+    // Same JSON-coercion as the list page: accept "1"/1/"true"/true.
+    errorsOnly:
+      search["errorsOnly"] === "1" ||
+      search["errorsOnly"] === 1 ||
+      search["errorsOnly"] === "true" ||
+      search["errorsOnly"] === true,
   }),
   loader: async ({ params }) => loadThread(params.threadId),
   component: EntryPage,
@@ -412,7 +423,7 @@ function ThreadPanel({
 function EntryPage() {
   const loaded = Route.useLoaderData();
   const { threadId } = Route.useParams();
-  const { profile } = Route.useSearch();
+  const search = Route.useSearch();
   const router = useRouter();
   // A poll that came back empty must not blank the page being read: the fold
   // keeps the last good thread and only the "not running" flag updates.
@@ -435,7 +446,7 @@ function EntryPage() {
 
   const { conversation, entries, running, session } = shown;
   const backLink = (
-    <Link to="/proxy" search={{ profile }}>
+    <Link to="/proxy" search={search}>
       Proxy traffic
     </Link>
   );

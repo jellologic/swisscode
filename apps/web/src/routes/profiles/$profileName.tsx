@@ -3,6 +3,7 @@ import { Card, Code, Page, Stack } from "../../design";
 import {
   catalogFn,
   listAccountsFn,
+  listPresetsFn,
   listProfilesFn,
   listProviderAccountsFn,
 } from "../../lib/functions";
@@ -18,13 +19,14 @@ export const Route = createFileRoute("/profiles/$profileName")({
       catalog: await catalogFn(),
       accounts: await listAccountsFn(),
       providerAccounts: await listProviderAccountsFn({ data: {} }),
+      presets: await listPresetsFn(),
     };
   },
   component: EditProfilePage,
 });
 
 function EditProfilePage() {
-  const { profile, catalog, accounts, providerAccounts } = Route.useLoaderData();
+  const { profile, catalog, accounts, providerAccounts, presets } = Route.useLoaderData();
   const router = useRouter();
   return (
     <Page
@@ -39,6 +41,7 @@ function EditProfilePage() {
             providers={catalog.providers}
             subscriptionAccounts={accounts.accounts}
             keyAccounts={providerAccounts.accounts}
+            promptPresets={presets.promptPresets}
             initial={profileToForm(profile)}
             nameEditable={false}
             submitLabel="Save changes"

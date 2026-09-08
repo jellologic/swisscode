@@ -245,6 +245,29 @@ export function parseTrafficFilter(data: unknown): { profile?: string } {
   return profile === undefined ? {} : { profile };
 }
 
+/** Report filters mirror core's TrafficFilter (minus limit — the server caps). */
+export function parseReportFilter(data: unknown): {
+  profile?: string;
+  route?: string;
+  since?: string;
+  until?: string;
+  errorsOnly?: boolean;
+} {
+  const rec = asRecord(data, "data");
+  const out: { profile?: string; route?: string; since?: string; until?: string; errorsOnly?: boolean } = {};
+  const profile = optionalText(rec["profile"], "profile", MAX_ID);
+  if (profile !== undefined) out.profile = profile;
+  const route = optionalText(rec["route"], "route", MAX_ID);
+  if (route !== undefined) out.route = route;
+  const since = optionalText(rec["since"], "since", 64);
+  if (since !== undefined) out.since = since;
+  const until = optionalText(rec["until"], "until", 64);
+  if (until !== undefined) out.until = until;
+  const errorsOnly = rec["errorsOnly"];
+  if (errorsOnly !== undefined) out.errorsOnly = flag(errorsOnly, "errorsOnly");
+  return out;
+}
+
 export function parseTrafficSize(data: unknown): { size: number } {
   const rec = asRecord(data, "data");
   return { size: count(rec["size"], "size", 1_000_000) };

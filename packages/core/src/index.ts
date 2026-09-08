@@ -1,4 +1,14 @@
-export type { FieldDef, LaunchSpec, PluginHelp, PluginLink, Profile } from "./domain.js";
+export type {
+  ClaudeSessionOptions,
+  EphemeralFile,
+  FieldDef,
+  JsonValue,
+  LaunchSpec,
+  ModelRoute,
+  PluginHelp,
+  PluginLink,
+  Profile,
+} from "./domain.js";
 export type {
   AccountValidation,
   AgentPort,
@@ -70,6 +80,31 @@ export type {
   TrafficToolCall,
 } from "./traffic.js";
 export type { FreshCredential, FreshCredentialOptions } from "./subscriptionService.js";
+export {
+  BASE_ROUTE_KEY,
+  UNATTRIBUTED_PROFILE_KEY,
+  matchTrafficFilter,
+  rollupExchanges,
+  rollupTotal,
+} from "./trafficLog.js";
+export type {
+  StoredTrafficExchange,
+  TrafficFilter,
+  TrafficLog,
+  TrafficRollupGrain,
+  TrafficRollupRow,
+} from "./trafficLog.js";
+export {
+  MODEL_PRICES,
+  SPEND_ESTIMATE_NOTE,
+  estimateExchangeSpend,
+  formatSpend,
+  priceForModel,
+  spendRollup,
+  spendTotal,
+  suggestInsights,
+} from "./pricing.js";
+export type { ModelPrice, SpendRow, SpendableExchange, SuggestInsightsOptions } from "./pricing.js";
 export { DENIED_ENV_NAMES, DENIED_ENV_PREFIXES, isDeniedEnvName } from "./envPolicy.js";
 export {
   DEFAULT_SECRET_NAME_RE,
@@ -92,6 +127,22 @@ export {
   profileShapeProblem,
 } from "./shapes.js";
 export { SingleFlight } from "./singleFlight.js";
+export { MODEL_ID_RE, describeModelRoute, extractRequestModel, selectModelRoute, validateModelRoutes } from "./modelRoutes.js";
+export type { ModelRouteLabels, ModelRouteLookups } from "./modelRoutes.js";
+export {
+  EFFORT_LEVELS,
+  EPHEMERAL_DIR_TOKEN,
+  MCP_FILE_REL,
+  PERMISSION_MODES,
+  SETTINGS_FILE_REL,
+  SETTING_SOURCES,
+  buildClaudeFlags,
+  buildClaudeSettings,
+  isInlineJson,
+  resolveEphemeralPaths,
+  sessionEphemeralFiles,
+  validateSessionOptions,
+} from "./claudeSession.js";
 export type { CustomProviderDef, CustomProviderTest, ValidateCustomOptions } from "./customProviders.js";
 export { validateCustomProviderDef } from "./customProviders.js";
 export type {

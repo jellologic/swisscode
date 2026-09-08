@@ -20,15 +20,28 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type {
   AccountRepository,
   ActiveCredentialStore,
+  ModelRoute,
   OAuthClient,
   OAuthCredential,
+  Profile,
+  ProfileRepository,
+  ProviderAccountRepository,
+  ProviderPort,
+  ProviderRegistry,
   SubscriptionAccount,
+  TrafficLog,
   TrafficParser,
   TrafficRequestSummary,
 } from "@swisscode/core";
-import { SingleFlight } from "@swisscode/core";
-import { defaultTrafficParsers } from "../registry.js";
+import {
+  SingleFlight,
+  extractRequestModel,
+  isRecord,
+  selectModelRoute,
+} from "@swisscode/core";
+import { createProviderRegistry, defaultTrafficParsers } from "../registry.js";
 import { readSessionContext } from "./sessionContext.js";
+import { toStoredExchange } from "./trafficStore.js";
 import { resyncSubscriptionCredential } from "../subscriptions/liveResync.js";
 import { freshVaultCredential } from "../subscriptions/freshCredential.js";
 import { PROXY_TOKEN_HEADER } from "./proxyToken.js";
@@ -91,6 +104,67 @@ export function parseProfileTag(headerValue: string | string[] | undefined): str
   if (!raw) return undefined;
   const token = raw.startsWith("Bearer ") ? raw.slice("Bearer ".length) : raw;
   return PROFILE_TAG_RE.exec(token.trim())?.[1];
+}
+
+/**
+ * Path-form profile identity: the `/p/<name>` prefix the launcher puts in
+ * ANTHROPIC_BASE_URL (`http://127.0.0.1:8123/p/<name>`). Same id syntax as the
+ * header tag, so a slug is valid in both places. Path wins over the header tag
+ * when both are present (identity survives any client header management).
+ */
+const PROFILE_PATH_RE = /^\/p\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})(\/.*)?$/;
+
+/** The profile name plus the remainder to forward upstream ("/" when bare). */
+export function parseProfilePath(pathname: string): { name: string; rest: string } | undefined {
+  const m = PROFILE_PATH_RE.exec(pathname);
+  if (!m) return undefined;
+  return { name: m[1] as string, rest: (m[2] as string | undefined) ?? "/" };
+}
+
+/** Best-effort JSON parse of a buffered request body (undefined = unparseable). */
+function parseJsonBody(body: Buffer | undefined): unknown {
+  if (!body || body.length === 0 || body.length > MAX_STRUCTURED_PARSE_BYTES) return undefined;
+  try {
+    return JSON.parse(body.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Entry fields the tracer fills itself; handleApi/key-backend supply the rest. */
+type TraceInput = Omit<
+  ProxyTrafficEntry,
+  | "id"
+  | "ts"
+  | "method"
+  | "path"
+  | "ms"
+  | "reqBytes"
+  | "profile"
+  | "request"
+  | "providerId"
+  | "route"
+  | "upstreamModel"
+  | "note"
+>;
+
+/** The per-request tracer plus its request-scoped helpers (see makeTracer). */
+interface RequestTracer {
+  trace: (entry: TraceInput) => void;
+  loggedRequest: () => { reqBody?: string; reqBodyTruncated?: boolean };
+  traceAborted: (accountId: string | null, resBytes: number) => void;
+  captureCap: number;
+}
+
+/**
+ * Routing facts one request accumulates (matched route, rewrite, identity
+ * notes). A mutable cell, not call args, so the tracer stamps every entry —
+ * including the error paths — without touching each trace() call site.
+ */
+interface RequestTraceExtra {
+  route?: string;
+  upstreamModel?: string;
+  note?: string;
 }
 
 function clampBufferSize(n: number): number {
@@ -215,6 +289,12 @@ export interface ProxyOptions {
   fetchFn?: typeof fetch;
   /** Called once per proxied API request with a redacted metadata entry. */
   onTraffic?: (entry: ProxyTrafficEntry) => void;
+  /**
+   * Queryable reporting store (core `TrafficLog` port, SQLite in practice).
+   * Every captured entry is appended fire-and-forget — a store failure never
+   * breaks proxying; the JSONL firehose keeps the raw record either way.
+   */
+  trafficStore?: TrafficLog;
   /** Also capture (truncated) request/response bodies. Off by default. */
   logBodies?: boolean;
   /** Max body bytes kept per side when logBodies is on. Default 8192. */
@@ -254,6 +334,20 @@ export interface ProxyOptions {
   controlToken?: string;
   /** Wait for upstream response headers. Default 60s; bodies stream freely. */
   upstreamHeadersTimeoutMs?: number;
+  /**
+   * Profile + provider-account stores for per-request routing (identity →
+   * profile → selectModelRoute → upstream). Re-read on EVERY request — a
+   * localhost JSON read is noise next to LLM latency, and it makes profile
+   * edits live on the next request with no restart and no cache invalidation.
+   * Omitted only in tests; an identified request with no stores fails 503.
+   */
+  profiles?: ProfileRepository;
+  providerAccounts?: ProviderAccountRepository;
+  /**
+   * Provider plugins for key-route buildEnv translation. Defaults to the
+   * built-ins; `proxy run` passes the full registry (built-ins + customs).
+   */
+  providers?: ProviderRegistry;
 }
 
 /** One failover step inside a proxied request. */
@@ -295,8 +389,17 @@ export interface ProxyTrafficEntry {
   resBytes: number;
   attempts: ProxyTrafficAttempt[];
   error?: string;
-  /** Profile that launched the client, from the swisscode-profile tag (if any). */
+  /** Profile that launched the client, from the path prefix or tag (if any). */
   profile?: string;
+  /** Matched route `match` id — undefined when the base provider served it. */
+  route?: string;
+  /** Model id actually sent upstream (set when a route rewrote it). */
+  upstreamModel?: string;
+  /**
+   * Routing note that is NOT an error (e.g. path-vs-header identity mismatch).
+   * Deliberately separate from `error` so monitors don't page on it.
+   */
+  note?: string;
   /**
    * Request facts parsed from the FULL body before truncation (small and
    * bounded). Present even when reqBody holds only the kept head.
@@ -322,6 +425,7 @@ export class SubscriptionProxy {
   private readonly upstream: string;
   private readonly fetchFn: typeof fetch;
   private readonly onTraffic?: (entry: ProxyTrafficEntry) => void;
+  private readonly trafficStore?: TrafficLog;
   private readonly liveStore?: ActiveCredentialStore;
   private readonly lockDir?: string;
   private readonly logBodies: boolean;
@@ -331,6 +435,9 @@ export class SubscriptionProxy {
   private readonly trafficParsers: TrafficParser[];
   private readonly controlToken?: string;
   private readonly upstreamHeadersTimeoutMs: number;
+  private readonly profiles?: ProfileRepository;
+  private readonly providerAccounts?: ProviderAccountRepository;
+  private readonly providers: ProviderRegistry;
   private trafficSeq = 0;
   private readonly traffic: ProxyTrafficEntry[] = [];
   /** accountId → epoch ms until which a 429/529 says not to use it. */
@@ -350,6 +457,7 @@ export class SubscriptionProxy {
     this.upstream = (options.upstream ?? "https://api.anthropic.com").replace(/\/$/, "");
     this.fetchFn = options.fetchFn ?? fetch;
     this.onTraffic = options.onTraffic;
+    this.trafficStore = options.trafficStore;
     this.liveStore = options.liveStore;
     this.lockDir = options.lockDir;
     this.logBodies = options.logBodies ?? false;
@@ -361,6 +469,9 @@ export class SubscriptionProxy {
     this.controlToken = options.controlToken;
     this.upstreamHeadersTimeoutMs =
       options.upstreamHeadersTimeoutMs ?? DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS;
+    this.profiles = options.profiles;
+    this.providerAccounts = options.providerAccounts;
+    this.providers = options.providers ?? createProviderRegistry();
     void options.port;
   }
 
@@ -424,6 +535,233 @@ export class SubscriptionProxy {
    */
   private cooldown(accountId: string, retryAfter: string | null | undefined): void {
     this.cooldowns.set(accountId, Date.now() + cooldownMsFromRetryAfter(retryAfter));
+  }
+
+  /**
+   * Pick the upstream backend for a profile-attributed request from the
+   * profile's FLAT binding fields (providerId + subscriptionAccountId /
+   * providerAccountId) plus an optional explicit route, which wins outright.
+   * Existence is pre-checked so a deleted account fails closed per request
+   * with a sentence naming the cause — never a silent wrong upstream.
+   */
+  private async resolveBackend(
+    profile: Profile,
+    route: ModelRoute | undefined,
+  ): Promise<
+    | { kind: "vault"; accountIds: string[] }
+    | {
+        kind: "key";
+        providerId: string;
+        provider: ProviderPort;
+        accountLabel: string;
+        mergedConfig: Record<string, string>;
+      }
+  > {
+    const name = profile.name;
+    // A subscription route WITHOUT an account needs no branch: the domain rule
+    // is "absent = the profile's base subscription account", and the failover
+    // set is the whole vault either way — so it falls through to base.
+    if (route?.kind === "subscription" && route.subscriptionAccountId?.trim()) {
+      const id = route.subscriptionAccountId.trim();
+      if (!(await this.accounts.get(id).catch(() => undefined))) {
+        throw new Error(
+          `profile "${name}" route "${route.match}" points at deleted subscription account "${id}".`,
+        );
+      }
+      // Pinned first, then the rest of the vault: the pin is a preference,
+      // not a cage — a pinned route keeps the whole-vault 429/529 failover
+      // the base binding always had (mirrors the bound-account branch below).
+      return { kind: "vault", accountIds: [id, ...(await this.candidates()).filter((c) => c !== id)] };
+    }
+    if (route?.kind === "providerAccount") {
+      const providerId = route.providerId?.trim() ?? "";
+      const providerAccountId = route.providerAccountId?.trim() ?? "";
+      const provider = providerId ? this.providers.get(providerId) : undefined;
+      const store = this.providerAccounts;
+      if (!provider || !providerAccountId || !store) {
+        throw new Error(
+          `profile "${name}" route "${route.match}" needs a provider account but has none.`,
+        );
+      }
+      return {
+        kind: "key",
+        providerId,
+        provider,
+        ...(await this.keyAccount(name, route.match, store, providerId, providerAccountId, profile)),
+      };
+    }
+    // Base binding. Subscription profiles keep the whole-vault failover they
+    // always had; a bound account just goes first (mirrors `proxy use`).
+    if (profile.providerId === "claude-subscription") {
+      const bound = profile.subscriptionAccountId?.trim();
+      if (bound && !(await this.accounts.get(bound).catch(() => undefined))) {
+        throw new Error(`profile "${name}" points at deleted subscription account "${bound}".`);
+      }
+      const ids = await this.candidates();
+      return {
+        kind: "vault",
+        accountIds: bound ? [bound, ...ids.filter((id) => id !== bound)] : ids,
+      };
+    }
+    // Key-based base binding (OpenRouter, customs).
+    const providerAccountId = profile.providerAccountId?.trim();
+    const provider = this.providers.get(profile.providerId);
+    const store = this.providerAccounts;
+    if (!providerAccountId || !store) {
+      throw new Error(`profile "${name}" has no ${profile.providerId} account bound.`);
+    }
+    if (!provider) {
+      throw new Error(`profile "${name}" points at unknown provider "${profile.providerId}".`);
+    }
+    return {
+      kind: "key",
+      providerId: profile.providerId,
+      provider,
+      ...(await this.keyAccount(name, null, store, profile.providerId, providerAccountId, profile)),
+    };
+  }
+
+  /**
+   * Load one stored key-account and merge it under the profile's inline
+   * providerConfig — the exact spread resolveProviderConfig uses, so launch
+   * and proxy can never disagree about which value wins.
+   */
+  private async keyAccount(
+    profileName: string,
+    routeMatch: string | null,
+    store: ProviderAccountRepository,
+    providerId: string,
+    providerAccountId: string,
+    profile: Profile,
+  ): Promise<{ accountLabel: string; mergedConfig: Record<string, string> }> {
+    const account = await store.get(providerId, providerAccountId).catch(() => undefined);
+    if (!account) {
+      const where = routeMatch ? ` route "${routeMatch}"` : "";
+      throw new Error(
+        `profile "${profileName}"${where} points at deleted ${providerId} account "${providerAccountId}".`,
+      );
+    }
+    return {
+      accountLabel: account.label,
+      mergedConfig: { ...account.config, ...profile.providerConfig },
+    };
+  }
+
+  /**
+   * Forward one request to a key-based provider: build the upstream env from
+   * the MERGED account config (the same pure buildEnv launch uses), translate
+   * the well-known ANTHROPIC_* vars into a request, and pipe the answer back
+   * through the shared pipe() — same backpressure, abort and capture behavior
+   * as the vault loop. Single attempt, no failover: mixing providers' errors
+   * inside one stream would corrupt it. The entry carries profile/route facts.
+   */
+  private async handleKeyBackend(
+    res: ServerResponse,
+    init: {
+      method: string;
+      forwardPath: string;
+      inHeaders: Headers;
+      state: { body: Buffer | undefined; reqBytes: number };
+      abort: AbortController;
+      providerId: string;
+      provider: ProviderPort;
+      accountLabel: string;
+      mergedConfig: Record<string, string>;
+      profileModel: string | undefined;
+      tracer: RequestTracer;
+    },
+  ): Promise<void> {
+    const {
+      method,
+      forwardPath,
+      inHeaders,
+      state,
+      abort,
+      providerId,
+      provider,
+      accountLabel,
+      mergedConfig,
+      profileModel,
+      tracer,
+    } = init;
+    const { trace, loggedRequest, traceAborted, captureCap } = tracer;
+    const keyId = `key:${providerId}:${accountLabel}`;
+    const attempts: ProxyTrafficAttempt[] = [];
+    const env = provider.buildEnv(
+      mergedConfig,
+      profileModel !== undefined ? { model: profileModel } : {},
+    );
+    const credential = env["ANTHROPIC_AUTH_TOKEN"] ?? env["ANTHROPIC_API_KEY"] ?? "";
+    if (!credential.trim()) {
+      const error = `${providerId} account "${accountLabel}" has no credential to forward with.`;
+      sendJson(res, 500, { error });
+      trace({
+        status: 500,
+        accountId: keyId,
+        resBytes: 0,
+        attempts,
+        error,
+        ...loggedRequest(),
+      });
+      return;
+    }
+    // Mirror Claude Code's own semantics: ANTHROPIC_BASE_URL chooses the
+    // upstream, AUTH_TOKEN rides Bearer, API_KEY rides x-api-key. Custom
+    // providers work automatically — they speak through the same vars. The
+    // request body (possibly rewritten to the route's upstreamModel) is what
+    // upstream reads; ANTHROPIC_MODEL never leaves the proxy.
+    const base = (env["ANTHROPIC_BASE_URL"] ?? "").trim() || "https://api.anthropic.com";
+    const out = new Headers(inHeaders);
+    if (env["ANTHROPIC_AUTH_TOKEN"]) out.set("Authorization", `Bearer ${env["ANTHROPIC_AUTH_TOKEN"]}`);
+    else if (env["ANTHROPIC_API_KEY"]) out.set("x-api-key", env["ANTHROPIC_API_KEY"]);
+    let upstream: Response;
+    try {
+      upstream = await this.forwardTo(
+        `${base.replace(/\/$/, "")}${forwardPath}`,
+        method,
+        out,
+        state.body,
+        abort.signal,
+      );
+    } catch (err) {
+      if ((err as Error).name === "AbortError" || abort.signal.aborted) {
+        traceAborted(keyId, 0);
+        if (!res.writableFinished) res.end();
+        return;
+      }
+      const error = `key backend ${providerId} unreachable: ${(err as Error).message}`.slice(0, 500);
+      sendJson(res, 502, { error });
+      trace({
+        status: 502,
+        accountId: keyId,
+        resBytes: 0,
+        attempts,
+        error,
+        ...loggedRequest(),
+      });
+      return;
+    }
+    attempts.push({ accountId: keyId, status: upstream.status });
+    // Hop-by-hop and upstream auth headers never pass through; only GETs are
+    // cached and only when the body survives the proxy's own cap.
+    const piped = await this.pipe(
+      upstream,
+      res,
+      captureCap > 0 ? this.capture(captureCap) : undefined,
+      abort.signal,
+    );
+    if (piped.error === "client aborted") return traceAborted(keyId, piped.bytes);
+    trace({
+      // A broken stream is a gateway failure even though 200 headers went out
+      // before the break — same rule as the vault loop.
+      status: piped.error ? 502 : upstream.status,
+      accountId: keyId,
+      resBytes: piped.bytes,
+      attempts,
+      ...(piped.error ? { error: piped.error } : {}),
+      ...(piped.text !== undefined ? { resBody: piped.text, resBodyTruncated: piped.truncated } : {}),
+      ...loggedRequest(),
+    });
   }
 
   /**
@@ -513,16 +851,13 @@ export class SubscriptionProxy {
       .credential;
   }
 
-  private async forward(
+  private async forwardTo(
+    url: string,
     method: string,
-    path: string,
     headers: Headers,
     body: Buffer | undefined,
-    token: string,
     signal: AbortSignal,
   ): Promise<Response> {
-    headers.set("authorization", `Bearer ${token}`);
-    headers.set("host", new URL(this.upstream).host);
     // The timeout covers the response HEADERS only: an SSE answer legitimately
     // streams for minutes, so the timer is cleared as soon as fetch resolves
     // while the client-abort signal keeps governing the body.
@@ -533,7 +868,7 @@ export class SubscriptionProxy {
     try {
       // Buffer is a valid undici body; the DOM lib types disagree (ArrayBufferLike
       // generics), so the single cast stays at this call site.
-      return await this.fetchFn(`${this.upstream}${path}`, {
+      return await this.fetchFn(url, {
         method,
         headers,
         body: body as unknown as BodyInit | undefined,
@@ -549,12 +884,115 @@ export class SubscriptionProxy {
     }
   }
 
+  /** Vault flow: sign with a subscription bearer against the default upstream. */
+  private async forward(
+    method: string,
+    path: string,
+    headers: Headers,
+    body: Buffer | undefined,
+    token: string,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    headers.set("authorization", `Bearer ${token}`);
+    headers.set("host", new URL(this.upstream).host);
+    return this.forwardTo(`${this.upstream}${path}`, method, headers, body, signal);
+  }
+
+  /**
+   * Build the per-request tracer plus its request-scoped helpers. `state` is
+   * read live so an upstreamModel rewrite before forwarding is what the entry
+   * records; `extra` carries the routing facts (route/rewrite/notes) onto
+   * every entry, including the error paths, without touching each call site.
+   */
+  private makeTracer(init: {
+    started: number;
+    method: string;
+    cleanPath: string;
+    state: { body: Buffer | undefined; reqBytes: number };
+    profileName: string | undefined;
+    extra: RequestTraceExtra;
+    attempts: ProxyTrafficAttempt[];
+  }): RequestTracer {
+    const { started, method, cleanPath, state, profileName, extra, attempts } = init;
+    const trace = (entry: TraceInput) => {
+      const parser = this.trafficParsers.find((p) => p.canParse({ method, path: cleanPath }));
+      const full: ProxyTrafficEntry = {
+        id: `t${started.toString(36)}-${(this.trafficSeq += 1).toString(36)}`,
+        ts: new Date(started).toISOString(),
+        method,
+        path: cleanPath,
+        ms: Date.now() - started,
+        reqBytes: state.reqBytes,
+        ...(profileName !== undefined ? { profile: profileName } : {}),
+        ...(extra.route !== undefined ? { route: extra.route } : {}),
+        ...(extra.upstreamModel !== undefined ? { upstreamModel: extra.upstreamModel } : {}),
+        ...(extra.note !== undefined ? { note: extra.note } : {}),
+        ...(parser ? { providerId: parser.providerId } : {}),
+        ...entry,
+      };
+      // Parse request facts from the FULL body before views truncate it —
+      // large Claude requests would otherwise be unparseable from the head.
+      // The owning provider reads its own format; the proxy never parses.
+      if (parser && state.body && state.body.length <= MAX_STRUCTURED_PARSE_BYTES) {
+        try {
+          const facts = parser.parseRequestBody(state.body.toString("utf8"), state.reqBytes);
+          if (facts) full.request = facts;
+        } catch {
+          // Malformed bodies still trace; the raw head (if kept) tells the story.
+        }
+      }
+      if (this.trafficBufferSize > 0) {
+        this.traffic.push(withBodyCap(full, this.trafficBodyBytes));
+        while (this.traffic.length > this.trafficBufferSize) this.traffic.shift();
+      }
+      if (this.onTraffic) {
+        this.onTraffic(this.logBodies ? withBodyCap(full, this.maxLoggedBodyBytes) : stripBodies(full));
+      }
+      if (this.trafficStore) {
+        // The store only ever sees the bodiless variant; reporting must never
+        // fail (or slow) a proxied request, so this is strictly fire-and-forget
+        // with the failure on stderr (same contract as the JSONL writer).
+        const store = this.trafficStore;
+        const stored = toStoredExchange(stripBodies(full), this.trafficParsers);
+        void store
+          .append(stored)
+          .catch((err: Error) => console.error(`traffic store write failed: ${err.message}`));
+      }
+    };
+    // Largest capture either consumer needs; views are truncated in trace().
+    const captureCap = Math.max(
+      this.logBodies ? this.maxLoggedBodyBytes : 0,
+      this.trafficBufferSize > 0 ? this.trafficBodyBytes : 0,
+    );
+    const loggedRequest = () =>
+      state.body && captureCap > 0 ? this.loggedBody(state.body, captureCap) : {};
+    // 499 (client closed request) so an abandoned stream can never be read
+    // back as a completed 200.
+    const traceAborted = (accountId: string | null, resBytes: number) =>
+      trace({ status: 499, accountId, resBytes, attempts, error: "client aborted", ...loggedRequest() });
+    return { trace, loggedRequest, traceAborted, captureCap };
+  }
+
   private async handleApi(req: IncomingMessage, res: ServerResponse, body: Buffer | undefined): Promise<void> {
     const started = Date.now();
-    // Profile tag rides in the client credential, which we strip below —
-    // read it first so the entry can be attributed to the launching profile.
-    const profile =
+    const method = req.method ?? "GET";
+    const path = req.url ?? "/";
+    const cleanPath = path.split("?")[0] ?? "/";
+    // Identity: the `/p/<name>` path prefix wins, the header tag
+    // (`swisscode-profile/<name>`) is the fallback. The tag rides in the
+    // client credential, which is stripped below — read it first.
+    const headerProfile =
       parseProfileTag(req.headers["authorization"]) ?? parseProfileTag(req.headers["x-api-key"]);
+    const pathIdentity = parseProfilePath(cleanPath);
+    const profileName = pathIdentity?.name ?? headerProfile;
+    const extra: RequestTraceExtra = {};
+    if (pathIdentity && headerProfile && pathIdentity.name !== headerProfile) {
+      extra.note = `path profile "${pathIdentity.name}" differs from header tag "${headerProfile}"; path wins`;
+    }
+    // The forwarded target sheds the identity prefix (the query string rides
+    // along — the request-target is already validated normalized origin-form).
+    const forwardPath = pathIdentity ? `${pathIdentity.rest}${path.slice(cleanPath.length)}` : path;
+    const forwardClean = pathIdentity ? pathIdentity.rest : cleanPath;
     // Esc in Claude Code closes the socket. Without propagating that upstream
     // the model keeps generating — and billing — for an answer nobody reads.
     const abort = new AbortController();
@@ -571,62 +1009,99 @@ export class SubscriptionProxy {
       // otherwise take precedence upstream and 401 a request our own
       // Bearer would have served (burning a rotation on the retry).
       if (lower === "authorization" || lower === "x-api-key") continue;
-      inHeaders.set(key, Array.isArray(value) ? value.join(", ") : value);
+      inHeaders.set(key, Array.isArray(value) ? value.join(",") : value);
     }
-    const path = req.url ?? "/";
-    const cleanPath = path.split("?")[0] ?? "/";
-    const reqBytes = body?.length ?? 0;
+    // Mutable: an upstreamModel rewrite replaces the body before forwarding,
+    // and the tracer reads this cell live so entries describe what upstream saw.
+    const state = { body, reqBytes: body?.length ?? 0 };
     const attempts: ProxyTrafficAttempt[] = [];
-    const trace = (entry: Omit<ProxyTrafficEntry, "id" | "ts" | "method" | "path" | "ms" | "reqBytes" | "profile" | "request" | "providerId">) => {
-      const method = req.method ?? "GET";
-      const parser = this.trafficParsers.find((p) => p.canParse({ method, path: cleanPath }));
-      const full: ProxyTrafficEntry = {
-        id: `t${started.toString(36)}-${(this.trafficSeq += 1).toString(36)}`,
-        ts: new Date(started).toISOString(),
-        method,
-        path: cleanPath,
-        ms: Date.now() - started,
-        reqBytes,
-        ...(profile !== undefined ? { profile } : {}),
-        ...(parser ? { providerId: parser.providerId } : {}),
-        ...entry,
-      };
-      // Parse request facts from the FULL body before views truncate it —
-      // large Claude requests would otherwise be unparseable from the head.
-      // The owning provider reads its own format; the proxy never parses.
-      if (parser && body && body.length <= MAX_STRUCTURED_PARSE_BYTES) {
-        try {
-          const facts = parser.parseRequestBody(body.toString("utf8"), reqBytes);
-          if (facts) full.request = facts;
-        } catch {
-          // Malformed bodies still trace; the raw head (if kept) tells the story.
+    const { trace, loggedRequest, traceAborted, captureCap } = this.makeTracer({
+      started,
+      method,
+      cleanPath: forwardClean,
+      state,
+      profileName,
+      extra,
+      attempts,
+    });
+    // Per-request profile resolution: the store is re-read on EVERY request,
+    // so edits (routes, accounts, rewrites) apply to the very next request of
+    // an already-running session — no proxy restart, no cache invalidation.
+    // In-memory 429/529 cooldowns intentionally survive edits (they describe
+    // upstream state, not config).
+    let profile: Profile | undefined;
+    if (profileName !== undefined) {
+      if (!this.profiles) {
+        const error = `proxy has no profile store: cannot route profile "${profileName}"`;
+        sendJson(res, 503, { error });
+        trace({ status: 503, accountId: null, resBytes: 0, attempts, error });
+        return;
+      }
+      profile = await this.profiles.get(profileName).catch(() => undefined);
+      if (!profile) {
+        // A rename orphans running sessions (they hold the old slug) — name
+        // the profile so relaunching under the new name is the obvious fix.
+        // Never a proxy crash: the next request re-resolves from scratch.
+        const error = `unknown profile "${profileName}"`;
+        sendJson(res, 404, { error });
+        trace({ status: 404, accountId: null, resBytes: 0, attempts, error });
+        return;
+      }
+    }
+    // Route resolution: the request model picks at most one route; anything
+    // unparseable falls back to the base provider (existing behavior).
+    let route: ModelRoute | undefined;
+    if (profile) {
+      const requestModel = extractRequestModel(method, forwardPath, parseJsonBody(state.body));
+      route = requestModel !== undefined ? selectModelRoute(profile, requestModel) : undefined;
+      if (route) extra.route = route.match;
+      if (route?.upstreamModel !== undefined && state.body) {
+        const parsed = parseJsonBody(state.body);
+        if (isRecord(parsed)) {
+          state.body = Buffer.from(JSON.stringify({ ...parsed, model: route.upstreamModel }));
+          state.reqBytes = state.body.length;
+          extra.upstreamModel = route.upstreamModel;
         }
       }
-      if (this.trafficBufferSize > 0) {
-        this.traffic.push(withBodyCap(full, this.trafficBodyBytes));
-        while (this.traffic.length > this.trafficBufferSize) this.traffic.shift();
+    }
+    let ids: string[];
+    if (profile) {
+      // Config problems (unknown account/provider) fail closed per request
+      // with a sentence naming the cause — never a silent wrong upstream.
+      try {
+        const backend = await this.resolveBackend(profile, route);
+        if (backend.kind === "key") {
+          await this.handleKeyBackend(res, {
+            method,
+            forwardPath,
+            inHeaders,
+            state,
+            abort,
+            providerId: backend.providerId,
+            provider: backend.provider,
+            accountLabel: backend.accountLabel,
+            mergedConfig: backend.mergedConfig,
+            profileModel: profile.model?.trim() || undefined,
+            tracer: { trace, loggedRequest, traceAborted, captureCap },
+          });
+          return;
+        }
+        ids = backend.accountIds;
+      } catch (err) {
+        const error = (err as Error).message;
+        sendJson(res, 500, { error });
+        trace({ status: 500, accountId: null, resBytes: 0, attempts, error: error.slice(0, 500) });
+        return;
       }
-      if (this.onTraffic) {
-        this.onTraffic(this.logBodies ? withBodyCap(full, this.maxLoggedBodyBytes) : stripBodies(full));
-      }
-    };
-    // Largest capture either consumer needs; views are truncated in trace().
-    const captureCap = Math.max(
-      this.logBodies ? this.maxLoggedBodyBytes : 0,
-      this.trafficBufferSize > 0 ? this.trafficBodyBytes : 0,
-    );
-    const ids = await this.candidates();
+    } else {
+      ids = await this.candidates();
+    }
     if (ids.length === 0) {
       res.writeHead(503, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "no subscription accounts stored" }));
       trace({ status: 503, accountId: null, resBytes: 0, attempts, error: "no subscription accounts stored" });
       return;
     }
-    const loggedRequest = () => (body && captureCap > 0 ? this.loggedBody(body, captureCap) : {});
-    // 499 (client closed request) so an abandoned stream can never be read
-    // back as a completed 200.
-    const traceAborted = (accountId: string | null, resBytes: number) =>
-      trace({ status: 499, accountId, resBytes, attempts, error: "client aborted", ...loggedRequest() });
     let lastStatus = 502;
     let lastBody = "all accounts exhausted or need re-login";
     for (const accountId of ids) {
@@ -640,7 +1115,7 @@ export class SubscriptionProxy {
       }
       let upstream: Response;
       try {
-        upstream = await this.forward(req.method ?? "GET", path, new Headers(inHeaders), body, token, abort.signal);
+        upstream = await this.forward(req.method ?? "GET", forwardPath, new Headers(inHeaders), state.body, token, abort.signal);
       } catch (err) {
         if (abort.signal.aborted) return traceAborted(accountId, 0);
         lastBody = (err as Error).message;
@@ -659,7 +1134,7 @@ export class SubscriptionProxy {
           continue;
         }
         try {
-          upstream = await this.forward(req.method ?? "GET", path, new Headers(inHeaders), body, recovered, abort.signal);
+          upstream = await this.forward(req.method ?? "GET", forwardPath, new Headers(inHeaders), state.body, recovered, abort.signal);
         } catch (err) {
           // Unguarded, this rejection escaped handleApi as a raw 500 with no
           // traffic entry at all — the one failure mode with no record.

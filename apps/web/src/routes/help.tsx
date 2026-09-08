@@ -75,7 +75,9 @@ function HelpPage() {
             items={[
               <>Start the UI (this page) and open <Code>/accounts</Code>.</>,
               <>Import your Claude login, or add an OpenRouter account with an API key.</>,
-              <>Create a profile on <Code>/profiles</Code> pairing an agent with a provider.</>,
+              <>Create a profile on <Code>/profiles</Code> pairing an agent with a provider —
+                or start from a preset (<Code>swisscode init</Code>, or “Start from…” on{" "}
+                <Code>/profiles/new</Code>).</>,
               <>
                 Launch it: <Code>swisscode {"<profileName>"}</Code>. Preview first
                 with <Code>swisscode show {"<profileName>"}</Code>.
@@ -115,6 +117,98 @@ function HelpPage() {
               typing, click headers to sort by price, context, or release date. Opening{" "}
               <Code>Serving providers</Code> compares who serves the model and at what
               price — informational only, launches can&apos;t pin a provider.
+            </Disclosure>
+            <Disclosure summary="Routed profiles (model routes)">
+              <Stack>
+                <p>
+                  A profile can send different models to different backends inside
+                  one session. Matching is exact on the requested model id and{" "}
+                  <strong>first row wins</strong> — put specific models above
+                  general ones.
+                </p>
+                <p>
+                  Each row picks a destination (a vault subscription account or a
+                  key account) and optionally an <Code>upstreamModel</Code>{" "}
+                  rewrite. The sentence under the row says what happens:{" "}
+                  <Muted>
+                    “Requests for `opus` → Work vault account, sent as
+                    `anthropic/claude-opus-4`”.
+                  </Muted>{" "}
+                  Models with no row use the profile&apos;s default route.
+                </p>
+                <p>
+                  Routes need the proxy: saving <Code>direct: true</Code> with
+                  routes is an error, and launching a routed profile while{" "}
+                  <Code>swisscode proxy run</Code> is down fails closed instead of
+                  billing the wrong upstream. Preview the sentences with{" "}
+                  <Code>swisscode show {"<profile>"}</Code> or the form&apos;s
+                  Preview button.
+                </p>
+              </Stack>
+            </Disclosure>
+            <Disclosure summary="Spend estimates and route suggestions">
+              <Stack>
+                <p>
+                  <Code>swisscode proxy report</Code>,{" "}
+                  <Code>swisscode show {"<profile>"}</Code>, and the stored
+                  history on <Code>/proxy</Code> estimate spend from a static
+                  per-model price table, with read-only suggestions next to
+                  the figures (“Opus burned $X”, “this route saw no traffic”).
+                  Estimated spend, not a bill — subscriptions don&apos;t meter
+                  per token, and unpriceable usage is counted, never hidden.
+                </p>
+              </Stack>
+            </Disclosure>
+            <Disclosure summary="Profile session knobs (cheat-sheet)">
+              <Stack>
+                <p>
+                  <Muted>
+                    Everything here is optional and emits flags plus an ephemeral{" "}
+                    <Code>--settings</Code> file — your own settings files are
+                    never rewritten. Precedence: Extra agent args win over the
+                    curated fields, which win over Advanced JSON on conflict.
+                  </Muted>
+                </p>
+                <p>
+                  <strong>Model & reasoning</strong> — effort trades speed and
+                  cost for depth (<Code>low</Code> fastest … <Code>max</Code>{" "}
+                  deepest); fallback models are a settings-level chain that
+                  applies generally.
+                </p>
+                <p>
+                  <strong>Permissions</strong> — <Code>plan</Code> proposes first
+                  and runs after approval; <Code>acceptEdits</Code> runs edits
+                  and asks for the rest; <Code>auto</Code> accepts safe tools;{" "}
+                  <Code>manual</Code> asks every time; <Code>dontAsk</Code>{" "}
+                  denies silently; <Code>bypassPermissions</Code> skips checks
+                  (sandbox only).
+                </p>
+                <p>
+                  <strong>System prompt</strong> — replacing it disables
+                  per-conversation recording optimizations; prefer Append.
+                  A prompt preset (reviewer/planner/explainer) copies a starter
+                  snippet into Append — the text launches, the preset is only
+                  provenance, so editing afterwards keeps working. Settings{" "}
+                  <Code>env</Code> beats the shell environment inside
+                  Claude Code.
+                </p>
+                <p>
+                  <strong>Isolation</strong> — uncheck a setting source
+                  (user/project/local) to hide that layer from the profile.
+                  Managed (org-policy) settings still beat <Code>--settings</Code>{" "}
+                  — org policy wins, always.
+                </p>
+                <p>
+                  <strong>Settings env vs launch env</strong> — Advanced JSON{" "}
+                  <Code>{"{ \"env\": { \"FOO\": \"bar\" } }"}</Code> beats the
+                  shell environment <em>inside</em> Claude Code and reaches its
+                  subprocesses; the provider env on the launch (keys, base URL)
+                  never enters that object. Both sides strip code-loading names
+                  (<Code>PATH</Code>, <Code>NODE_OPTIONS</Code>,{" "}
+                  <Code>LD_*</Code>/<Code>DYLD_*</Code>) — a stored profile can
+                  never smuggle those into the agent.
+                </p>
+              </Stack>
             </Disclosure>
             <Disclosure summary="“Re-login needed” / “key rejected”">
               Subscription credentials expire or get revoked: log in again with Claude
