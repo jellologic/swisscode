@@ -11,6 +11,7 @@ export type {
   ProviderRegistry,
   ProviderUsageReader,
 } from "./ports.js";
+export { RESERVED_PROFILE_NAMES } from "./service.js";
 export {
   ProfileError,
   resolveLaunchSpec,

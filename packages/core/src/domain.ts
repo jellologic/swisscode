@@ -34,7 +34,10 @@ export interface PluginHelp {
 
 /** A profile merges one coding agent with one AI provider. */
 export interface Profile {
-  /** Unique profile name — this is what `swisscode <profileName>` takes. */
+  /**
+   * Unique profile name — this is what `swisscode <profileName>` takes, so it
+   * may not be one of RESERVED_PROFILE_NAMES (the CLI would win the dispatch).
+   */
   name: string;
   /** Coding-agent plugin id, e.g. "claude-code". */
   agentId: string;
