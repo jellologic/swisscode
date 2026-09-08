@@ -1,35 +1,116 @@
 // Adapter: the one way to get a usable vault credential.
 //
-// Two hazards this closes, both invisible to individual callers:
+// Three hazards this closes, all invisible to individual callers:
 // - Refresh tokens are single-use. Claude Code opens several requests at
 //   startup, so the proxy can ask for the same expired account three times at
 //   once; three refreshes spend the token three times and two come back
-//   invalid_grant. The SingleFlight makes concurrent asks share one refresh.
+//   invalid_grant. The SingleFlight makes concurrent asks share one refresh
+//   inside this process, and the `<id>.lock` file does the same across
+//   processes (proxy + CLI + web UI all read one vault).
+// - A lineage SHARED with Claude Code. If the vault copy and Claude's own
+//   store hold the same refresh token, refreshing it and saving only to the
+//   vault logs Claude Code out. So: adopt Claude's still-valid access token
+//   instead of refreshing, and when a refresh is unavoidable, mirror the
+//   result back into Claude's store. A lineage that differs is somebody
+//   else's — never written to.
 // - When the stored lineage really is dead, Claude Code may already hold the
-//   rotated one; liveResyncHook adopts it instead of demanding a re-login.
+//   rotated one; liveResyncHook adopts it (with its own identity guards)
+//   instead of demanding a re-login.
 //
 // Keyed by accountId only: the vault is a per-user singleton, so one process
 // never talks to two vaults with the same account id.
 
-import { SingleFlight, ensureFreshCredential } from "@swisscode/core";
+import { SingleFlight, ensureFreshCredential, isCredentialExpired } from "@swisscode/core";
 import type {
   AccountRepository,
   ActiveCredentialStore,
   FreshCredential,
+  FreshCredentialOptions,
   OAuthClient,
+  OAuthCredential,
 } from "@swisscode/core";
+import { defaultSubscriptionsDir } from "./accountVault.js";
+import { withAccountLock } from "./accountLock.js";
 import { liveResyncHook } from "./liveResync.js";
+import type { EmailLookup } from "./liveResync.js";
 
 const inflight = new SingleFlight<FreshCredential>();
 
 export interface FreshVaultCredentialOptions {
-  /** Claude Code's own store, used only to adopt a rotated lineage. */
+  /** Claude Code's own store: shared-lineage detection and rotated adoption. */
   liveStore?: ActiveCredentialStore;
+  /** Where `<id>.lock` lives. Defaults to the vault directory. */
+  lockDir?: string;
+  /** Profile client used to verify identity before adopting a live login. */
+  profile?: EmailLookup;
+  /** Non-fatal problems, e.g. the mirror back into Claude's store failed. */
+  onWarning?: (message: string) => void;
+}
+
+/**
+ * The live credential when it is the SAME lineage as `stored`, else undefined.
+ * Same refresh token = one rotation chain with two owners.
+ */
+async function sharedLiveCredential(
+  liveStore: ActiveCredentialStore | undefined,
+  stored: OAuthCredential,
+): Promise<OAuthCredential | undefined> {
+  if (!liveStore || !stored.refreshToken) return undefined;
+  const active = await liveStore.readActive().catch(() => undefined);
+  const live = active?.credential;
+  if (!live?.refreshToken) return undefined;
+  return live.refreshToken === stored.refreshToken ? live : undefined;
+}
+
+async function resolveExpired(
+  accounts: AccountRepository,
+  oauth: OAuthClient,
+  accountId: string,
+  opts: FreshVaultCredentialOptions,
+): Promise<FreshCredential> {
+  // Re-read under the lock: another process may have refreshed while we waited.
+  const stored = await accounts.loadCredential(accountId);
+  if (stored && !isCredentialExpired(stored)) return { credential: stored, refreshed: false };
+
+  const shared = stored ? await sharedLiveCredential(opts.liveStore, stored) : undefined;
+  if (shared && !isCredentialExpired(shared)) {
+    // Claude Code already refreshed this lineage (or never let it expire).
+    // Adopting its access token costs no rotation at all.
+    await accounts.saveCredential(accountId, shared);
+    return { credential: shared, refreshed: false };
+  }
+
+  const options: FreshCredentialOptions = {};
+  const hook = liveResyncHook({
+    accounts,
+    oauth,
+    ...(opts.liveStore ? { live: opts.liveStore } : {}),
+    ...(opts.profile ? { profile: opts.profile } : {}),
+  });
+  if (hook) options.onInvalidGrant = hook;
+  const live = opts.liveStore;
+  if (shared && live) {
+    options.onRefreshed = async (credential) => {
+      // Our refresh just killed the token Claude Code holds. Hand it the new
+      // one via read-merge-write, or the user's next `claude` run is logged out.
+      try {
+        await live.writeActive(credential);
+      } catch (err) {
+        // The vault already has the working credential, so failing the caller
+        // here would break a request without un-rotating anything.
+        opts.onWarning?.(
+          `Refreshed the login shared with Claude Code but could not write it back ` +
+            `(${(err as Error).message}). Run \`claude login\` if Claude Code stops working.`,
+        );
+      }
+    };
+  }
+  return ensureFreshCredential(accounts, oauth, accountId, options);
 }
 
 /**
  * Return a usable credential for `accountId`, refreshing and persisting when
- * expired. Concurrent calls for the same account share one refresh.
+ * expired. Concurrent callers — in this process or another — share one refresh.
  */
 export async function freshVaultCredential(
   accounts: AccountRepository,
@@ -37,9 +118,15 @@ export async function freshVaultCredential(
   accountId: string,
   opts: FreshVaultCredentialOptions = {},
 ): Promise<FreshCredential> {
-  return inflight.run(accountId, () =>
-    ensureFreshCredential(accounts, oauth, accountId, {
-      onInvalidGrant: liveResyncHook({ accounts, oauth, live: opts.liveStore }),
-    }),
-  );
+  return inflight.run(accountId, async () => {
+    // Fast path: a valid credential needs neither the lock file nor a Keychain
+    // read, and this runs on every proxied request.
+    const stored = await accounts.loadCredential(accountId);
+    if (stored && !isCredentialExpired(stored)) return { credential: stored, refreshed: false };
+    const dir = opts.lockDir ?? defaultSubscriptionsDir();
+    const run = await withAccountLock(dir, accountId, () =>
+      resolveExpired(accounts, oauth, accountId, opts),
+    );
+    return run.value;
+  });
 }

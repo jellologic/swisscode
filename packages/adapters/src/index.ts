@@ -45,16 +45,17 @@ export { credentialIdentity, findAccountByCredential } from "./subscriptions/ide
 export { liveResyncHook, resyncSubscriptionCredential } from "./subscriptions/liveResync.js";
 export { freshVaultCredential } from "./subscriptions/freshCredential.js";
 export type { FreshVaultCredentialOptions } from "./subscriptions/freshCredential.js";
-export type { LiveResyncDeps } from "./subscriptions/liveResync.js";
-export { CachingUsageClient, FileUsageCache, defaultUsageCachePath } from "./subscriptions/usageCache.js";
+export type { EmailLookup, LiveResyncDeps } from "./subscriptions/liveResync.js";
+export { CachingUsageClient, FileUsageCache, defaultUsageCachePath, vaultIdentityResolver } from "./subscriptions/usageCache.js";
 export type { CachingUsageOptions, UsageCacheEntry } from "./subscriptions/usageCache.js";
 export { UsageError } from "./subscriptions/anthropic.js";
 export { FileAccountRepository, defaultSubscriptionsDir } from "./subscriptions/accountVault.js";
+export type { AccountVaultOptions, VaultWarning } from "./subscriptions/accountVault.js";
 export {
   ClaudeActiveCredentialStore,
   CLAUDE_KEYCHAIN_SERVICE,
 } from "./subscriptions/activeStore.js";
-export type { ActiveStoreOptions } from "./subscriptions/activeStore.js";
+export type { ActiveCredentialDetail, ActiveStoreOptions, ExecFn, KeychainReadState } from "./subscriptions/activeStore.js";
 export {
   AnthropicOAuthClient,
   AnthropicUsageClient,

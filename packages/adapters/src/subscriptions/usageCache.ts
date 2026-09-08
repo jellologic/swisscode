@@ -3,11 +3,21 @@
 // account guarantees hammering. This keeps the last successful snapshot per
 // account, serves it labeled stale on failure, and honors Retry-After so a
 // rate-limited account isn't re-polled in a tight loop.
+//
+// Two properties the file itself has to guarantee:
+// - One shared JSON file is read-modify-written by the proxy, the CLI and the
+//   web UI at once. Writes go through writeJsonAtomic (no torn file), and the
+//   read-modify-write is serialized per instance so a concurrent `set` cannot
+//   drop the other account's entry it never saw.
+// - Entries are keyed by account id AND credential identity. Deleting an
+//   account and re-importing a DIFFERENT login under the same id would
+//   otherwise show the previous login's utilization as if it were live.
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { AccountUsage, UsageClient } from "@swisscode/core";
+import type { AccountRepository, AccountUsage, UsageClient } from "@swisscode/core";
+import { readJsonFile, writeJsonAtomic } from "../store/atomicJson.js";
+import { credentialIdentity } from "./identity.js";
 import { UsageError } from "./anthropic.js";
 
 export interface UsageCacheEntry {
@@ -24,34 +34,60 @@ export function defaultUsageCachePath(): string {
   return join(base, "usage-cache.json");
 }
 
+/** Cache key: same id + different login must not share a snapshot. */
+export function usageCacheKey(accountId: string, identity?: string): string {
+  return identity ? `${accountId}#${identity}` : accountId;
+}
+
+/** Identity resolver over the vault, for {@link CachingUsageOptions}. */
+export function vaultIdentityResolver(
+  accounts: AccountRepository,
+): (accountId: string) => Promise<string | undefined> {
+  return async (accountId: string) => {
+    const credential = await accounts.loadCredential(accountId).catch(() => undefined);
+    return credential ? credentialIdentity(credential) : undefined;
+  };
+}
+
 export class FileUsageCache {
+  /** Serializes read-modify-write so concurrent sets cannot lose each other. */
+  private writes: Promise<unknown> = Promise.resolve();
+
   constructor(private readonly path: string = defaultUsageCachePath()) {}
 
   private async readAll(): Promise<Record<string, UsageCacheEntry>> {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(this.path, "utf8"));
-      if (parsed && typeof parsed === "object") return parsed as Record<string, UsageCacheEntry>;
-      return {};
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return {};
-      throw err;
-    }
+    const read = await readJsonFile<unknown>(this.path);
+    // A cache is regenerable: a corrupt file is worth nothing but must never
+    // take down usage display, so it is simply overwritten on the next set.
+    if (!read.ok) return {};
+    const value = read.value;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return value as Record<string, UsageCacheEntry>;
   }
 
-  async get(accountId: string): Promise<UsageCacheEntry | undefined> {
-    return (await this.readAll())[accountId];
+  async get(key: string): Promise<UsageCacheEntry | undefined> {
+    return (await this.readAll())[key];
   }
 
-  async set(accountId: string, entry: UsageCacheEntry): Promise<void> {
-    const all = await this.readAll();
-    all[accountId] = entry;
-    await mkdir(join(this.path, ".."), { recursive: true });
-    await writeFile(this.path, JSON.stringify(all, null, 2), "utf8");
+  async set(key: string, entry: UsageCacheEntry): Promise<void> {
+    const run = this.writes.then(async () => {
+      const all = await this.readAll();
+      all[key] = entry;
+      await writeJsonAtomic(this.path, all);
+    });
+    // Keep the chain alive after a failed write; the next set retries the read.
+    this.writes = run.catch(() => undefined);
+    return run;
   }
 }
 
 export interface CachingUsageOptions {
   now?: () => number;
+  /**
+   * Stable identity of the account's current credential (see
+   * {@link vaultIdentityResolver}). Without it entries key on the id alone.
+   */
+  accountIdentity?: (accountId: string) => Promise<string | undefined>;
 }
 
 /**
@@ -70,8 +106,17 @@ export class CachingUsageClient implements UsageClient {
     return this.options.now?.() ?? Date.now();
   }
 
+  private async key(accountId: string): Promise<string> {
+    if (!this.options.accountIdentity) return usageCacheKey(accountId);
+    // An identity we cannot resolve degrades to the id-only key rather than
+    // failing a usage read.
+    const identity = await this.options.accountIdentity(accountId).catch(() => undefined);
+    return usageCacheKey(accountId, identity);
+  }
+
   async fetchUsage(accountId: string, accessToken: string): Promise<AccountUsage> {
-    const cached = await this.cache.get(accountId);
+    const key = await this.key(accountId);
+    const cached = await this.cache.get(key);
     if (cached?.notBeforeMs !== undefined && cached.notBeforeMs > this.now()) {
       if (cached.snapshot) return { ...cached.snapshot, stale: true };
       throw new UsageError("Usage endpoint is rate-limited; retry in a few minutes.", 429);
@@ -79,7 +124,7 @@ export class CachingUsageClient implements UsageClient {
     try {
       const fresh = await this.inner.fetchUsage(accountId, accessToken);
       const snapshot = { ...fresh, stale: false };
-      await this.cache.set(accountId, { snapshot });
+      await this.cache.set(key, { snapshot });
       return snapshot;
     } catch (err) {
       if (err instanceof UsageError && (err.status === 401 || err.status === 403)) throw err;
@@ -88,14 +133,14 @@ export class CachingUsageClient implements UsageClient {
           ? err.retryAfterMs
           : DEFAULT_429_BACKOFF_MS;
       if (cached?.snapshot) {
-        await this.cache.set(accountId, {
+        await this.cache.set(key, {
           snapshot: cached.snapshot,
           notBeforeMs: this.now() + backoff,
         });
         return { ...cached.snapshot, stale: true };
       }
       // Nothing to serve: record the cooldown so we stop hammering anyway.
-      await this.cache.set(accountId, { notBeforeMs: this.now() + backoff });
+      await this.cache.set(key, { notBeforeMs: this.now() + backoff });
       throw err;
     }
   }

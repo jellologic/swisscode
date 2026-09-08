@@ -114,13 +114,27 @@ export class UsageError extends Error {
   }
 }
 
+/**
+ * Ceiling for a server-sent Retry-After. The header feeds a cooldown that
+ * suppresses every later usage fetch, so an hour (or a bogus 86400) would look
+ * exactly like "usage is permanently broken" to the user, with no way out but
+ * deleting the cache file. 15 minutes is long enough to stop a hammering loop
+ * and short enough that a wrong value self-heals.
+ */
+export const MAX_RETRY_AFTER_MS = 15 * 60 * 1000;
+
+function clampRetryAfter(ms: number): number {
+  if (!Number.isFinite(ms)) return MAX_RETRY_AFTER_MS;
+  return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, ms));
+}
+
 function retryAfterMs(res: Response): number | undefined {
   const raw = res.headers.get("retry-after");
   if (!raw) return undefined;
   const seconds = Number(raw);
-  if (Number.isFinite(seconds)) return seconds * 1000;
+  if (raw.trim() !== "" && Number.isFinite(seconds)) return clampRetryAfter(seconds * 1000);
   const date = Date.parse(raw);
-  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+  if (!Number.isNaN(date)) return clampRetryAfter(date - Date.now());
   return undefined;
 }
 

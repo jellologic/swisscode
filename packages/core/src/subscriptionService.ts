@@ -40,6 +40,15 @@ export interface FreshCredentialOptions {
    * function before it is returned.
    */
   onInvalidGrant?: (accountId: string) => Promise<OAuthCredential | undefined>;
+  /**
+   * Called after OUR refresh rotated the lineage and the vault already holds
+   * the result. Exists so a caller that knows the lineage is shared with
+   * another owner (Claude Code) can mirror the rotation back to it — the old
+   * refresh token is dead the moment the endpoint answers, so a shared owner
+   * that never sees the new one is logged out. Not called on the adopt path:
+   * there the credential came FROM the other owner, which already has it.
+   */
+  onRefreshed?: (credential: OAuthCredential) => Promise<void>;
 }
 
 /**
@@ -74,6 +83,9 @@ export async function ensureFreshCredential(
     }
     throw err;
   }
+  // Persist first: the rotation already happened server-side, so losing `next`
+  // to a failing mirror would strand the account on a dead refresh token.
   await accounts.saveCredential(accountId, next);
+  if (options.onRefreshed) await options.onRefreshed(next);
   return { credential: next, refreshed: true };
 }

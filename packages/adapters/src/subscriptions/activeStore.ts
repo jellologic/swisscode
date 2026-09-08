@@ -1,28 +1,66 @@
 // Adapter: Claude Code's OWN credential store (file or macOS Keychain).
-// Read path mirrors claude-swap's resolution: the `<configHome>/.credentials.json`
-// file first, then the default Keychain service. Write path preserves every
+// Read path mirrors claude-swap's resolution: the default Keychain service
+// first, then `<configHome>/.credentials.json`. Write path preserves every
 // key it didn't set (e.g. `mcpOAuth`) via read-merge-write.
+//
+// A Keychain read that FAILS is not the same as a Keychain that is empty:
+// if an item exists but `security` will not hand it over, writing only the
+// file leaves Claude Code authenticated as the previous account while
+// swisscode reports a successful switch. So the two cases are separate states
+// (`keychain: "not-found"` vs `"unreadable"`) and a write refuses on the
+// second one instead of half-switching.
 
 import { execFile } from "node:child_process";
-import { readFile, rename, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { promisify } from "node:util";
+import { join } from "node:path";
 import type {
   ActiveCredentialState,
   ActiveCredentialStore,
   OAuthCredential,
 } from "@swisscode/core";
+import { CredentialStoreError } from "@swisscode/core";
+import { readJsonFile, writeJsonAtomic } from "../store/atomicJson.js";
 
 const execFileAsync = promisify(execFile);
 
 export const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
+
+/** `security` exit code for "the item is not in the keychain" (errSecItemNotFound). */
+const SECURITY_ITEM_NOT_FOUND = 44;
+
+export interface ExecResult {
+  stdout: string;
+  stderr: string;
+}
+
+/** Injectable `security` runner; rejects with an Error carrying `code`. */
+export type ExecFn = (file: string, args: string[]) => Promise<ExecResult>;
+
+/**
+ * Outcome of looking at the Keychain:
+ * - ok: an item was read.
+ * - not-found: `security` says the item does not exist (exit 44).
+ * - unreadable: an item may well exist but access was denied or `security`
+ *   failed for another reason — the ambiguous case that must block writes.
+ * - unavailable: no `security` binary at all (non-macOS).
+ * - skipped: the caller disabled Keychain use.
+ */
+export type KeychainReadState = "ok" | "not-found" | "unreadable" | "unavailable" | "skipped";
+
+/** ActiveCredentialState plus why the Keychain leg produced what it did. */
+export interface ActiveCredentialDetail extends ActiveCredentialState {
+  keychain: KeychainReadState;
+  /** `security` diagnostic; only set when `keychain` is "unreadable". */
+  keychainError?: string;
+}
 
 export interface ActiveStoreOptions {
   /** Defaults to CLAUDE_CONFIG_DIR or ~/.claude. */
   configHome?: string;
   /** Set false in tests to avoid touching the real Keychain. */
   keychain?: boolean;
+  /** Override the `security` invocation (tests inject exit codes). */
+  execFn?: ExecFn;
 }
 
 function resolveConfigHome(explicit?: string): string {
@@ -63,95 +101,157 @@ function fromCredential(cred: OAuthCredential): Record<string, unknown> {
   };
 }
 
-async function readJsonFile(path: string): Promise<Record<string, unknown> | undefined> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-    return undefined;
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
-    throw err;
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
   }
+  return undefined;
 }
 
-async function readKeychainJson(service: string): Promise<Record<string, unknown> | undefined> {
-  try {
-    const { stdout } = await execFileAsync("security", [
-      "find-generic-password",
-      "-s",
-      service,
-      "-w",
-    ]);
-    const text = stdout.trim();
-    if (!text) return undefined;
-    const parsed: unknown = JSON.parse(text);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-    return undefined;
-  } catch {
-    return undefined; // missing item, denied access, or non-macOS: all mean "not here"
-  }
+/** Exit status of a failed `security` run, or undefined when it never ran. */
+function exitCode(err: unknown): number | undefined {
+  const code = (err as { code?: unknown })?.code;
+  if (typeof code === "number") return code;
+  if (typeof code === "string" && /^\d+$/.test(code)) return Number(code);
+  return undefined;
 }
 
-/**
- * The account name on the existing Keychain item (usually the macOS username).
- * Updates MUST reuse it: `-U` with any other `-a` silently creates a duplicate
- * item Claude Code never reads instead of replacing the credential.
- */
-async function keychainAccount(service: string): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFileAsync("security", [
-      "find-generic-password",
-      "-s",
-      service,
-    ]);
-    const match = /"acct"<blob>="([^"]*)"/.exec(stdout);
-    return match?.[1];
-  } catch {
-    return undefined;
-  }
+function spawnFailed(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  return code === "ENOENT" || code === "EACCES" || code === "EPERM";
 }
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+type KeychainRead =
+  | { state: "ok"; item: Record<string, unknown> }
+  | { state: "not-found" | "unavailable" }
+  | { state: "unreadable"; error: string };
 
 export class ClaudeActiveCredentialStore implements ActiveCredentialStore {
   private readonly configHome: string;
   private readonly useKeychain: boolean;
+  private readonly exec: ExecFn;
 
   constructor(options: ActiveStoreOptions = {}) {
     this.configHome = resolveConfigHome(options.configHome);
     this.useKeychain = options.keychain ?? true;
+    this.exec = options.execFn ?? ((file, args) => execFileAsync(file, args));
   }
 
   private credentialsPath(): string {
     return join(this.configHome, ".credentials.json");
   }
 
-  async readActive(): Promise<ActiveCredentialState> {
+  private async readKeychain(service: string): Promise<KeychainRead> {
+    let stdout: string;
+    try {
+      ({ stdout } = await this.exec("security", ["find-generic-password", "-s", service, "-w"]));
+    } catch (err: unknown) {
+      // No `security` binary (non-macOS) is "there is no Keychain here", not a
+      // permission problem — it must not block file-backed switching.
+      if (spawnFailed(err)) return { state: "unavailable" };
+      if (exitCode(err) === SECURITY_ITEM_NOT_FOUND) return { state: "not-found" };
+      // 36/51/128 and friends: denied, locked, or an unknown failure. We cannot
+      // prove the item is absent, so callers must treat it as present.
+      return { state: "unreadable", error: message(err) };
+    }
+    const text = stdout.trim();
+    if (!text) return { state: "not-found" };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err: unknown) {
+      return { state: "unreadable", error: `Keychain item is not JSON: ${message(err)}` };
+    }
+    const item = asObject(parsed);
+    // A non-object payload is an item we cannot merge into — refusing to write
+    // beats silently replacing whatever it is.
+    return item ? { state: "ok", item } : { state: "unreadable", error: "Keychain item is not an object" };
+  }
+
+  /**
+   * The account name on the existing Keychain item (usually the macOS username).
+   * Updates MUST reuse it: `-U` with any other `-a` silently creates a duplicate
+   * item Claude Code never reads instead of replacing the credential.
+   */
+  private async keychainAccount(service: string): Promise<string | undefined> {
+    try {
+      const { stdout } = await this.exec("security", ["find-generic-password", "-s", service]);
+      const match = /"acct"<blob>="([^"]*)"/.exec(stdout);
+      return match?.[1];
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** readActive with the Keychain diagnosis attached. */
+  async readActiveDetail(): Promise<ActiveCredentialDetail> {
     // Keychain first: on macOS a usable Keychain beats the file (verified live:
     // a fresh `claude` process authed with the Keychain credential while the
     // file held a different one). File is the fallback when Keychain is
     // unavailable or holds no OAuth payload.
+    let keychain: KeychainReadState = "skipped";
+    let keychainError: string | undefined;
     if (this.useKeychain) {
-      const item = await readKeychainJson(CLAUDE_KEYCHAIN_SERVICE);
-      const oauth = item?.["claudeAiOauth"];
-      if (oauth && typeof oauth === "object") {
-        const cred = toCredential(oauth as Record<string, unknown>);
-        if (cred) return { backend: "keychain", credential: cred, source: CLAUDE_KEYCHAIN_SERVICE };
+      const read = await this.readKeychain(CLAUDE_KEYCHAIN_SERVICE);
+      keychain = read.state;
+      if (read.state === "unreadable") keychainError = read.error;
+      if (read.state === "ok") {
+        const oauth = asObject(read.item["claudeAiOauth"]);
+        const cred = oauth ? toCredential(oauth) : undefined;
+        if (cred) {
+          return {
+            backend: "keychain",
+            credential: cred,
+            source: CLAUDE_KEYCHAIN_SERVICE,
+            keychain,
+          };
+        }
+        // Item exists but carries no OAuth payload: the file is the login.
+        keychain = "not-found";
       }
     }
-    const file = await readJsonFile(this.credentialsPath());
-    const fileOauth = file?.["claudeAiOauth"];
-    if (fileOauth && typeof fileOauth === "object") {
-      const cred = toCredential(fileOauth as Record<string, unknown>);
-      if (cred) return { backend: "file", credential: cred, source: this.credentialsPath() };
+    const file = await this.readCredentialsFile();
+    const fileOauth = asObject(file.value?.["claudeAiOauth"]);
+    const cred = fileOauth ? toCredential(fileOauth) : undefined;
+    // The file credential is still reported when the Keychain is unreadable:
+    // it is the best available answer for display. Writes consult `keychain`.
+    if (cred) {
+      return {
+        backend: "file",
+        credential: cred,
+        source: this.credentialsPath(),
+        keychain,
+        ...(keychainError !== undefined ? { keychainError } : {}),
+      };
     }
-    return { backend: "none" };
+    return {
+      backend: "none",
+      keychain,
+      ...(keychainError !== undefined ? { keychainError } : {}),
+    };
+  }
+
+  async readActive(): Promise<ActiveCredentialState> {
+    return this.readActiveDetail();
   }
 
   async writeActive(credential: OAuthCredential): Promise<void> {
-    const current = await this.readActive();
+    const current = await this.readActiveDetail();
+    if (current.keychain === "unreadable") {
+      // Writing the file here would report success while `claude` keeps
+      // reading the Keychain item we could not touch.
+      throw new CredentialStoreError(
+        "keychain-unreadable",
+        `The Keychain item "${CLAUDE_KEYCHAIN_SERVICE}" exists but could not be read ` +
+          `(${current.keychainError ?? "access denied"}). Approve Keychain access for this ` +
+          `terminal and retry — switching only the credentials file would leave Claude Code ` +
+          `on the previous account.`,
+      );
+    }
     if (current.backend === "keychain") {
       await this.writeKeychain(credential);
       // Mirror to the file too (what cswap does): keeps both backends in sync
@@ -168,47 +268,69 @@ export class ClaudeActiveCredentialStore implements ActiveCredentialStore {
     await this.writeFile(credential);
   }
 
+  private async readCredentialsFile(): Promise<{
+    value?: Record<string, unknown>;
+    corrupt: boolean;
+  }> {
+    const read = await readJsonFile<unknown>(this.credentialsPath());
+    if (!read.ok) return { corrupt: read.reason === "corrupt" };
+    const value = asObject(read.value);
+    return value ? { value, corrupt: false } : { corrupt: true };
+  }
+
   private async writeFile(credential: OAuthCredential): Promise<void> {
-    // Merge so unrelated keys (e.g. mcpOAuth) survive the swap.
-    // Atomic rename avoids half-writes.
+    // Merge so unrelated keys (e.g. mcpOAuth) survive the swap. writeJsonAtomic
+    // puts the temp file in the TARGET directory with an unpredictable name and
+    // O_EXCL, so /tmp cannot be used to pre-plant a symlink and capture tokens.
     const path = this.credentialsPath();
-    const existing = (await readJsonFile(path)) ?? {};
-    const existingOauth =
-      existing["claudeAiOauth"] && typeof existing["claudeAiOauth"] === "object"
-        ? (existing["claudeAiOauth"] as Record<string, unknown>)
-        : {};
+    const current = await this.readCredentialsFile();
+    const existing = current.value ?? {};
+    const existingOauth = asObject(existing["claudeAiOauth"]) ?? {};
     const next = {
       ...existing,
       claudeAiOauth: { ...existingOauth, ...fromCredential(credential) },
     };
-    const tmp = join(tmpdir(), `.swisscode-credentials-${process.pid}.json`);
-    await writeFile(tmp, JSON.stringify(next, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    await rename(tmp, path);
+    // Content we could not parse is content we are about to drop — keep a copy.
+    await writeJsonAtomic(path, next, { mode: 0o600, keepBackup: current.corrupt });
   }
 
   private async writeKeychain(credential: OAuthCredential): Promise<void> {
     // Read-merge-write: preserve every key /login stored that isn't ours —
     // both around claudeAiOauth (e.g. mcpOAuth) and inside it (e.g.
     // rateLimitTier, subscriptionType) — and reuse the item's own account name.
-    const existing = (await readKeychainJson(CLAUDE_KEYCHAIN_SERVICE)) ?? {};
-    const existingOauth =
-      existing["claudeAiOauth"] && typeof existing["claudeAiOauth"] === "object"
-        ? (existing["claudeAiOauth"] as Record<string, unknown>)
-        : {};
+    const read = await this.readKeychain(CLAUDE_KEYCHAIN_SERVICE);
+    if (read.state === "unreadable") {
+      throw new CredentialStoreError(
+        "keychain-unreadable",
+        `Could not read the Keychain item "${CLAUDE_KEYCHAIN_SERVICE}" (${read.error}).`,
+      );
+    }
+    const existing = read.state === "ok" ? read.item : {};
+    const existingOauth = asObject(existing["claudeAiOauth"]) ?? {};
     const payload = JSON.stringify({
       ...existing,
       claudeAiOauth: { ...existingOauth, ...fromCredential(credential) },
     });
-    const account = await keychainAccount(CLAUDE_KEYCHAIN_SERVICE);
+    const account = await this.keychainAccount(CLAUDE_KEYCHAIN_SERVICE);
     if (!account) {
-      throw new Error(
+      throw new CredentialStoreError(
+        "keychain-missing",
         `No Keychain item "${CLAUDE_KEYCHAIN_SERVICE}" exists. ` +
           `Run \`claude login\` once, then retry.`,
       );
     }
     try {
       // -U updates the existing item in place (same access controls).
-      await execFileAsync("security", [
+      //
+      // WON'T FIX (accepted): the credential JSON is an argv element, so it is
+      // visible in `ps` for the lifetime of this call. `security
+      // add-generic-password` has no stdin mode for the password — `-w` with no
+      // value only prompts on an interactive TTY, which a launcher cannot use —
+      // so the alternatives are argv or dropping Keychain support entirely.
+      // The exposure is a sub-second window on the user's own machine, to
+      // processes already running as that user (which can read the Keychain
+      // item and ~/.claude/.credentials.json anyway).
+      await this.exec("security", [
         "add-generic-password",
         "-U",
         "-s",
@@ -219,19 +341,21 @@ export class ClaudeActiveCredentialStore implements ActiveCredentialStore {
         payload,
       ]);
     } catch (err) {
-      throw new Error(
+      throw new CredentialStoreError(
+        "write-failed",
         `Could not update the Keychain item "${CLAUDE_KEYCHAIN_SERVICE}" ` +
           `(Keychain access was denied). Approve access for your terminal, then retry. ` +
-          `(${(err as Error).message})`,
+          `(${message(err)})`,
       );
     }
     // Confirm the item now holds what we wrote — guards silent duplicates.
-    const reread = await this.readActive();
+    const reread = await this.readActiveDetail();
     if (
       reread.backend !== "keychain" ||
       reread.credential?.refreshToken !== credential.refreshToken
     ) {
-      throw new Error(
+      throw new CredentialStoreError(
+        "write-failed",
         "Keychain write did not take effect — the active login is unchanged. " +
           "Aborting rather than leaving a half-switched state.",
       );

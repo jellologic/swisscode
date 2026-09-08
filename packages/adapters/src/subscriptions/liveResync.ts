@@ -4,6 +4,19 @@
 // imported earlier. When our refresh is rejected with invalid_grant, the fix
 // is to adopt Claude's CURRENT lineage — never to retry the dead one.
 //
+// Adoption is only safe when the live login is plausibly the SAME identity as
+// the vault account. "Whatever is logged in right now" is not: a user who ran
+// `claude login` with their work account would have had their personal
+// swisscode account silently repointed at work, and every later request would
+// bill the wrong subscription. Two guards, cheapest first:
+// 1. Lineage ownership — if another vault account already holds this refresh
+//    token, the live login IS that other account. Local, exact, free.
+// 2. Email — when we know the account's email, ask the profile endpoint who
+//    the live token belongs to and decline on a mismatch. An unknown answer
+//    (endpoint down, expired token) does NOT decline: it cannot distinguish a
+//    wrong account from an offline laptop, and guard 1 already blocks the
+//    common case.
+//
 // Interference rules (rotation is single-writer-unsafe):
 // - Adopting a live credential with valid access consumes nothing: the proxy
 //   simply shares the same Bearer Claude uses. Zero writes to Claude's store.
@@ -19,18 +32,46 @@ import type {
   OAuthClient,
   OAuthCredential,
 } from "@swisscode/core";
+import { credentialIdentity } from "./identity.js";
+
+/** Just enough of the profile client to answer "whose token is this?". */
+export interface EmailLookup {
+  fetchEmail(accessToken: string): Promise<string | undefined>;
+}
 
 export interface LiveResyncDeps {
   accounts: AccountRepository;
   oauth: OAuthClient;
   live: ActiveCredentialStore;
+  /** Optional identity check against the OAuth profile endpoint. */
+  profile?: EmailLookup;
+}
+
+/** True when some OTHER vault account already owns this credential lineage. */
+async function ownedByAnotherAccount(
+  accounts: AccountRepository,
+  credential: OAuthCredential,
+  accountId: string,
+): Promise<boolean> {
+  const identity = credentialIdentity(credential);
+  for (const account of await accounts.list()) {
+    if (account.id === accountId) continue;
+    const stored = await accounts.loadCredential(account.id).catch(() => undefined);
+    if (stored && credentialIdentity(stored) === identity) return true;
+  }
+  return false;
+}
+
+function sameEmail(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
 /**
  * Adopt Claude Code's live credential lineage into the vault account.
- * Returns the credential to use, or undefined when there is nothing newer
- * to adopt (same dead lineage, no live login, or the live lineage is dead
- * too — that case genuinely needs `claude login`).
+ * Returns the credential to use, or undefined when there is nothing safe to
+ * adopt (same dead lineage, no live login, a live login that belongs to a
+ * different account, or a live lineage that is dead too — that last case
+ * genuinely needs `claude login`).
  */
 export async function resyncSubscriptionCredential(
   deps: LiveResyncDeps,
@@ -43,23 +84,40 @@ export async function resyncSubscriptionCredential(
   if (stored?.refreshToken && stored.refreshToken === live.refreshToken) {
     return undefined; // same lineage we just failed with — retrying is futile
   }
-  if (!isCredentialExpired(live)) return live;
-  try {
-    return await deps.oauth.refresh(live);
-  } catch (err) {
-    if (err instanceof OAuthError && err.kind === "invalid_grant") return undefined;
-    throw err;
+  if (await ownedByAnotherAccount(deps.accounts, live, accountId)) return undefined;
+
+  let candidate = live;
+  if (isCredentialExpired(live)) {
+    try {
+      candidate = await deps.oauth.refresh(live);
+    } catch (err) {
+      if (err instanceof OAuthError && err.kind === "invalid_grant") return undefined;
+      throw err;
+    }
   }
+  // Email check last: it needs a usable access token, which the refresh above
+  // may just have produced.
+  const account = await deps.accounts.get(accountId).catch(() => undefined);
+  if (account?.email && deps.profile) {
+    const liveEmail = await deps.profile.fetchEmail(candidate.accessToken).catch(() => undefined);
+    if (liveEmail && !sameEmail(liveEmail, account.email)) return undefined;
+  }
+  return candidate;
 }
 
 /**
  * ensureFreshCredential hook: adopt-then-persist lives in core; this builds
- * the adapter side from the three ports. Pass undefined live store to skip.
+ * the adapter side from the ports. Pass undefined live store to skip.
  */
 export function liveResyncHook(
   deps: Omit<LiveResyncDeps, "live"> & { live?: ActiveCredentialStore },
 ): ((accountId: string) => Promise<OAuthCredential | undefined>) | undefined {
   if (!deps.live) return undefined;
-  const full: LiveResyncDeps = { accounts: deps.accounts, oauth: deps.oauth, live: deps.live };
+  const full: LiveResyncDeps = {
+    accounts: deps.accounts,
+    oauth: deps.oauth,
+    live: deps.live,
+    ...(deps.profile ? { profile: deps.profile } : {}),
+  };
   return (accountId: string) => resyncSubscriptionCredential(full, accountId);
 }
