@@ -14,6 +14,7 @@ import {
   notify,
 } from "../../design";
 import { catalogFn, listProviderAccountsFn, updateProviderAccountFn } from "../../lib/functions";
+import { blankSecrets } from "../../lib/accountConfig";
 import { AccountFields } from "../../components/AccountFields";
 
 export const Route = createFileRoute("/accounts/key/$providerId/$accountId")({
@@ -33,7 +34,12 @@ function EditKeyAccountPage() {
   const { provider, account } = Route.useLoaderData();
   const router = useRouter();
   const [label, setLabel] = useState(account.label);
-  const [values, setValues] = useState<Record<string, string>>(account.config);
+  // The loader only ever sees MASKED secrets. Seeding the form with them and
+  // submitting would store the mask as the key, so secret fields start empty
+  // and "blank keeps stored" does the rest.
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    blankSecrets(account.config, provider.fields),
+  );
   const [error, setError] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {

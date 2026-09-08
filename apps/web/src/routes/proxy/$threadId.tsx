@@ -3,11 +3,24 @@
 // verdict, reply, tools, and usage; the latest turn renders its full detail
 // inline, earlier turns expand in place.
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { Badge, Card, Code, Disclosure, Muted, Notice, Page, Pre, Stack } from "../../design";
-import { proxySessionContextFn, proxyTrafficFn } from "../../lib/functions";
-import type { ProxyTrafficItem } from "../../lib/store.server";
+import {
+  proxySessionContextFn,
+  proxyTrafficEntriesFn,
+  proxyTrafficFn,
+} from "../../lib/functions";
+import {
+  findThread,
+  keepLastGood,
+  mergeEntryBodies,
+  threadEntryIds,
+  threadTotals,
+  type ProxyTrafficItem,
+  type ThreadTotals,
+  type ThreadView,
+} from "../../lib/threadView";
 import type { SessionContext, TrafficConversation } from "@swisscode/adapters";
 import {
   EntryDetail,
@@ -19,28 +32,62 @@ import {
 } from "../../components/TrafficEntryDetail";
 import { ago } from "../../components/ModelPicker";
 
+/** Loader payload: a ThreadView plus the local session behind the thread. */
+export interface ThreadPayload extends ThreadView {
+  session: SessionContext | null;
+}
+
+/**
+ * Never throws. This loader re-runs every 2.5s under the reader, so a thread
+ * that aged out of the ring buffer, a stopped proxy or a failed poll must all
+ * arrive as data — throwing swapped the page for the root error boundary.
+ */
+async function loadThread(threadId: string): Promise<ThreadPayload> {
+  const offline: ThreadPayload = { running: false, conversation: null, entries: [], session: null };
+  let traffic;
+  try {
+    traffic = await proxyTrafficFn({ data: {} });
+  } catch {
+    return offline;
+  }
+  const conversation = findThread(traffic.conversations, threadId);
+  if (!conversation) {
+    return { running: traffic.running, conversation: null, entries: [], session: null };
+  }
+  // The list above is body-less; pull bodies only for the turns this page draws.
+  let entries: ProxyTrafficItem[] = traffic.entries;
+  const ids = threadEntryIds(traffic.entries, conversation);
+  if (ids.length > 0) {
+    try {
+      const full = await proxyTrafficEntriesFn({ data: { ids } });
+      entries = mergeEntryBodies(traffic.entries, full.entries);
+    } catch {
+      // Bodies are an enhancement — the summaries still tell the story.
+    }
+  }
+  // Local session behind the thread: transcript, Workflow scripts,
+  // subagent branches. Null when the run happened on another machine.
+  let session: SessionContext | null = null;
+  if (conversation.sessionId) {
+    try {
+      session = (await proxySessionContextFn({ data: { sessionId: conversation.sessionId } }))
+        .context;
+    } catch {
+      session = null;
+    }
+  }
+  return { running: traffic.running, conversation, entries, session };
+}
+
 export const Route = createFileRoute("/proxy/$threadId")({
   validateSearch: (search: Record<string, unknown>) => ({
     profile: typeof search["profile"] === "string" ? search["profile"] : "",
   }),
-  loader: async ({ params }) => {
-    const traffic = await proxyTrafficFn({ data: {} });
-    const conversation =
-      traffic.conversations.find((c) => c.id === params.threadId) ?? null;
-    if (!conversation) throw new Error(`Unknown thread "${params.threadId}".`);
-    // Latest turn renders expanded; earlier turns expand in place.
-    const index = conversation.indexes[conversation.indexes.length - 1]!;
-    // Local session behind the thread: transcript, Workflow scripts,
-    // subagent branches. Null when the run happened on another machine.
-    const session = conversation.sessionId
-      ? (await proxySessionContextFn({ data: { sessionId: conversation.sessionId } })).context
-      : null;
-    return { traffic, index, conversation, session };
-  },
+  loader: async ({ params }) => loadThread(params.threadId),
   component: EntryPage,
 });
 
-function convUsageLine(conv: TrafficConversation): string | undefined {
+function convUsageLine(conv: ThreadTotals): string | undefined {
   if (conv.totalInputTokens === undefined && conv.totalOutputTokens === undefined) {
     return undefined;
   }
@@ -299,7 +346,10 @@ function ThreadPanel({
   focusId: string;
   session: SessionContext | null;
 }) {
-  const usage = convUsageLine(conversation);
+  // The conversation came from the body-less list, so its token/model/tool
+  // facts are re-derived from the full entries this page fetched.
+  const totals = threadTotals(entries, conversation);
+  const usage = convUsageLine(totals);
   const launches = conversation.agentLaunches;
   return (
     <Stack>
@@ -321,14 +371,14 @@ function ThreadPanel({
             {conversation.upstreamMs > 0 && (
               <Fact label="Upstream time">{fmtSpan(conversation.upstreamMs)} summed</Fact>
             )}
-            {conversation.models.length > 0 && (
-              <Fact label="Models">{conversation.models.join(", ")}</Fact>
+            {totals.models.length > 0 && (
+              <Fact label="Models">{totals.models.join(", ")}</Fact>
             )}
             {conversation.profiles.length > 0 && (
               <Fact label="Profiles">{conversation.profiles.join(", ")}</Fact>
             )}
-            {conversation.tools.length > 0 && (
-              <Fact label="Tools">{conversation.tools.slice(0, 12).join(", ")}{conversation.tools.length > 12 ? ", …" : ""}</Fact>
+            {totals.tools.length > 0 && (
+              <Fact label="Tools">{totals.tools.slice(0, 12).join(", ")}{totals.tools.length > 12 ? ", …" : ""}</Fact>
             )}
             {launches.length > 0 && (
               <Fact label="Subagents">
@@ -360,11 +410,21 @@ function ThreadPanel({
 }
 
 function EntryPage() {
-  const { traffic, index, conversation, session } = Route.useLoaderData();
+  const loaded = Route.useLoaderData();
+  const { threadId } = Route.useParams();
   const { profile } = Route.useSearch();
   const router = useRouter();
-  const entry = traffic.entries[index]!;
-  const focusNo = conversation.indexes.indexOf(index) + 1;
+  // A poll that came back empty must not blank the page being read: the fold
+  // keeps the last good thread and only the "not running" flag updates.
+  // Navigating to another thread starts over — carrying a thread across ids
+  // would show the reader someone else's turns.
+  const [shown, setShown] = useState<ThreadPayload>(loaded);
+  const shownThread = useRef(threadId);
+  useEffect(() => {
+    const switched = shownThread.current !== threadId;
+    shownThread.current = threadId;
+    setShown((prev) => (switched ? loaded : keepLastGood(prev, loaded)));
+  }, [loaded, threadId]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -373,29 +433,59 @@ function EntryPage() {
     return () => clearInterval(id);
   }, [router]);
 
+  const { conversation, entries, running, session } = shown;
+  const backLink = (
+    <Link to="/proxy" search={{ profile }}>
+      Proxy traffic
+    </Link>
+  );
+
+  if (!conversation) {
+    return (
+      <Page title="Thread" sub={backLink}>
+        <Stack>
+          {running ? (
+            <Notice tone="warn">
+              This thread is no longer buffered — the proxy keeps only the last N requests
+              and these turns have scrolled out. Raise “Keep last N requests” on{" "}
+              {backLink} to hold more history.
+            </Notice>
+          ) : (
+            <Notice tone="warn">
+              The proxy is not running, so there is nothing to read back. Start it with{" "}
+              <Code>swisscode proxy run</Code> — thread <Code>{threadId}</Code> reappears
+              if it is still in the buffer.
+            </Notice>
+          )}
+        </Stack>
+      </Page>
+    );
+  }
+
+  // Latest turn renders expanded; earlier turns expand in place.
+  const index = conversation.indexes[conversation.indexes.length - 1]!;
+  const focusNo = conversation.indexes.length;
+
   return (
     <Page
       title={conversation.turns === 1 ? "Thread · 1 turn" : `Thread · ${conversation.turns} turns`}
       sub={
         <>
-          <Link to="/proxy" search={{ profile }}>
-            Proxy traffic
-          </Link>{" "}
-          · viewing turn {focusNo} of {conversation.turns}
+          {backLink} · viewing turn {focusNo} of {conversation.turns}
         </>
       }
     >
       <Stack>
-        {!traffic.running ? (
+        {!running ? (
           <Notice tone="warn">
             The proxy is not running. Start it with <Code>swisscode proxy run</Code> — this
             view shows the last buffered snapshot.
           </Notice>
         ) : null}
         <ThreadPanel
-          entries={traffic.entries}
+          entries={entries}
           conversation={conversation}
-          focusId={entry.id ?? ""}
+          focusId={entries[index]?.id ?? ""}
           session={session}
         />
       </Stack>

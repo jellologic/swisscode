@@ -8,7 +8,6 @@ import {
   CachingUsageClient,
   ClaudeActiveCredentialStore,
   CustomAccountValidator,
-  DEFAULT_PROXY_PORT,
   FileAccountRepository,
   FileCustomProviderStore,
   FileModelCatalogCache,
@@ -28,14 +27,14 @@ import {
   defaultProfilesPath,
   maskSecret,
   groupTrafficConversations,
+  proxyPort,
   summarizeTrafficEntry,
-  type ProxyTrafficEntry,
   type SessionContext,
   type TrafficConversation,
-  type TrafficSummary,
 } from "@swisscode/adapters";
 import {
   ensureFreshCredential,
+  redactEnv,
   resolveLaunchSpec,
   resolveProviderConfig,
   validateAccountId,
@@ -56,6 +55,12 @@ import {
   type StoreImportResult,
   type SubscriptionAccount,
 } from "@swisscode/core";
+import { collectSecretValues, mergeAccountConfig } from "./accountConfig.js";
+import { countOtherClaudeSessions, type ProcessProbe } from "./claudeSessions.js";
+import { ProxyControlClient } from "./proxyClient.server.js";
+import type { ProxyTrafficItem } from "./threadView.js";
+
+export type { ProxyTrafficItem } from "./threadView.js";
 
 const agents = createAgentRegistry();
 const customProviderStore = new FileCustomProviderStore();
@@ -185,21 +190,28 @@ export async function deleteProfile(name: string): Promise<void> {
   await profiles.remove(name);
 }
 
-/** Resolve a profile to its launch spec, with secrets redacted. */
+/**
+ * Resolve a profile to its launch spec, with secrets redacted.
+ *
+ * Redaction is by VALUE first: a custom provider may map its secret field to
+ * any env name it likes (MY_PASSWORD, X_GATEWAY), and a name pattern alone
+ * hands that key to the browser. redactEnv keeps the widened name pattern as
+ * the fallback for secrets we were never told about.
+ */
 export async function previewProfile(name: string) {
   const stored = await profiles.get(name);
   if (!stored) throw new Error(`Unknown profile "${name}"`);
   let profile = stored;
+  const secretKeys = await secretKeysFor(stored.providerId);
+  const secretValues: string[] = [];
   if (stored.providerAccountId) {
     const account = await providerAccounts.get(stored.providerId, stored.providerAccountId);
+    if (account) secretValues.push(...collectSecretValues(account.config, secretKeys));
     profile = resolveProviderConfig(stored, () => account ?? undefined);
   }
+  secretValues.push(...collectSecretValues(profile.providerConfig, secretKeys));
   const spec = resolveLaunchSpec(agents, await providerRegistry(), profile);
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(spec.env)) {
-    env[k] = /TOKEN|KEY|SECRET/i.test(k) && v ? "***redacted***" : v;
-  }
-  return { command: spec.command, args: spec.args, env };
+  return { command: spec.command, args: spec.args, env: redactEnv(spec.env, secretValues) };
 }
 
 export function storePath(): string {
@@ -281,40 +293,21 @@ export interface ProxyState {
   port: number;
 }
 
-function proxyPort(): number {
-  const raw = process.env["SWISSCODE_PROXY_PORT"];
-  const n = raw ? parseInt(raw, 10) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_PROXY_PORT;
-}
-
-function proxyBase(): string {
-  return `http://127.0.0.1:${proxyPort()}`;
-}
+/** Control-route client: signs every call with the proxy's per-run token. */
+const proxyControl = new ProxyControlClient();
 
 export async function getProxyState(): Promise<ProxyState> {
   const port = proxyPort();
   try {
-    const res = await fetch(`${proxyBase()}/__swisscode/status`);
-    if (!res.ok) return { running: false, activeAccountId: null, port };
-    const body = (await res.json()) as { activeAccountId?: string | null };
-    return { running: true, activeAccountId: body.activeAccountId ?? null, port };
+    const status = await proxyControl.status();
+    return { running: true, activeAccountId: status.activeAccountId ?? null, port };
   } catch {
     return { running: false, activeAccountId: null, port };
   }
 }
 
 export async function useProxyAccount(id: string): Promise<void> {
-  const res = await fetch(`${proxyBase()}/__swisscode/use/${id}`, { method: "POST" }).catch(() => {
-    throw new Error("Proxy is not running. Start it with `swisscode proxy run`.");
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `Proxy returned HTTP ${res.status}`);
-  }
-}
-
-export interface ProxyTrafficItem extends ProxyTrafficEntry {
-  summary: TrafficSummary;
+  await proxyControl.use(id);
 }
 
 export interface ProxyTrafficView {
@@ -327,7 +320,15 @@ export interface ProxyTrafficView {
   profiles: string[];
 }
 
-/** Buffered proxy traffic (newest first), each with a plain-English summary. Never throws. */
+/**
+ * Buffered proxy traffic (newest first), each with a plain-English summary.
+ * Never throws.
+ *
+ * Body-less on purpose: this list backs a 2.5s poll, and shipping every kept
+ * request and response body made a single refresh tens of megabytes. Request
+ * facts, byte counts and the conversation grouping all survive; the bodies are
+ * fetched one entry at a time by whoever actually renders them.
+ */
 export async function getProxyTraffic(profile?: string): Promise<ProxyTrafficView> {
   const empty: ProxyTrafficView = {
     running: false,
@@ -338,19 +339,11 @@ export async function getProxyTraffic(profile?: string): Promise<ProxyTrafficVie
     profiles: [] as string[],
   };
   try {
-    const url =
-      profile !== undefined && profile !== ""
-        ? `${proxyBase()}/__swisscode/traffic?profile=${encodeURIComponent(profile)}`
-        : `${proxyBase()}/__swisscode/traffic`;
-    const res = await fetch(url);
-    if (!res.ok) return empty;
-    const body = (await res.json()) as {
-      entries?: ProxyTrafficEntry[];
-      kept?: number;
-      size?: number;
-      profiles?: string[];
-    };
-    const entries = (body.entries ?? []).map((entry) => ({
+    const body = await proxyControl.traffic({
+      ...(profile !== undefined && profile !== "" ? { profile } : {}),
+      bodies: false,
+    });
+    const entries = body.entries.map((entry) => ({
       ...entry,
       summary: summarizeTrafficEntry(entry),
     }));
@@ -360,12 +353,28 @@ export async function getProxyTraffic(profile?: string): Promise<ProxyTrafficVie
       conversations: groupTrafficConversations(
         entries.map((entry) => ({ entry, summary: entry.summary })),
       ),
-      kept: body.kept ?? 0,
-      size: body.size ?? 0,
-      profiles: body.profiles ?? [],
+      kept: body.kept,
+      size: body.size,
+      profiles: body.profiles,
     };
   } catch {
     return empty;
+  }
+}
+
+/**
+ * The full entries (bodies included) behind specific ids — what a thread page
+ * renders. Ids that have left the ring buffer are simply absent, so the page
+ * falls back to the body-less copy instead of failing. Never throws.
+ */
+export async function getProxyTrafficEntries(ids: string[]): Promise<ProxyTrafficItem[]> {
+  try {
+    const found = await Promise.all(ids.map((id) => proxyControl.entry(id)));
+    return found.flatMap((entry) =>
+      entry ? [{ ...entry, summary: summarizeTrafficEntry(entry) }] : [],
+    );
+  } catch {
+    return [];
   }
 }
 
@@ -377,32 +386,19 @@ export async function getProxyTraffic(profile?: string): Promise<ProxyTrafficVie
 export async function getSessionContext(sessionId: string): Promise<SessionContext | null> {
   try {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) return null;
-    const res = await fetch(`${proxyBase()}/__swisscode/session/${sessionId}`);
-    if (!res.ok) return null;
-    const body = (await res.json()) as { context?: SessionContext | null };
-    return body.context ?? null;
+    return await proxyControl.sessionContext(sessionId);
   } catch {
     return null;
   }
 }
 
 export async function clearProxyTraffic(): Promise<{ cleared: number }> {
-  const res = await fetch(`${proxyBase()}/__swisscode/traffic`, { method: "DELETE" }).catch(() => {
-    throw new Error("Proxy is not running. Start it with `swisscode proxy run`.");
-  });
-  if (!res.ok) throw new Error(`Proxy returned HTTP ${res.status}`);
-  const body = (await res.json()) as { cleared?: number };
-  return { cleared: body.cleared ?? 0 };
+  return { cleared: await proxyControl.clearTraffic() };
 }
 
 export async function setProxyTrafficSize(size: number): Promise<{ size: number; kept: number }> {
   const n = Math.min(10000, Math.max(0, Math.floor(size)));
-  const res = await fetch(`${proxyBase()}/__swisscode/traffic/size/${n}`, { method: "POST" }).catch(() => {
-    throw new Error("Proxy is not running. Start it with `swisscode proxy run`.");
-  });
-  if (!res.ok) throw new Error(`Proxy returned HTTP ${res.status}`);
-  const body = (await res.json()) as { size?: number; kept?: number };
-  return { size: body.size ?? n, kept: body.kept ?? 0 };
+  return proxyControl.setTrafficSize(n);
 }
 
 /** Live usage per account; never throws — errors are reported per account. */
@@ -438,17 +434,20 @@ export interface SwitchResult {
   refreshed?: boolean;
 }
 
-/** Count other live `claude` processes (best-effort; 0 when undetectable). */
+/** Runs pgrep. Its "no match" exit code 1 rejects; the counter treats that as none. */
+const pgrepProbe: ProcessProbe = async (command, args) => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { stdout } = await promisify(execFile)(command, args);
+  return stdout;
+};
+
+/**
+ * Count other live Claude Code sessions (best-effort; 0 when undetectable).
+ * Covers both the native binary and `node …/claude-code/cli.js`.
+ */
 async function otherClaudeSessionCount(): Promise<number> {
-  try {
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const { stdout } = await promisify(execFile)("pgrep", ["-x", "claude"]);
-    const mine = String(process.pid);
-    return stdout.split("\n").filter((line) => line.trim() && line.trim() !== mine).length;
-  } catch {
-    return 0;
-  }
+  return countOtherClaudeSessions(pgrepProbe);
 }
 
 /**
@@ -543,9 +542,10 @@ export async function removeProviderAccount(providerId: string, id: string): Pro
 }
 
 /**
- * Update label and/or config. Blank secret values keep the stored secret;
- * blank non-secrets clear the field. Never receives or returns real secrets
- * beyond the submitted form values.
+ * Update label and/or config. Blank secret values — and values that are just
+ * the mask the UI displayed — keep the stored secret; blank non-secrets clear
+ * the field. Never receives or returns real secrets beyond the submitted form
+ * values.
  */
 export async function updateProviderAccount(
   providerId: string,
@@ -554,16 +554,7 @@ export async function updateProviderAccount(
 ): Promise<void> {
   const prev = await providerAccounts.get(providerId, id);
   if (!prev) throw new Error(`Unknown ${providerId} account "${id}"`);
-  const provider = (await providerRegistry()).get(providerId);
-  const secretKeys = new Set(
-    (provider?.fields ?? []).filter((f) => f.secret).map((f) => f.key),
-  );
-  const config = { ...prev.config };
-  for (const [key, value] of Object.entries(patch.config ?? {})) {
-    if (value === "" && secretKeys.has(key)) continue; // blank secret = keep
-    if (value === "") delete config[key];
-    else config[key] = value;
-  }
+  const config = mergeAccountConfig(prev.config, patch.config, await secretKeysFor(providerId));
   await saveProviderAccount({
     ...prev,
     label: patch.label?.trim() || prev.label,

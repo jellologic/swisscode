@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist-test",
+    "rootDir": "src",
+    "types": ["node"]
+  },
+  "include": [
+    "src/lib/accountConfig.ts",
+    "src/lib/accountConfig.test.ts",
+    "src/lib/claudeSessions.ts",
+    "src/lib/claudeSessions.test.ts",
+    "src/lib/hostGuard.test.ts",
+    "src/lib/proxyClient.server.ts",
+    "src/lib/proxyClient.server.test.ts",
+    "src/lib/store.server.ts",
+    "src/lib/store.server.test.ts",
+    "src/lib/threadView.ts",
+    "src/lib/threadView.test.ts",
+    "src/lib/validate.ts",
+    "src/lib/validate.test.ts",
+    "src/design/data.tsx",
+    "src/design/data.test.tsx"
+  ]
+}
