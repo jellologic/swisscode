@@ -7,9 +7,15 @@
 // - one active account at a time (POST /__swisscode/use/:id to change it)
 // - on 401: refresh once and retry
 // - on 429/529 (rate limit / overload): fail over to the next vault account,
-//   one pass, then return the last error
+//   one pass, then return the last error; the limited account cools down so
+//   the next request does not re-hit it
 // - responses (incl. SSE streams) are piped byte-for-byte, never buffered
+// - a client that hangs up aborts the upstream request (no quota burned for
+//   an answer nobody reads)
+// - loopback is a network boundary, not an authorization one: Host is pinned,
+//   browser-originated requests are refused, and control routes want a token
 
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type {
   AccountRepository,
@@ -20,18 +26,57 @@ import type {
   TrafficParser,
   TrafficRequestSummary,
 } from "@swisscode/core";
-import { ensureFreshCredential } from "@swisscode/core";
+import { SingleFlight, isCredentialExpired } from "@swisscode/core";
 import { defaultTrafficParsers } from "../registry.js";
 import { readSessionContext } from "./sessionContext.js";
-import { liveResyncHook, resyncSubscriptionCredential } from "../subscriptions/liveResync.js";
+import { resyncSubscriptionCredential } from "../subscriptions/liveResync.js";
+import { freshVaultCredential } from "../subscriptions/freshCredential.js";
+import { PROXY_TOKEN_HEADER } from "./proxyToken.js";
 
 export const DEFAULT_PROXY_PORT = 8123;
 
 /** Max entries the traffic ring buffer may hold. */
 export const MAX_TRAFFIC_BUFFER_SIZE = 10000;
 
+/**
+ * Default per-side body cap inside buffered entries (64KB). Whole bodies are
+ * far too expensive to keep: 200 entries of unbounded Claude traffic reached
+ * ~90MB of heap and shipped the same again on every inspection poll.
+ */
+export const DEFAULT_TRAFFIC_BODY_BYTES = 65536;
+
+/** Requests with a body over this are refused with 413 (32MB). */
+export const MAX_REQUEST_BODY_BYTES = 32 * 1024 * 1024;
+
+/**
+ * How long to wait for upstream response HEADERS. Streaming bodies run for
+ * minutes legitimately, so the timer is cancelled the moment headers land.
+ */
+export const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 60_000;
+
+/** Cooldown applied to an account that answered 429/529 without a Retry-After. */
+const DEFAULT_COOLDOWN_MS = 60_000;
+
+/** Upper bound on a Retry-After honoured as a cooldown (15 min). */
+const MAX_COOLDOWN_MS = 15 * 60_000;
+
 /** Bodies larger than this skip structured pre-truncation parsing (2MB). */
 const MAX_STRUCTURED_PARSE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Hosts the proxy answers on. 127.0.0.1 is a network boundary, not an
+ * authorization one: a browser page can reach it, and DNS rebinding turns any
+ * attacker domain into "same origin" unless the Host header is pinned.
+ */
+const LOCAL_HOST_RE = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i;
+
+/** True when the Host header names this machine's loopback interface. */
+export function isLoopbackHost(host: string | undefined): boolean {
+  return typeof host === "string" && LOCAL_HOST_RE.test(host.trim());
+}
+
+/** Shape of the ids minted in trace(): `t<started36>-<seq36>`. */
+const TRAFFIC_ID_RE = /^t[a-z0-9]+-[a-z0-9]+$/;
 
 /**
  * Profile tag the launcher puts in ANTHROPIC_AUTH_TOKEN for proxy launches
@@ -84,13 +129,19 @@ function withBodyCap(entry: ProxyTrafficEntry, cap: number): ProxyTrafficEntry {
   return out;
 }
 
-/** Entry copy with no bodies (metadata only). */
-function stripBodies(entry: ProxyTrafficEntry): ProxyTrafficEntry {
+/** Entry copy without raw bodies but with the parsed request facts kept. */
+function omitBodies(entry: ProxyTrafficEntry): ProxyTrafficEntry {
   const out: ProxyTrafficEntry = { ...entry };
   delete out.reqBody;
   delete out.reqBodyTruncated;
   delete out.resBody;
   delete out.resBodyTruncated;
+  return out;
+}
+
+/** Entry copy with no bodies (metadata only). */
+function stripBodies(entry: ProxyTrafficEntry): ProxyTrafficEntry {
+  const out = omitBodies(entry);
   delete out.request;
   return out;
 }
@@ -105,7 +156,48 @@ const HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
   "content-length", // fetch recomputes it for the upstream request
+  // undici decodes the upstream body for us; relaying the client's own
+  // accept-encoding invites an encoding we cannot decode, which then reaches
+  // the client as compressed bytes with the content-encoding header stripped.
+  "accept-encoding",
+  "cookie", // never proxy ambient browser credentials to the API
 ]);
+
+/**
+ * Header names the client marked connection-scoped (`Connection: a, b`).
+ * RFC 9110 says a proxy must not forward them; forwarding is how a hop-only
+ * header (an upgrade, a private extension) leaks to the origin.
+ */
+function connectionScopedHeaders(value: string | string[] | undefined): Set<string> {
+  const raw = Array.isArray(value) ? value.join(",") : (value ?? "");
+  const names = new Set<string>();
+  for (const part of raw.split(",")) {
+    const name = part.trim().toLowerCase();
+    if (name) names.add(name);
+  }
+  return names;
+}
+
+/** Single place that answers with JSON; never double-writes a sent response. */
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  if (res.headersSent || res.writableEnded) return;
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+/** Seconds to park an account after a 429/529, from Retry-After when present. */
+export function cooldownMsFromRetryAfter(value: string | null | undefined): number {
+  if (!value) return DEFAULT_COOLDOWN_MS;
+  const seconds = Number.parseInt(value.trim(), 10);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(MAX_COOLDOWN_MS, seconds * 1000);
+  }
+  const at = Date.parse(value);
+  if (Number.isFinite(at)) {
+    return Math.min(MAX_COOLDOWN_MS, Math.max(0, at - Date.now()));
+  }
+  return DEFAULT_COOLDOWN_MS;
+}
 
 export interface ProxyOptions {
   port?: number;
@@ -129,9 +221,8 @@ export interface ProxyOptions {
    */
   trafficBufferSize?: number;
   /**
-   * Max body bytes kept per side inside buffered entries. Default unlimited
-   * (entire request/response); the ring size bounds total memory instead.
-   * 0 also means unlimited.
+   * Max body bytes kept per side inside buffered entries. Default 64KB;
+   * 0 means unlimited (the ring size then bounds total memory alone).
    */
   trafficBodyBytes?: number;
   /**
@@ -139,6 +230,14 @@ export interface ProxyOptions {
    * adapter that defines one — the proxy never parses wire formats itself.
    */
   trafficParsers?: TrafficParser[];
+  /**
+   * Shared secret required on every `/__swisscode/*` control route
+   * (header `x-swisscode-token`). Unset leaves the control plane open, which
+   * is only safe for tests and in-process use.
+   */
+  controlToken?: string;
+  /** Wait for upstream response headers. Default 60s; bodies stream freely. */
+  upstreamHeadersTimeoutMs?: number;
 }
 
 /** One failover step inside a proxied request. */
@@ -161,6 +260,11 @@ export interface ProxyTrafficEntry {
   method: string;
   /** Path with the query string stripped. */
   path: string;
+  /**
+   * What the client actually got: the upstream status, or 499 when the client
+   * hung up mid-stream and 502 when the upstream stream broke after headers.
+   * `attempts` keeps the raw upstream statuses either way.
+   */
   status: number;
   ms: number;
   /** Account whose token served the response, or null when none did. */
@@ -208,8 +312,14 @@ export class SubscriptionProxy {
   private trafficBufferSize: number;
   private readonly trafficBodyBytes: number;
   private readonly trafficParsers: TrafficParser[];
+  private readonly controlToken?: string;
+  private readonly upstreamHeadersTimeoutMs: number;
   private trafficSeq = 0;
   private readonly traffic: ProxyTrafficEntry[] = [];
+  /** accountId → epoch ms until which a 429/529 says not to use it. */
+  private readonly cooldowns = new Map<string, number>();
+  /** Concurrent 401s on one account must cost one rotation, not one each. */
+  private readonly recovering = new SingleFlight<string | undefined>();
 
   constructor(
     private readonly accounts: AccountRepository,
@@ -223,9 +333,12 @@ export class SubscriptionProxy {
     this.logBodies = options.logBodies ?? false;
     this.maxLoggedBodyBytes = options.maxLoggedBodyBytes ?? 8192;
     this.trafficBufferSize = clampBufferSize(options.trafficBufferSize ?? 200);
-    const bodyBytes = options.trafficBodyBytes ?? Number.POSITIVE_INFINITY;
+    const bodyBytes = options.trafficBodyBytes ?? DEFAULT_TRAFFIC_BODY_BYTES;
     this.trafficBodyBytes = bodyBytes > 0 ? bodyBytes : Number.POSITIVE_INFINITY;
     this.trafficParsers = options.trafficParsers ?? defaultTrafficParsers();
+    this.controlToken = options.controlToken;
+    this.upstreamHeadersTimeoutMs =
+      options.upstreamHeadersTimeoutMs ?? DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS;
     void options.port;
   }
 
@@ -245,6 +358,11 @@ export class SubscriptionProxy {
     const all = [...this.traffic].reverse();
     if (onlyProfile === undefined) return all;
     return all.filter((e) => e.profile === onlyProfile);
+  }
+
+  /** One buffered entry with its bodies, or undefined when it aged out. */
+  getTrafficEntry(id: string): ProxyTrafficEntry | undefined {
+    return this.traffic.find((e) => e.id === id);
   }
 
   /** Distinct profile names present in the buffer, sorted. */
@@ -277,14 +395,33 @@ export class SubscriptionProxy {
     return account;
   }
 
-  /** Ordered candidate account ids: active first, then the rest. */
+  /**
+   * Park an account after a rate-limit answer. Without this the active
+   * account never moves, so every following request pays another round trip
+   * to the same exhausted quota before failing over again.
+   */
+  private cooldown(accountId: string, retryAfter: string | null | undefined): void {
+    this.cooldowns.set(accountId, Date.now() + cooldownMsFromRetryAfter(retryAfter));
+  }
+
+  /**
+   * Ordered candidate account ids: active first, then the rest, with cooled
+   * accounts moved out of the way. When every account is cooling we try them
+   * anyway — a stale Retry-After must never make the proxy unusable.
+   */
   private async candidates(): Promise<string[]> {
     const all = await this.accounts.list();
     const ids = all.map((a) => a.id);
-    if (this.activeAccountId && ids.includes(this.activeAccountId)) {
-      return [this.activeAccountId, ...ids.filter((id) => id !== this.activeAccountId)];
+    const ordered =
+      this.activeAccountId && ids.includes(this.activeAccountId)
+        ? [this.activeAccountId, ...ids.filter((id) => id !== this.activeAccountId)]
+        : ids;
+    const now = Date.now();
+    for (const [id, until] of this.cooldowns) {
+      if (until <= now) this.cooldowns.delete(id);
     }
-    return ids;
+    const usable = ordered.filter((id) => (this.cooldowns.get(id) ?? 0) <= now);
+    return usable.length > 0 ? usable : ordered;
   }
 
   /**
@@ -293,7 +430,14 @@ export class SubscriptionProxy {
    * copy would burn a rotation pointlessly and 401 again. Otherwise one
    * refresh-retry on the lineage we hold. Undefined = give up on this account.
    */
-  private async recoverUnauthorized(accountId: string): Promise<string | undefined> {
+  private async recoverUnauthorized(accountId: string, rejected: string): Promise<string | undefined> {
+    return this.recovering.run(accountId, () => this.recoverUnauthorizedOnce(accountId, rejected));
+  }
+
+  private async recoverUnauthorizedOnce(
+    accountId: string,
+    rejected: string,
+  ): Promise<string | undefined> {
     if (this.liveStore) {
       const stored = await this.accounts.loadCredential(accountId).catch(() => undefined);
       const adopted = await resyncSubscriptionCredential(
@@ -314,6 +458,22 @@ export class SubscriptionProxy {
     try {
       const stored = await this.accounts.loadCredential(accountId);
       if (!stored) return undefined;
+      // A request that overlapped ours may already have rotated the account.
+      // Its token was never rejected, so retry with it instead of spending
+      // another single-use refresh token on the same 401.
+      if (stored.accessToken !== rejected) return stored.accessToken;
+      if (isCredentialExpired(stored)) {
+        // Clock agrees: the shared entry point rotates, persists, and
+        // coalesces with any other caller waiting on this account.
+        return (
+          await freshVaultCredential(this.accounts, this.oauth, accountId, {
+            liveStore: this.liveStore,
+          })
+        ).credential.accessToken;
+      }
+      // Upstream rejected a token our clock still calls valid (revoked or
+      // rotated behind our back): rotate anyway — this method is already
+      // single-flighted, so it happens once per account.
       const next = await this.oauth.refresh(stored);
       await this.accounts.saveCredential(accountId, next);
       return next.accessToken;
@@ -324,12 +484,8 @@ export class SubscriptionProxy {
 
   private async freshToken(accountId: string): Promise<OAuthCredential> {
     return (
-      await ensureFreshCredential(this.accounts, this.oauth, accountId, {
-        onInvalidGrant: liveResyncHook({
-          accounts: this.accounts,
-          oauth: this.oauth,
-          live: this.liveStore,
-        }),
+      await freshVaultCredential(this.accounts, this.oauth, accountId, {
+        liveStore: this.liveStore,
       })
     ).credential;
   }
@@ -340,16 +496,34 @@ export class SubscriptionProxy {
     headers: Headers,
     body: Buffer | undefined,
     token: string,
+    signal: AbortSignal,
   ): Promise<Response> {
     headers.set("authorization", `Bearer ${token}`);
     headers.set("host", new URL(this.upstream).host);
-    // Buffer is a valid undici body; the DOM lib types disagree (ArrayBufferLike
-    // generics), so the single cast stays at this call site.
-    return this.fetchFn(`${this.upstream}${path}`, {
-      method,
-      headers,
-      body: body as unknown as BodyInit | undefined,
-    });
+    // The timeout covers the response HEADERS only: an SSE answer legitimately
+    // streams for minutes, so the timer is cleared as soon as fetch resolves
+    // while the client-abort signal keeps governing the body.
+    const timeout = new AbortController();
+    const timer = setTimeout(() => {
+      timeout.abort(new Error("upstream headers timeout"));
+    }, this.upstreamHeadersTimeoutMs);
+    try {
+      // Buffer is a valid undici body; the DOM lib types disagree (ArrayBufferLike
+      // generics), so the single cast stays at this call site.
+      return await this.fetchFn(`${this.upstream}${path}`, {
+        method,
+        headers,
+        body: body as unknown as BodyInit | undefined,
+        signal: AbortSignal.any([signal, timeout.signal]),
+      });
+    } catch (err) {
+      if (timeout.signal.aborted && !signal.aborted) {
+        throw new Error(`upstream did not answer within ${this.upstreamHeadersTimeoutMs}ms`);
+      }
+      throw err as Error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async handleApi(req: IncomingMessage, res: ServerResponse, body: Buffer | undefined): Promise<void> {
@@ -358,14 +532,22 @@ export class SubscriptionProxy {
     // read it first so the entry can be attributed to the launching profile.
     const profile =
       parseProfileTag(req.headers["authorization"]) ?? parseProfileTag(req.headers["x-api-key"]);
+    // Esc in Claude Code closes the socket. Without propagating that upstream
+    // the model keeps generating — and billing — for an answer nobody reads.
+    const abort = new AbortController();
+    res.on("close", () => {
+      if (!res.writableFinished) abort.abort(new Error("client aborted"));
+    });
+    const connectionScoped = connectionScopedHeaders(req.headers["connection"]);
     const inHeaders = new Headers();
     for (const [key, value] of Object.entries(req.headers)) {
       const lower = key.toLowerCase();
+      if (value === undefined || HOP_HEADERS.has(lower) || connectionScoped.has(lower)) continue;
       // The proxy signs every request with the vault credential: client
       // credentials are never forwarded. A stray client x-api-key would
       // otherwise take precedence upstream and 401 a request our own
       // Bearer would have served (burning a rotation on the retry).
-      if (value === undefined || HOP_HEADERS.has(lower) || lower === "authorization" || lower === "x-api-key") continue;
+      if (lower === "authorization" || lower === "x-api-key") continue;
       inHeaders.set(key, Array.isArray(value) ? value.join(", ") : value);
     }
     const path = req.url ?? "/";
@@ -417,6 +599,11 @@ export class SubscriptionProxy {
       trace({ status: 503, accountId: null, resBytes: 0, attempts, error: "no subscription accounts stored" });
       return;
     }
+    const loggedRequest = () => (body && captureCap > 0 ? this.loggedBody(body, captureCap) : {});
+    // 499 (client closed request) so an abandoned stream can never be read
+    // back as a completed 200.
+    const traceAborted = (accountId: string | null, resBytes: number) =>
+      trace({ status: 499, accountId, resBytes, attempts, error: "client aborted", ...loggedRequest() });
     let lastStatus = 502;
     let lastBody = "all accounts exhausted or need re-login";
     for (const accountId of ids) {
@@ -430,8 +617,9 @@ export class SubscriptionProxy {
       }
       let upstream: Response;
       try {
-        upstream = await this.forward(req.method ?? "GET", path, new Headers(inHeaders), body, token);
+        upstream = await this.forward(req.method ?? "GET", path, new Headers(inHeaders), body, token, abort.signal);
       } catch (err) {
+        if (abort.signal.aborted) return traceAborted(accountId, 0);
         lastBody = (err as Error).message;
         attempts.push({ accountId, status: "network-error" });
         continue;
@@ -441,41 +629,67 @@ export class SubscriptionProxy {
         // lineage when it moved (never rotate a stale copy), else one
         // refresh-retry when the vault still holds the current lineage.
         attempts.push({ accountId, status: 401 });
-        const recovered = await this.recoverUnauthorized(accountId);
+        await upstream.arrayBuffer().catch(() => undefined); // release the socket first
+        const recovered = await this.recoverUnauthorized(accountId, token);
         if (!recovered) {
           attempts.push({ accountId, status: "refresh-failed" });
           continue;
         }
-        upstream = await this.forward(req.method ?? "GET", path, new Headers(inHeaders), body, recovered);
+        try {
+          upstream = await this.forward(req.method ?? "GET", path, new Headers(inHeaders), body, recovered, abort.signal);
+        } catch (err) {
+          // Unguarded, this rejection escaped handleApi as a raw 500 with no
+          // traffic entry at all — the one failure mode with no record.
+          if (abort.signal.aborted) return traceAborted(accountId, 0);
+          lastBody = (err as Error).message;
+          attempts.push({ accountId, status: "network-error" });
+          continue;
+        }
       }
-      if ((upstream.status === 429 || upstream.status === 529) && accountId !== ids[ids.length - 1]) {
-        await upstream.arrayBuffer().catch(() => undefined); // drain before failover
-        attempts.push({ accountId, status: upstream.status });
-        lastStatus = upstream.status;
-        lastBody = await upstream.text().catch(() => "rate limited");
-        continue;
+      if (upstream.status === 429 || upstream.status === 529) {
+        this.cooldown(accountId, upstream.headers.get("retry-after"));
+        if (accountId !== ids[ids.length - 1]) {
+          attempts.push({ accountId, status: upstream.status });
+          lastStatus = upstream.status;
+          // Read once: a second read of a consumed body always throws, which
+          // used to put the literal string "rate limited" on the wire.
+          lastBody = await upstream.text().catch(() => "rate limited");
+          continue;
+        }
       }
       attempts.push({ accountId, status: upstream.status });
-      const resBytes = await this.pipe(upstream, res, captureCap > 0 ? this.capture(captureCap) : undefined);
+      const piped = await this.pipe(
+        upstream,
+        res,
+        captureCap > 0 ? this.capture(captureCap) : undefined,
+        abort.signal,
+      );
+      if (piped.error === "client aborted") return traceAborted(accountId, piped.bytes);
       trace({
-        status: upstream.status,
+        // A broken stream is a gateway failure even though 200 headers went
+        // out before the break; attempts still carry what upstream answered.
+        status: piped.error ? 502 : upstream.status,
         accountId,
-        resBytes: resBytes.bytes,
+        resBytes: piped.bytes,
         attempts,
-        ...(resBytes.text !== undefined ? { resBody: resBytes.text, resBodyTruncated: resBytes.truncated } : {}),
-        ...(body && captureCap > 0 ? this.loggedBody(body, captureCap) : {}),
+        ...(piped.error ? { error: piped.error } : {}),
+        ...(piped.text !== undefined ? { resBody: piped.text, resBodyTruncated: piped.truncated } : {}),
+        ...loggedRequest(),
       });
       return;
     }
+    if (abort.signal.aborted) return traceAborted(null, 0);
+    // Valid JSON: the exhausted path used to answer with the upstream's raw
+    // text under an application/json content type.
     res.writeHead(lastStatus, { "Content-Type": "application/json" });
-    res.end(typeof lastBody === "string" ? lastBody : JSON.stringify({ error: "all accounts exhausted" }));
+    res.end(JSON.stringify({ error: lastBody, attempts }));
     trace({
       status: lastStatus,
       accountId: null,
       resBytes: 0,
       attempts,
-      error: typeof lastBody === "string" ? lastBody.slice(0, 500) : "all accounts exhausted",
-      ...(body && captureCap > 0 ? this.loggedBody(body, captureCap) : {}),
+      error: lastBody.slice(0, 500),
+      ...loggedRequest(),
     });
   }
 
@@ -492,8 +706,9 @@ export class SubscriptionProxy {
   private async pipe(
     upstream: Response,
     res: ServerResponse,
-    capture?: BodyCapture,
-  ): Promise<{ bytes: number; text?: string; truncated?: boolean }> {
+    capture: BodyCapture | undefined,
+    signal: AbortSignal,
+  ): Promise<{ bytes: number; text?: string; truncated?: boolean; error?: string }> {
     const outHeaders: Record<string, string> = {};
     upstream.headers.forEach((value, key) => {
       const lower = key.toLowerCase();
@@ -504,6 +719,7 @@ export class SubscriptionProxy {
     });
     res.writeHead(upstream.status, outHeaders);
     let bytes = 0;
+    let error: string | undefined;
     if (upstream.body) {
       const reader = upstream.body.getReader();
       try {
@@ -517,19 +733,64 @@ export class SubscriptionProxy {
             capture.chunks.push(chunk);
             capture.kept += chunk.length;
           }
-          res.write(value);
+          // Backpressure: a slow reader must not make the socket's write queue
+          // hold the whole stream in memory. `once` rejects on abort, which
+          // the catch below turns into the same client-gone record.
+          if (!res.write(value)) await once(res, "drain", { signal });
+        }
+      } catch {
+        // Status and headers are already on the wire, so there is no error
+        // code left to send: cut the connection and let the entry say why.
+        // (Calling writeHead again here is what used to throw
+        // ERR_HTTP_HEADERS_SENT inside the catch and kill the process.)
+        error = signal.aborted ? "client aborted" : "upstream stream error";
+        void reader.cancel().catch(() => undefined);
+        if (res.headersSent) {
+          res.destroy();
+        } else {
+          res.writeHead(502, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error }));
         }
       } finally {
         reader.releaseLock();
       }
     }
-    res.end();
-    if (!capture) return { bytes };
+    if (!error) res.end();
+    const result = { bytes, ...(error !== undefined ? { error } : {}) };
+    if (!capture) return result;
     return {
-      bytes,
+      ...result,
       text: Buffer.concat(capture.chunks).toString("utf8"),
       truncated: bytes > capture.kept,
     };
+  }
+
+  /**
+   * Gate every request before it reaches a route. Binding 127.0.0.1 keeps
+   * other machines out; it does nothing about the browser already running on
+   * this one, which can POST to the control plane (switching the billed
+   * account) or read whole conversations back out via DNS rebinding.
+   */
+  private denyRequest(
+    req: IncomingMessage,
+    url: string,
+  ): { status: number; error: string } | undefined {
+    if (!isLoopbackHost(req.headers["host"])) {
+      // Rebinding survives only if the attacker's own hostname reaches us.
+      return { status: 403, error: "proxy answers loopback Host headers only" };
+    }
+    if (req.headers["origin"] !== undefined || req.headers["sec-fetch-site"] !== undefined) {
+      // Claude Code sends neither; every browser fetch sends at least one.
+      return { status: 403, error: "browser-originated requests are not accepted" };
+    }
+    if (this.controlToken !== undefined && url.startsWith("/__swisscode/")) {
+      const sent = req.headers[PROXY_TOKEN_HEADER];
+      const value = Array.isArray(sent) ? sent[0] : sent;
+      if (value !== this.controlToken) {
+        return { status: 401, error: `missing or invalid ${PROXY_TOKEN_HEADER}` };
+      }
+    }
+    return undefined;
   }
 
   async listen(port: number = DEFAULT_PROXY_PORT): Promise<number> {
@@ -540,36 +801,49 @@ export class SubscriptionProxy {
       void (async () => {
         try {
           const url = req.url ?? "/";
+          const denied = this.denyRequest(req, url);
+          if (denied) {
+            sendJson(res, denied.status, { error: denied.error });
+            return;
+          }
           if (url === "/__swisscode/status" && req.method === "GET") {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(await this.status()));
+            sendJson(res, 200, await this.status());
             return;
           }
           const useMatch = /^\/__swisscode\/use\/([A-Za-z0-9][A-Za-z0-9-_]*)$/.exec(url);
           if (useMatch && req.method === "POST") {
             try {
               const account = await this.setActive(useMatch[1] as string);
-              res.writeHead(200, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ ok: true, activeAccountId: account.id }));
+              sendJson(res, 200, { ok: true, activeAccountId: account.id });
             } catch (err) {
-              res.writeHead(404, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: (err as Error).message }));
+              sendJson(res, 404, { error: (err as Error).message });
             }
             return;
           }
           const trafficUrl = new URL(url, "http://127.0.0.1");
           if (trafficUrl.pathname === "/__swisscode/traffic" && req.method === "GET") {
             const onlyProfile = trafficUrl.searchParams.get("profile") ?? undefined;
-            const entries = this.getTraffic(onlyProfile);
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(
-              JSON.stringify({
-                entries,
-                kept: this.traffic.length,
-                size: this.trafficBufferSize,
-                profiles: this.trafficProfiles(),
-              }),
-            );
+            // ?bodies=0 is the list view: same entries and metadata, minus the
+            // raw bodies that make a full poll tens of megabytes.
+            const withBodies = trafficUrl.searchParams.get("bodies") !== "0";
+            const found = this.getTraffic(onlyProfile);
+            sendJson(res, 200, {
+              entries: withBodies ? found : found.map(omitBodies),
+              kept: this.traffic.length,
+              size: this.trafficBufferSize,
+              profiles: this.trafficProfiles(),
+            });
+            return;
+          }
+          const entryMatch = /^\/__swisscode\/traffic\/entry\/(.+)$/.exec(trafficUrl.pathname);
+          if (entryMatch && req.method === "GET") {
+            const id = entryMatch[1] as string;
+            const entry = TRAFFIC_ID_RE.test(id) ? this.getTrafficEntry(id) : undefined;
+            if (!entry) {
+              sendJson(res, 404, { error: `No buffered traffic entry "${id}"` });
+              return;
+            }
+            sendJson(res, 200, { entry });
             return;
           }
           const sessionMatch = /^\/__swisscode\/session\/([A-Za-z0-9][A-Za-z0-9_-]*)$/.exec(
@@ -580,38 +854,57 @@ export class SubscriptionProxy {
             // Workflow scripts, Task launches, subagent branches. Read-only,
             // bounded, null when the session is not on this machine.
             const context = await readSessionContext(sessionMatch[1] as string);
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ context }));
+            sendJson(res, 200, { context });
             return;
           }
           if (url === "/__swisscode/traffic" && req.method === "DELETE") {
-            const cleared = this.clearTraffic();
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: true, cleared }));
+            sendJson(res, 200, { ok: true, cleared: this.clearTraffic() });
             return;
           }
           const sizeMatch = /^\/__swisscode\/traffic\/size\/(\d+)$/.exec(url);
           if (sizeMatch && req.method === "POST") {
             const size = this.setTrafficBufferSize(parseInt(sizeMatch[1] as string, 10));
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ ok: true, size, kept: this.traffic.length }));
+            sendJson(res, 200, { ok: true, size, kept: this.traffic.length });
             return;
           }
           const chunks: Buffer[] = [];
-          req.on("data", (c: Buffer) => chunks.push(c));
+          let received = 0;
+          let tooLarge = false;
+          req.on("data", (c: Buffer) => {
+            if (tooLarge) return; // draining: the answer is already on the wire
+            received += c.length;
+            if (received > MAX_REQUEST_BODY_BYTES) {
+              // Buffering the whole request is what lets us replay it on
+              // failover, so the size of one request is a hard memory bound.
+              tooLarge = true;
+              chunks.length = 0;
+              sendJson(res, 413, {
+                error: `request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`,
+              });
+              return;
+            }
+            chunks.push(c);
+          });
           req.on("end", () => {
+            if (tooLarge) return;
             void this.handleApi(
               req,
               res,
               chunks.length > 0 ? Buffer.concat(chunks) : undefined,
             ).catch((err: Error) => {
-              res.writeHead(500, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: err.message }));
+              if (res.headersSent) {
+                res.destroy();
+                return;
+              }
+              sendJson(res, 500, { error: err.message });
             });
           });
         } catch (err) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: (err as Error).message }));
+          if (res.headersSent) {
+            res.destroy();
+            return;
+          }
+          sendJson(res, 500, { error: (err as Error).message });
         }
       })();
     });
