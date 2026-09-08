@@ -35,8 +35,14 @@
   "bin": {
     "swisscode": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "cp ../../README.md ./README.md && cp ../../LICENSE ./LICENSE",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsc -p tsconfig.json && node --test dist/*.test.js"
   },

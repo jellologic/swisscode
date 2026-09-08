@@ -5,3 +5,6 @@ apps/web/.output/
 apps/web/.tanstack/
 apps/web/src/routeTree.gen.ts
 .DS_Store
+# Generated at pack time by apps/cli's prepack (root README/LICENSE copied in)
+apps/cli/README.md
+apps/cli/LICENSE
