@@ -22,6 +22,21 @@ export type ReadJsonResult<T> =
   | { ok: true; value: T }
   | { ok: false; reason: "missing" | "corrupt"; error?: string };
 
+/**
+ * A store file exists but cannot be read as JSON. Named so the message points
+ * at the file to fix — a bare "Unexpected end of JSON input" from `list`, the
+ * proxy or the web UI tells the user nothing about which store is torn.
+ */
+export class StoreFileError extends Error {
+  constructor(
+    readonly path: string,
+    readonly reason: string,
+  ) {
+    super(`${path} is corrupt: ${reason}`);
+    this.name = "StoreFileError";
+  }
+}
+
 /** Write text to `path` atomically. Creates the parent directory (0700). */
 export async function writeFileAtomic(
   path: string,
@@ -82,6 +97,46 @@ export async function readJsonFile<T>(path: string): Promise<ReadJsonResult<T>> 
   } catch (err: unknown) {
     return { ok: false, reason: "corrupt", error: message(err) };
   }
+}
+
+/**
+ * Read a single-file store: absent means "no records yet" (`fallback`), but a
+ * present-and-unparseable file is an error the user must see, not an empty list
+ * that a later save would happily overwrite.
+ */
+export async function readJsonOrDefault<T>(path: string, fallback: T): Promise<T> {
+  const result = await readJsonFile<T>(path);
+  if (result.ok) return result.value;
+  if (result.reason === "missing") return fallback;
+  throw new StoreFileError(path, result.error ?? "unreadable");
+}
+
+/** One chain per store path; entries are dropped as soon as they drain. */
+const storeLocks = new Map<string, Promise<void>>();
+
+/**
+ * Serialize a read-modify-write section against one path. The atomic rename
+ * stops a *torn* file, not a *lost* one: two concurrent `save()` calls both read
+ * the old list and the second rename wins, silently dropping the first record.
+ * Chaining makes each section observe the previous one's bytes.
+ *
+ * In-process only. Separate CLI/web processes still race; a cross-process lock
+ * belongs with the credential path that actually needs one.
+ */
+export function withStoreLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  const previous = storeLocks.get(path) ?? Promise.resolve();
+  const run = previous.then(fn);
+  // A failed section must not poison the queue behind it, so the chain the next
+  // caller waits on never rejects.
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  storeLocks.set(path, settled);
+  void settled.then(() => {
+    if (storeLocks.get(path) === settled) storeLocks.delete(path);
+  });
+  return run;
 }
 
 async function backup(path: string, mode: number): Promise<void> {

@@ -6,10 +6,10 @@
 // Per-model endpoint (serving provider) lists are cached the same way under
 // `endpoints/<provider>/<model>` keys.
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ModelEndpoint, ProviderModel, ProviderModelCatalog } from "@swisscode/core";
+import { readJsonOrDefault, withStoreLock, writeJsonAtomic } from "../store/atomicJson.js";
 
 export interface ModelCatalogCacheEntry {
   models: ProviderModel[];
@@ -35,19 +35,27 @@ export class FileModelCatalogCache {
   constructor(private readonly path: string = defaultModelCatalogCachePath()) {}
 
   private async readAll(): Promise<Record<string, unknown>> {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(this.path, "utf8"));
-      if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
-      return {};
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return {};
-      throw err;
+    const parsed = await readJsonOrDefault<unknown>(this.path, {});
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
     }
+    return {};
   }
 
   private async writeAll(all: Record<string, unknown>): Promise<void> {
-    await mkdir(join(this.path, ".."), { recursive: true });
-    await writeFile(this.path, JSON.stringify(all, null, 2), "utf8");
+    await writeJsonAtomic(this.path, all, { keepBackup: true });
+  }
+
+  /**
+   * Every setter is a read-modify-write over one shared file: caching a model
+   * list and an endpoint list at the same time would otherwise drop one of them.
+   */
+  private async update(mutate: (all: Record<string, unknown>) => void): Promise<void> {
+    await withStoreLock(this.path, async () => {
+      const all = await this.readAll();
+      mutate(all);
+      await this.writeAll(all);
+    });
   }
 
   async get(providerId: string): Promise<ModelCatalogCacheEntry | undefined> {
@@ -59,9 +67,9 @@ export class FileModelCatalogCache {
   }
 
   async set(providerId: string, entry: ModelCatalogCacheEntry): Promise<void> {
-    const all = await this.readAll();
-    all[providerId] = entry;
-    await this.writeAll(all);
+    await this.update((all) => {
+      all[providerId] = entry;
+    });
   }
 
   async getEndpoints(
@@ -80,9 +88,9 @@ export class FileModelCatalogCache {
     modelId: string,
     entry: ModelEndpointsCacheEntry,
   ): Promise<void> {
-    const all = await this.readAll();
-    all[this.endpointsKey(providerId, modelId)] = entry;
-    await this.writeAll(all);
+    await this.update((all) => {
+      all[this.endpointsKey(providerId, modelId)] = entry;
+    });
   }
 
   private endpointsKey(providerId: string, modelId: string): string {

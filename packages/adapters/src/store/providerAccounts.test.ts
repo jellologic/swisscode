@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -27,6 +27,34 @@ describe("FileProviderAccountRepository", () => {
   it("masks secrets for display", () => {
     assert.equal(maskSecret("sk-or-123456789"), "sk-o…89");
     assert.equal(maskSecret("short"), "••••••••");
+  });
+
+  it("skips an account file with no config instead of 500ing four pages later", async () => {
+    const dir = join(await mkdtemp(join(tmpdir(), "gac-")), "a");
+    const warnings: string[] = [];
+    const repo = new FileProviderAccountRepository(dir, { onWarn: (m) => warnings.push(m) });
+    await mkdir(join(dir, "openrouter"), { recursive: true, mode: 0o700 });
+    // Exactly the record a hand-edited bundle used to leave behind.
+    await writeFile(
+      join(dir, "openrouter", "broken.json"),
+      JSON.stringify({ id: "broken", providerId: "openrouter", label: "Broken" }),
+      "utf8",
+    );
+    await writeFile(join(dir, "openrouter", "torn.json"), '{"id": "torn",', "utf8");
+    await repo.save({ id: "good", providerId: "openrouter", label: "Good", config: { apiKey: "k" }, createdAt: "", updatedAt: "" });
+
+    assert.deepEqual((await repo.list()).map((a) => a.id), ["good"]);
+    assert.equal(await repo.get("openrouter", "broken"), undefined);
+    assert.equal(warnings.filter((w) => w.includes("broken.json")).length, 2);
+    assert.equal(warnings.filter((w) => w.includes("torn.json")).length, 1);
+  });
+
+  it("writes account files 0600 in a 0700 dir", async () => {
+    const dir = join(await mkdtemp(join(tmpdir(), "gac-")), "a");
+    const repo = new FileProviderAccountRepository(dir);
+    await repo.save({ id: "work", providerId: "openrouter", label: "W", config: { apiKey: "k" }, createdAt: "", updatedAt: "" });
+    assert.equal((await stat(join(dir, "openrouter", "work.json"))).mode & 0o777, 0o600);
+    assert.equal((await stat(join(dir, "openrouter"))).mode & 0o777, 0o700);
   });
 });
 

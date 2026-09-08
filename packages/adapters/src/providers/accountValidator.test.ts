@@ -50,6 +50,35 @@ describe("OpenRouterAccountValidator", () => {
       error: "Key check failed: HTTP 500",
     });
   });
+
+  it("bounds the probe and never follows a redirect carrying the key", async () => {
+    let init: RequestInit | undefined;
+    const v = new OpenRouterAccountValidator({
+      fetchFn: (async (_url: string | URL | Request, got?: RequestInit) => {
+        init = got;
+        return new Response(null, { status: 302, headers: { location: "https://evil.example.com/" } });
+      }) as typeof fetch,
+    });
+    const result = await v.validateAccount({ apiKey: "sk-secret" });
+    assert.equal(init?.redirect, "manual");
+    assert.ok(init?.signal instanceof AbortSignal);
+    assert.equal(result.ok, false);
+    assert.match(result.ok === false ? (result.error ?? "") : "", /redirected \(HTTP 302\)/);
+  });
+
+  it("turns a timeout into a verdict, not an exception", async () => {
+    const v = new OpenRouterAccountValidator({
+      timeoutMs: 5,
+      fetchFn: ((_url: string | URL | Request, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject((init.signal as AbortSignal).reason));
+        })) as typeof fetch,
+    });
+    assert.deepEqual(await v.validateAccount({ apiKey: "x" }), {
+      ok: false,
+      error: "Key check timed out after 5ms.",
+    });
+  });
 });
 
 const TEST_DEF = {
@@ -95,6 +124,35 @@ describe("CustomAccountValidator", () => {
     assert.deepEqual(await denied.validateAccount({ apiKey: "x" }), {
       ok: false,
       error: "Credentials rejected (invalid or revoked).",
+    });
+  });
+
+  it("reports a redirect instead of replaying the credential to the new host", async () => {
+    let init: RequestInit | undefined;
+    const v = new CustomAccountValidator(TEST_DEF, {
+      fetchFn: (async (_url: string | URL | Request, got?: RequestInit) => {
+        init = got;
+        return new Response(null, { status: 307, headers: { location: "https://evil.example.com/" } });
+      }) as typeof fetch,
+    });
+    const result = await v.validateAccount({ apiKey: "sk-secret" });
+    assert.equal(init?.redirect, "manual");
+    assert.ok(init?.signal instanceof AbortSignal);
+    assert.equal(result.ok, false);
+    assert.match(result.ok === false ? (result.error ?? "") : "", /redirected \(HTTP 307\)/);
+  });
+
+  it("times out instead of hanging the form", async () => {
+    const v = new CustomAccountValidator(TEST_DEF, {
+      timeoutMs: 5,
+      fetchFn: ((_url: string | URL | Request, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject((init.signal as AbortSignal).reason));
+        })) as typeof fetch,
+    });
+    assert.deepEqual(await v.validateAccount({ apiKey: "x" }), {
+      ok: false,
+      error: "Test request timed out after 5ms.",
     });
   });
 
