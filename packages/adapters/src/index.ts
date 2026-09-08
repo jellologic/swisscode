@@ -22,10 +22,10 @@ export {
   defaultCustomProvidersPath,
   loadCustomProviderPorts,
 } from "./store/customProviders.js";
-export { readJsonFile, writeFileAtomic, writeJsonAtomic } from "./store/atomicJson.js";
+export { StoreFileError, readJsonFile, readJsonOrDefault, withStoreLock, writeFileAtomic, writeJsonAtomic } from "./store/atomicJson.js";
 export type { ReadJsonResult, WriteAtomicOptions } from "./store/atomicJson.js";
 export { createBundleRegistry } from "./store/configBundle.js";
-export type { BundleRegistry, BundleStoreDeps, ImportBundleOptions } from "./store/configBundle.js";
+export type { BundleRegistry, BundleStoreDeps, ExportedConfigBundle, ImportBundleOptions } from "./store/configBundle.js";
 export { ModelCatalogError, OpenRouterModelCatalog } from "./providers/openRouterModels.js";
 export type { OpenRouterModelsOptions } from "./providers/openRouterModels.js";
 export {

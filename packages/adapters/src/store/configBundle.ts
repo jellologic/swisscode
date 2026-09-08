@@ -7,7 +7,6 @@ import type {
   BundleStoreKey,
   ConfigBundle,
   CustomProviderDef,
-  OAuthCredential,
   Profile,
   ProviderAccount,
   StoreImportResult,
@@ -16,6 +15,10 @@ import type {
 } from "@swisscode/core";
 import {
   BUNDLE_STORE_KEYS,
+  DEFAULT_SECRET_NAME_RE,
+  isProfileShape,
+  isProviderAccountShape,
+  isSubscriptionBackupShape,
   validateAccountId,
   validateConfigBundle,
   validateCustomProviderDef,
@@ -45,9 +48,13 @@ function errored(store: BundleStoreKey, errors: string[]): StoreImportResult {
   return { store, imported: 0, skipped: 0, errors };
 }
 
-function isCredential(value: unknown): value is OAuthCredential {
-  const rec = (value ?? {}) as Record<string, unknown>;
-  return typeof rec["accessToken"] === "string" && typeof rec["refreshToken"] === "string";
+/**
+ * An exported bundle states, in the file itself, whether it was stripped —
+ * "includeSecrets: false" describes the request, this describes the result, so
+ * a bundle can never again claim to be safe to share while carrying a key.
+ */
+export interface ExportedConfigBundle extends ConfigBundle {
+  secretsStripped: boolean;
 }
 
 export interface BundleRegistry {
@@ -55,15 +62,49 @@ export interface BundleRegistry {
   keys(): BundleStoreKey[];
   /** Record counts per store (for the settings inventory). */
   inventory(): Promise<Record<BundleStoreKey, number>>;
-  exportBundle(includeSecrets: boolean, exportedBy?: string): Promise<ConfigBundle>;
+  exportBundle(includeSecrets: boolean, exportedBy?: string): Promise<ExportedConfigBundle>;
   importBundle(raw: unknown, opts: ImportBundleOptions): Promise<StoreImportResult[]>;
 }
 
 export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
   const builtinIds = defaultProviders().map((p) => p.id);
 
-  async function exportBundle(includeSecrets: boolean, exportedBy?: string): Promise<ConfigBundle> {
-    const profiles = await deps.profiles.list();
+  /**
+   * Build the "is this config key a secret?" test for one export run.
+   *
+   * A provider we can resolve answers exactly (its `secret: true` fields). A
+   * provider we cannot — its definition was deleted, or the profile names a
+   * provider this machine never had — has no field list to consult, so fall
+   * back to the name pattern the launch redaction uses: a blanked non-secret
+   * costs the user a retype, an exported key costs them the key.
+   */
+  function secretKeyTest(
+    customIds: string[],
+  ): (providerId: string) => Promise<(key: string) => boolean> {
+    const known = new Set([...builtinIds, ...customIds]);
+    const cache = new Map<string, (key: string) => boolean>();
+    return async (providerId: string) => {
+      const hit = cache.get(providerId);
+      if (hit) return hit;
+      const secrets = await deps.secretKeysFor(providerId);
+      const test = known.has(providerId)
+        ? (key: string) => secrets.has(key)
+        : (key: string) => secrets.has(key) || DEFAULT_SECRET_NAME_RE.test(key);
+      cache.set(providerId, test);
+      return test;
+    };
+  }
+
+  async function exportBundle(
+    includeSecrets: boolean,
+    exportedBy?: string,
+  ): Promise<ExportedConfigBundle> {
+    const customProviders = await deps.customProviders.list();
+    const isSecretKey = secretKeyTest(customProviders.map((d) => d.id));
+    const profiles = [];
+    for (const p of await deps.profiles.list()) {
+      profiles.push(includeSecrets ? p : await blankProfileSecrets(p, isSecretKey));
+    }
     const subscriptionAccounts: SubscriptionBackup[] = [];
     for (const account of await deps.vault.list()) {
       const credential = includeSecrets ? await deps.vault.loadCredential(account.id) : undefined;
@@ -76,9 +117,9 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
       if (includeSecrets) {
         providerAccounts.push(a);
       } else {
-        const secrets = await deps.secretKeysFor(a.providerId);
+        const isSecret = await isSecretKey(a.providerId);
         const config: Record<string, string> = {};
-        for (const [k, v] of Object.entries(a.config)) config[k] = secrets.has(k) ? "" : v;
+        for (const [k, v] of Object.entries(a.config)) config[k] = isSecret(k) ? "" : v;
         providerAccounts.push({ ...a, config });
       }
     }
@@ -87,11 +128,37 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
       exportedAt: new Date().toISOString(),
       ...(exportedBy ? { exportedBy } : {}),
       includeSecrets,
+      secretsStripped: !includeSecrets,
       profiles,
       subscriptionAccounts,
       providerAccounts,
-      customProviders: await deps.customProviders.list(),
+      customProviders: includeSecrets ? customProviders : customProviders.map(blankEnvStatic),
     };
+  }
+
+  /**
+   * A profile's inline `providerConfig` overrides the stored account, so it is
+   * a second, easily forgotten home for an API key — the export used to ship it
+   * verbatim under a "secrets excluded" label.
+   */
+  async function blankProfileSecrets(
+    profile: Profile,
+    isSecretKey: (providerId: string) => Promise<(key: string) => boolean>,
+  ): Promise<Profile> {
+    const config = profile.providerConfig;
+    if (!config || Object.keys(config).length === 0) return profile;
+    const isSecret = await isSecretKey(profile.providerId);
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(config)) next[k] = isSecret(k) ? "" : v;
+    return { ...profile, providerConfig: next };
+  }
+
+  /** `envStatic` values are free text a user may have pasted a token into. */
+  function blankEnvStatic(def: CustomProviderDef): CustomProviderDef {
+    if (!def.envStatic || Object.keys(def.envStatic).length === 0) return def;
+    const envStatic: Record<string, string> = {};
+    for (const name of Object.keys(def.envStatic)) envStatic[name] = "";
+    return { ...def, envStatic };
   }
 
   async function importBundle(raw: unknown, opts: ImportBundleOptions): Promise<StoreImportResult[]> {
@@ -137,14 +204,24 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
     const res: StoreImportResult = { store: "profiles", imported: 0, skipped: 0, errors: [] };
     for (const profile of bundle.profiles) {
       try {
-        validateProfile(profile as Profile);
-        const name = (profile as Profile).name;
-        if (!opts.overwrite && (await deps.profiles.get(name))) {
+        // Shape first: validateProfile only inspects three strings, so a
+        // nested-object providerConfig would reach disk and break the launch
+        // path and every page that renders it.
+        if (!isProfileShape(profile)) throw new Error("malformed record (wrong field types)");
+        validateProfile(profile);
+        if (!opts.overwrite && (await deps.profiles.get(profile.name))) {
           res.skipped++;
           continue;
         }
-        await deps.profiles.save(profile as Profile);
+        await deps.profiles.save(profile);
         res.imported++;
+        // A bundle is an untrusted document: agentArgs land on the agent's
+        // command line, so name them instead of importing flags in silence.
+        if (profile.agentArgs?.length) {
+          res.errors.push(
+            `profile ${profile.name}: imported agent args ${JSON.stringify(profile.agentArgs)} — review before launching.`,
+          );
+        }
       } catch (err) {
         res.errors.push(`profile ${(profile as Profile)?.name ?? "?"}: ${(err as Error).message}`);
       }
@@ -160,7 +237,13 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
     const res: StoreImportResult = { store: "providerAccounts", imported: 0, skipped: 0, errors: [] };
     for (const account of bundle.providerAccounts) {
       try {
-        const a = account as ProviderAccount;
+        // The whole point of item 16: a record without a `config` object used
+        // to save cleanly here and then throw from `Object.entries(a.config)`
+        // on four unrelated pages.
+        if (!isProviderAccountShape(account)) {
+          throw new Error("malformed record (needs id, providerId, label and a flat config object)");
+        }
+        const a = account;
         validateAccountId(a.id);
         if (!knownProviders.has(a.providerId)) {
           throw new Error(`unknown provider "${a.providerId}" (import its custom definition first)`);
@@ -190,25 +273,27 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
     const res: StoreImportResult = { store: "subscriptionAccounts", imported: 0, skipped: 0, errors: [] };
     for (const entry of bundle.subscriptionAccounts) {
       try {
-        const { account, credential } = entry as SubscriptionBackup;
+        // Shape-check the pair before touching the vault: a bad entry is one
+        // reported record, not a poisoned account file.
+        if (!isSubscriptionBackupShape(entry)) {
+          throw new Error("malformed record (needs an account, and a credential with both tokens)");
+        }
+        const { account, credential } = entry;
         validateAccountId(account.id);
         if (!credential) {
           throw new Error("no credential in bundle (exported without secrets) — log in and re-import instead");
         }
-        if (!isCredential(credential)) throw new Error("credential is malformed");
         if (!opts.overwrite && (await deps.vault.get(account.id))) {
           res.skipped++;
           continue;
         }
         const now = new Date().toISOString();
-        await deps.vault.save(
-          {
-            ...account,
-            createdAt: account.createdAt || now,
-            updatedAt: now,
-          } as SubscriptionAccount,
-          credential,
-        );
+        const stored: SubscriptionAccount = {
+          ...account,
+          createdAt: account.createdAt || now,
+          updatedAt: now,
+        };
+        await deps.vault.save(stored, credential);
         res.imported++;
       } catch (err) {
         res.errors.push(`${(entry as SubscriptionBackup)?.account?.id ?? "?"}: ${(err as Error).message}`);

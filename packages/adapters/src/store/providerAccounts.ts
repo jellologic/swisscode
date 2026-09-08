@@ -2,19 +2,32 @@
 // Layout: ~/.swisscode/accounts/<providerId>/<id>.json, files mode 0600.
 // Secrets are stored under the provider's own field keys (e.g. apiKey).
 
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ProviderAccount, ProviderAccountRepository } from "@swisscode/core";
-import { validateAccountId } from "@swisscode/core";
+import { isProviderAccountShape, validateAccountId } from "@swisscode/core";
+import { readJsonFile, withStoreLock, writeJsonAtomic } from "./atomicJson.js";
 
 export function defaultProviderAccountsDir(): string {
   const base = process.env["SWISSCODE_HOME"] ?? join(homedir(), ".swisscode");
   return join(base, "accounts");
 }
 
+export interface ProviderAccountRepositoryOptions {
+  /** Where an unusable account file is reported. Default: console.warn. */
+  onWarn?: (message: string) => void;
+}
+
 export class FileProviderAccountRepository implements ProviderAccountRepository {
-  constructor(private readonly dir: string = defaultProviderAccountsDir()) {}
+  private readonly warn: (message: string) => void;
+
+  constructor(
+    private readonly dir: string = defaultProviderAccountsDir(),
+    options: ProviderAccountRepositoryOptions = {},
+  ) {
+    this.warn = options.onWarn ?? ((message: string) => console.warn(message));
+  }
 
   private path(providerId: string, id: string): string {
     validateAccountId(id);
@@ -22,15 +35,25 @@ export class FileProviderAccountRepository implements ProviderAccountRepository 
     return join(this.dir, providerId, `${id}.json`);
   }
 
+  /**
+   * One unusable file is a skipped account, never an exception: a record
+   * missing `config` used to load fine here and then throw from
+   * `Object.entries(a.config)` deep inside four unrelated pages.
+   */
   private async readOne(providerId: string, id: string): Promise<ProviderAccount | undefined> {
-    try {
-      const parsed = JSON.parse(await readFile(this.path(providerId, id), "utf8")) as ProviderAccount;
-      if (parsed.providerId !== providerId || parsed.id !== id) return undefined;
-      return parsed;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return undefined;
-      throw err;
+    const path = this.path(providerId, id);
+    const result = await readJsonFile<unknown>(path);
+    if (!result.ok) {
+      if (result.reason === "corrupt") this.warn(`swisscode: skipping ${path} (${result.error}).`);
+      return undefined;
     }
+    if (!isProviderAccountShape(result.value)) {
+      this.warn(`swisscode: skipping ${path} — not a provider account (needs id, providerId, label, config).`);
+      return undefined;
+    }
+    const account = result.value;
+    if (account.providerId !== providerId || account.id !== id) return undefined;
+    return account;
   }
 
   async list(providerId?: string): Promise<ProviderAccount[]> {
@@ -68,17 +91,20 @@ export class FileProviderAccountRepository implements ProviderAccountRepository 
 
   async save(account: ProviderAccount): Promise<void> {
     validateAccountId(account.id);
-    const now = new Date().toISOString();
-    const prev = await this.readOne(account.providerId, account.id);
-    const next: ProviderAccount = {
-      ...account,
-      createdAt: prev?.createdAt ?? now,
-      updatedAt: now,
-    };
-    await mkdir(join(this.dir, account.providerId), { recursive: true, mode: 0o700 });
-    await writeFile(this.path(account.providerId, account.id), JSON.stringify(next, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
+    const path = this.path(account.providerId, account.id);
+    // createdAt is read back before writing, so two saves of the same account
+    // must not interleave.
+    await withStoreLock(path, async () => {
+      const now = new Date().toISOString();
+      const prev = await this.readOne(account.providerId, account.id);
+      const next: ProviderAccount = {
+        ...account,
+        createdAt: prev?.createdAt ?? now,
+        updatedAt: now,
+      };
+      // No .bak here: one file is one account, so a backup would only serve to
+      // leave the API key on disk after `remove` deleted the account.
+      await writeJsonAtomic(path, next, { mode: 0o600 });
     });
   }
 

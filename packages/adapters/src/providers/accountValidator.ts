@@ -11,6 +11,40 @@ import type {
 export interface AccountValidatorOptions {
   baseUrl?: string;
   fetchFn?: typeof fetch;
+  /** Abort budget for the probe. Default {@link VALIDATION_TIMEOUT_MS}. */
+  timeoutMs?: number;
+}
+
+/** A pre-save check blocks a form; a hung socket must not block it forever. */
+export const VALIDATION_TIMEOUT_MS = 10_000;
+
+/**
+ * Request init shared by every credential probe.
+ *
+ * `redirect: "manual"` because fetch replays the Authorization header on a
+ * cross-origin redirect: a 302 from the declared endpoint would hand the key to
+ * whatever host the response names. A redirect is reported, never followed.
+ */
+function probeInit(timeoutMs: number, headers?: Record<string, string>): RequestInit {
+  return {
+    redirect: "manual",
+    signal: AbortSignal.timeout(timeoutMs),
+    ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+  };
+}
+
+function isRedirect(status: number): boolean {
+  return status >= 300 && status < 400;
+}
+
+/** Validation is data, never an exception — including "the probe timed out". */
+function failure(prefix: string, err: unknown, timeoutMs: number): string {
+  const name = (err as Error)?.name;
+  if (name === "TimeoutError" || name === "AbortError") {
+    const budget = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+    return `${prefix} timed out after ${budget}.`;
+  }
+  return `${prefix} failed: ${(err as Error).message}`;
 }
 
 function money(value: unknown): string {
@@ -28,16 +62,24 @@ export class OpenRouterAccountValidator implements ProviderAccountValidator {
     if (!apiKey) return { ok: false, error: "API key is required." };
     const base = (this.options.baseUrl ?? "https://openrouter.ai").replace(/\/$/, "");
     const fetchFn = this.options.fetchFn ?? fetch;
+    const timeoutMs = this.options.timeoutMs ?? VALIDATION_TIMEOUT_MS;
     let res: Response;
     try {
-      res = await fetchFn(`${base}/api/v1/auth/key`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-      });
+      res = await fetchFn(
+        `${base}/api/v1/auth/key`,
+        probeInit(timeoutMs, { Authorization: `Bearer ${apiKey}` }),
+      );
     } catch (err) {
-      return { ok: false, error: `Key check failed: ${(err as Error).message}` };
+      return { ok: false, error: failure("Key check", err, timeoutMs) };
     }
     if (res.status === 401 || res.status === 403) {
       return { ok: false, error: "Key rejected (invalid or revoked)." };
+    }
+    if (isRedirect(res.status)) {
+      return {
+        ok: false,
+        error: `Key check failed: endpoint redirected (HTTP ${res.status}); redirects are not followed with a key attached.`,
+      };
     }
     if (!res.ok) return { ok: false, error: `Key check failed: HTTP ${res.status}` };
     const data = ((await res.json().catch(() => ({}))) as { data?: Record<string, unknown> }).data ?? {};
@@ -54,6 +96,8 @@ export class OpenRouterAccountValidator implements ProviderAccountValidator {
 
 export interface CustomValidatorOptions {
   fetchFn?: typeof fetch;
+  /** Abort budget for the probe. Default {@link VALIDATION_TIMEOUT_MS}. */
+  timeoutMs?: number;
 }
 
 /** Customs: probe the declared test endpoint, map status to a verdict. */
@@ -77,16 +121,24 @@ export class CustomAccountValidator implements ProviderAccountValidator {
       headers[test.headerName ?? "Authorization"] = `${test.authScheme ?? "Bearer "}${value}`;
     }
     const fetchFn = this.options.fetchFn ?? fetch;
+    const timeoutMs = this.options.timeoutMs ?? VALIDATION_TIMEOUT_MS;
     let res: Response;
     try {
       res = await fetchFn(test.url, {
         method: test.method ?? "GET",
-        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+        ...probeInit(timeoutMs, headers),
       });
     } catch (err) {
-      return { ok: false, error: `Test request failed: ${(err as Error).message}` };
+      return { ok: false, error: failure("Test request", err, timeoutMs) };
     }
     const expected = test.expectStatus;
+    // A def may legitimately expect a 3xx; anything else is an unfollowed hop.
+    if (isRedirect(res.status) && expected !== res.status) {
+      return {
+        ok: false,
+        error: `Test endpoint redirected (HTTP ${res.status}); redirects are not followed with a credential attached. Use the final URL.`,
+      };
+    }
     const pass = expected !== undefined ? res.status === expected : res.status >= 200 && res.status < 300;
     if (!pass) {
       return {
