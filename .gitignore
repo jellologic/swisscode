@@ -1,0 +1,7 @@
+node_modules/
+packages/*/dist/
+apps/*/dist/
+apps/web/.output/
+apps/web/.tanstack/
+apps/web/src/routeTree.gen.ts
+.DS_Store

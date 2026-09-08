@@ -1,0 +1,20 @@
+{
+  "name": "swisscode",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.8.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.0.0"
+  }
+}

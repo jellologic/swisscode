@@ -1,0 +1,17 @@
+{
+  "name": "swisscode",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "swisscode": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "echo \"cli: no tests yet\""
+  },
+  "dependencies": {
+    "@swisscode/adapters": "0.1.0",
+    "@swisscode/core": "0.1.0"
+  }
+}
