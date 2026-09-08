@@ -7,17 +7,19 @@
 // Two properties the file itself has to guarantee:
 // - One shared JSON file is read-modify-written by the proxy, the CLI and the
 //   web UI at once. Writes go through writeJsonAtomic (no torn file), and the
-//   read-modify-write is serialized per instance so a concurrent `set` cannot
-//   drop the other account's entry it never saw.
-// - Entries are keyed by account id AND credential identity. Deleting an
-//   account and re-importing a DIFFERENT login under the same id would
-//   otherwise show the previous login's utilization as if it were live.
+//   read-modify-write is serialized per path so a concurrent `set` — even from
+//   another FileUsageCache instance — cannot drop an entry it never saw.
+// - Entries are keyed by account id AND credential identity, by default and
+//   without the caller opting in. Deleting an account and re-importing a
+//   DIFFERENT login under the same id would otherwise show the previous
+//   login's utilization as if it were live.
 
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { AccountRepository, AccountUsage, UsageClient } from "@swisscode/core";
 import { isRecord } from "@swisscode/core";
 import { readJsonFile, withStoreLock, writeJsonAtomic } from "../store/atomicJson.js";
+import { FileAccountRepository, defaultSubscriptionsDir } from "./accountVault.js";
 import { credentialIdentity } from "./identity.js";
 import { UsageError } from "./anthropic.js";
 
@@ -50,6 +52,17 @@ export function vaultIdentityResolver(
   };
 }
 
+/**
+ * The resolver used when a caller passes no options — identity keying has to
+ * be the default, or the shipped wiring (`new CachingUsageClient(api, cache)`
+ * in the CLI and the web server) silently keys on the id alone again.
+ * The vault handle is built per call because those two call sites construct
+ * the client at module load, before a test or a wrapper has set SWISSCODE_HOME.
+ */
+export function defaultVaultIdentity(accountId: string): Promise<string | undefined> {
+  return vaultIdentityResolver(new FileAccountRepository(defaultSubscriptionsDir()))(accountId);
+}
+
 export class FileUsageCache {
   constructor(private readonly path: string = defaultUsageCachePath()) {}
 
@@ -80,8 +93,9 @@ export class FileUsageCache {
 export interface CachingUsageOptions {
   now?: () => number;
   /**
-   * Stable identity of the account's current credential (see
-   * {@link vaultIdentityResolver}). Without it entries key on the id alone.
+   * Stable identity of the account's current credential. Defaults to
+   * {@link defaultVaultIdentity}; override only to point at a vault that is
+   * not the one under SWISSCODE_HOME (or, in tests, at a fixed identity).
    */
   accountIdentity?: (accountId: string) => Promise<string | undefined>;
 }
@@ -103,10 +117,11 @@ export class CachingUsageClient implements UsageClient {
   }
 
   private async key(accountId: string): Promise<string> {
-    if (!this.options.accountIdentity) return usageCacheKey(accountId);
+    const resolve = this.options.accountIdentity ?? defaultVaultIdentity;
     // An identity we cannot resolve degrades to the id-only key rather than
-    // failing a usage read.
-    const identity = await this.options.accountIdentity(accountId).catch(() => undefined);
+    // failing a usage read: it means the vault has no credential for this id,
+    // so there is no second login whose numbers could be confused with it.
+    const identity = await resolve(accountId).catch(() => undefined);
     return usageCacheKey(accountId, identity);
   }
 
