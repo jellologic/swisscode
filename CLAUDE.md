@@ -103,10 +103,12 @@ npm run typecheck --workspaces --if-present
 
 All paths root at `SWISSCODE_HOME` or `~/.swisscode`: `profiles.json`,
 `subscriptions/<id>.json` (0600, dir 0700), `accounts/<provider>/<id>.json` (0600),
-`custom-providers.json` (0600), `proxy-traffic.jsonl`, `usage-cache.json`,
+`custom-providers.json` (0600), `proxy-token` (0600), `proxy-traffic.jsonl`, `usage-cache.json`,
 `model-catalog-cache.json` (6h TTL). Net: `SWISSCODE_PROXY_PORT` (else 8123);
 `SWISSCODE_TRAFFIC_KEEP` (default 200, 0 disables), `SWISSCODE_TRAFFIC_BODY_BYTES`
-(default unlimited), `SWISSCODE_LOG_BODY_BYTES` (default 8192). Display masking:
-CLI `redact()` blanks `/TOKEN|KEY|SECRET/` except `swisscode-profile/` tags;
+(default 64 KiB, 0 = unlimited), `SWISSCODE_LOG_BODY_BYTES` (default 8192). Display masking:
+CLI/web use core `redactEnv` (masks by secret *value* plus `/TOKEN|KEY|SECRET|PASS|CRED|AUTH/` names, never `swisscode-profile/` tags);
 `maskSecret` shows `first4…last2`; traffic entries never carry headers/tokens.
+Proxy control routes (`/__swisscode/*`) require the `x-swisscode-token` header
+matching the per-run token in `proxy-token`.
 Account validation never throws — failure is `AccountValidation{ok:false}` data.

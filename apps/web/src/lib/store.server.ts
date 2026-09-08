@@ -13,7 +13,7 @@ import {
   FileModelCatalogCache,
   FileProfileRepository,
   FileProviderAccountRepository,
-  liveResyncHook,
+  freshVaultCredential,
   FileUsageCache,
   OpenRouterAccountValidator,
   OpenRouterModelCatalog,
@@ -36,7 +36,6 @@ import {
 } from "@swisscode/adapters";
 import {
   collectSecretValues,
-  ensureFreshCredential,
   isRecordId,
   redactEnv,
   resolveLaunchSpec,
@@ -90,8 +89,6 @@ const profiles = new FileProfileRepository(defaultProfilesPath());
 const vault = new FileAccountRepository();
 const activeStore = new ClaudeActiveCredentialStore();
 const oauth = new AnthropicOAuthClient();
-/** Adopt Claude Code's live lineage when the vault refresh token rotated away. */
-const resync = liveResyncHook({ accounts: vault, oauth, live: activeStore });
 const usageApi = new AnthropicUsageClient();
 const usageClient = new CachingUsageClient(usageApi, new FileUsageCache());
 const providerAccounts = new FileProviderAccountRepository();
@@ -410,8 +407,10 @@ export async function getUsage(ids?: string[]): Promise<UsageResult[]> {
   const out: UsageResult[] = [];
   for (const accountId of targets) {
     try {
-      const { credential } = await ensureFreshCredential(vault, oauth, accountId, {
-        onInvalidGrant: resync,
+      // freshVaultCredential: single-flight + cross-process lock, adopts Claude
+      // Code's live lineage, mirrors a shared-lineage rotation back to it.
+      const { credential } = await freshVaultCredential(vault, oauth, accountId, {
+        liveStore: activeStore,
       });
       out.push({ usage: await usageClient.fetchUsage(accountId, credential.accessToken) });
     } catch (err) {
@@ -461,13 +460,15 @@ async function otherClaudeSessionCount(): Promise<number> {
 export async function switchSubscriptionAccount(id: string, force = false): Promise<SwitchResult> {
   const account = await vault.get(id);
   if (!account) throw new Error(`Unknown subscription account "${id}"`);
-  const { credential, refreshed } = await ensureFreshCredential(vault, oauth, id, {
-    onInvalidGrant: resync,
-  });
+  // Ask about other sessions BEFORE touching the token: a refresh spends a
+  // single-use rotation, and a refused switch must not have spent it.
   const otherSessions = await otherClaudeSessionCount();
   if (!force && otherSessions > 0) {
     return { switched: false, needsConfirm: true, otherSessions };
   }
+  const { credential, refreshed } = await freshVaultCredential(vault, oauth, id, {
+    liveStore: activeStore,
+  });
   const before = await activeStore.readActive();
   await activeStore.writeActive(credential);
   return { switched: true, otherSessions, backend: before.backend, refreshed };

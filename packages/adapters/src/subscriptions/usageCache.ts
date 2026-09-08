@@ -9,10 +9,13 @@
 //   web UI at once. Writes go through writeJsonAtomic (no torn file), and the
 //   read-modify-write is serialized per path so a concurrent `set` — even from
 //   another FileUsageCache instance — cannot drop an entry it never saw.
-// - Entries are keyed by account id AND credential identity, by default and
-//   without the caller opting in. Deleting an account and re-importing a
-//   DIFFERENT login under the same id would otherwise show the previous
-//   login's utilization as if it were live.
+// - Entries are keyed by account id AND login identity (the email recorded at
+//   import), by default and without the caller opting in. Deleting an account
+//   and re-importing a DIFFERENT login under the same id would otherwise show
+//   the previous login's utilization as if it were live. The refresh token is
+//   deliberately NOT the identity: it rotates on every refresh, which would
+//   drop the last-good snapshot and the 429 cooldown each time and leave one
+//   orphaned entry per rotation.
 
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -20,7 +23,6 @@ import type { AccountRepository, AccountUsage, UsageClient } from "@swisscode/co
 import { isRecord } from "@swisscode/core";
 import { readJsonFile, withStoreLock, writeJsonAtomic } from "../store/atomicJson.js";
 import { FileAccountRepository, defaultSubscriptionsDir } from "./accountVault.js";
-import { credentialIdentity } from "./identity.js";
 import { UsageError } from "./anthropic.js";
 
 export interface UsageCacheEntry {
@@ -42,14 +44,25 @@ export function usageCacheKey(accountId: string, identity?: string): string {
   return identity ? `${accountId}#${identity}` : accountId;
 }
 
-/** Identity resolver over the vault, for {@link CachingUsageOptions}. */
+/**
+ * Identity resolver over the vault, for {@link CachingUsageOptions}: the login
+ * email the account was imported with. Stable across token rotation, different
+ * for a different login re-imported under the same id. An account with no
+ * recorded email degrades to the id-only key.
+ */
 export function vaultIdentityResolver(
   accounts: AccountRepository,
 ): (accountId: string) => Promise<string | undefined> {
   return async (accountId: string) => {
-    const credential = await accounts.loadCredential(accountId).catch(() => undefined);
-    return credential ? credentialIdentity(credential) : undefined;
+    const account = await accounts.get(accountId).catch(() => undefined);
+    const email = account?.email?.trim().toLowerCase();
+    return email ? `email:${email}` : undefined;
   };
+}
+
+/** Account id part of a cache key (`id` or `id#identity`). */
+function keyAccountId(key: string): string {
+  return key.split("#", 1)[0] ?? key;
 }
 
 /**
@@ -84,6 +97,13 @@ export class FileUsageCache {
     // the same file — a per-instance promise chain would not.
     return withStoreLock(this.path, async () => {
       const all = await this.readAll();
+      // One live entry per account: a key for the same id under another
+      // identity is a previous login (or the pre-identity id-only key), and
+      // keeping it would both leak the old numbers and grow the file forever.
+      const id = keyAccountId(key);
+      for (const existing of Object.keys(all)) {
+        if (existing !== key && keyAccountId(existing) === id) delete all[existing];
+      }
       all[key] = entry;
       await writeJsonAtomic(this.path, all);
     });
