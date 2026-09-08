@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    name: build · test · typecheck (node ${{ matrix.node }}, ${{ matrix.os }})
+    name: test · node ${{ matrix.node }} · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
