@@ -7,25 +7,43 @@
 
 import { spawn } from "node:child_process";
 import {
+  FileCustomProviderStore,
   FileProfileRepository,
   createAgentRegistry,
   createProviderRegistry,
   defaultProfilesPath,
+  loadCustomProviderPorts,
 } from "@swisscode/adapters";
-import { ProfileError, resolveLaunchSpec } from "@swisscode/core";
+import { ProfileError, resolveLaunchSpec, resolveProviderConfig } from "@swisscode/core";
+import { activateAccount, cmdAccounts } from "./accounts.js";
+import { cmdProxy, ensureProxyAccount } from "./proxy.js";
+import {
+  FileProviderAccountRepository,
+  proxyBaseUrl,
+  proxyPort,
+} from "@swisscode/adapters";
 
 const agents = createAgentRegistry();
-const providers = createProviderRegistry();
 const repo = new FileProfileRepository(defaultProfilesPath());
+
+/** Registry = built-ins + stored customs (cached per process). */
+let registryPromise: Promise<ReturnType<typeof createProviderRegistry>> | undefined;
+async function providerRegistry() {
+  registryPromise ??= (async () =>
+    createProviderRegistry(await loadCustomProviderPorts(new FileCustomProviderStore())))();
+  return registryPromise;
+}
 
 function help(): string {
   return [
     "swisscode — launch coding agents with the right env vars",
     "",
     "Usage:",
-    "  swisscode <profileName> [--dry-run] [-- extra args...]",
+    "  swisscode <profileName> [--dry-run] [--force] [-- extra args...]",
     "  swisscode list",
     "  swisscode show <profileName>",
+    "  swisscode accounts <import|list|usage|use|remove> ...",
+    "  swisscode proxy <run|use|status> ...",
     "",
     "Profiles live in ~/.swisscode/profiles.json (or $SWISSCODE_HOME).",
     "Create them in the TanStack Start UI or by editing that file.",
@@ -58,20 +76,50 @@ async function cmdShow(name: string): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  const spec = resolveLaunchSpec(agents, providers, profile);
+  const spec = resolveLaunchSpec(agents, await providerRegistry(), profile);
   console.log(JSON.stringify({ profile, launch: { ...spec, env: redact(spec.env) } }, null, 2));
 }
 
-async function cmdLaunch(name: string, extraArgs: string[], dryRun: boolean): Promise<void> {
-  const profile = await repo.get(name);
-  if (!profile) {
+async function cmdLaunch(
+  name: string,
+  extraArgs: string[],
+  dryRun: boolean,
+  force: boolean,
+): Promise<void> {
+  const stored = await repo.get(name);
+  if (!stored) {
     console.error(`Unknown profile "${name}". Run \`swisscode list\` to see profiles.`);
     process.exitCode = 1;
     return;
   }
+  // Generic provider account reference: merge stored config under inline config.
+  let profile = stored;
+  if (stored.providerAccountId) {
+    const accountStore = new FileProviderAccountRepository();
+    const account = await accountStore.get(stored.providerId, stored.providerAccountId);
+    try {
+      profile = resolveProviderConfig(stored, () => account ?? undefined);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exitCode = 1;
+      return;
+    }
+  }
+  // Subscription account binding: activate before resolving the launch.
+  // Dry-run never touches the active credential store or the proxy.
+  const useProxy = profile.providerId === "claude-subscription" && profile.useProxy === true;
+  if (profile.providerId === "claude-subscription" && profile.subscriptionAccountId && !dryRun) {
+    if (useProxy) {
+      const ok = await ensureProxyAccount(profile.subscriptionAccountId, proxyPort());
+      if (!ok) return;
+    } else {
+      const ok = await activateAccount(profile.subscriptionAccountId, force);
+      if (!ok) return;
+    }
+  }
   let spec;
   try {
-    spec = resolveLaunchSpec(agents, providers, profile);
+    spec = resolveLaunchSpec(agents, await providerRegistry(), profile);
   } catch (err) {
     if (err instanceof ProfileError) {
       console.error(`Invalid profile "${name}": ${err.message}`);
@@ -81,13 +129,16 @@ async function cmdLaunch(name: string, extraArgs: string[], dryRun: boolean): Pr
     throw err;
   }
   const args = [...spec.args, ...extraArgs];
+  const env = useProxy
+    ? { ...spec.env, ANTHROPIC_BASE_URL: proxyBaseUrl() }
+    : spec.env;
   if (dryRun) {
-    console.log(JSON.stringify({ command: spec.command, args, env: redact(spec.env) }, null, 2));
+    console.log(JSON.stringify({ command: spec.command, args, env: redact(env) }, null, 2));
     return;
   }
   const child = spawn(spec.command, args, {
     stdio: "inherit",
-    env: { ...process.env, ...spec.env },
+    env: { ...process.env, ...env },
   });
   child.on("error", (err: Error) => {
     const e = err as NodeJS.ErrnoException;
@@ -120,14 +171,17 @@ async function main(): Promise<void> {
     }
     return cmdShow(rest[0] as string);
   }
-  // Launch path: swisscode <profile> [--dry-run] [-- extra...]
+  if (first === "accounts") return cmdAccounts(rest);
+  if (first === "proxy") return cmdProxy(rest);
+  // Launch path: swisscode <profile> [--dry-run] [--force] [-- extra...]
   const dryRun = rest.includes("--dry-run");
+  const force = rest.includes("--force");
   const dashDash = rest.indexOf("--");
   const extraArgs =
     dashDash >= 0
       ? rest.slice(dashDash + 1)
-      : rest.filter((a) => a !== "--dry-run");
-  await cmdLaunch(first as string, extraArgs, dryRun);
+      : rest.filter((a) => a !== "--dry-run" && a !== "--force");
+  await cmdLaunch(first as string, extraArgs, dryRun, force);
 }
 
 main().catch((err) => {

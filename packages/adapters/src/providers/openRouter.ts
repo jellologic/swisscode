@@ -10,6 +10,29 @@ export const openRouterProvider: ProviderPort = {
   id: "openrouter",
   displayName: "OpenRouter",
   description: "Any OpenRouter model via the Anthropic-compatible endpoint.",
+  accountCapabilities: {
+    importActive: false,
+    usageMetrics: true,
+    modelCatalog: true,
+    modelEndpoints: true,
+    switchVia: [],
+    hint: "Store API keys once, reference them from profiles.",
+  },
+  help: {
+    summary:
+      "Any OpenRouter model through the Anthropic-compatible endpoint. Store the key once, pick models from the live catalog.",
+    setup: [
+      "Create a key at openrouter.ai/keys.",
+      "On /accounts, add an OpenRouter account with the key.",
+      "Pick a default model from the catalog suggestions (search, sort, compare serving providers).",
+      "Create a profile with the OpenRouter provider and launch it.",
+    ],
+    commands: [
+      "swisscode accounts --provider openrouter models",
+      "swisscode accounts --provider openrouter usage",
+    ],
+    links: [{ label: "OpenRouter keys", href: "https://openrouter.ai/keys" }],
+  },
   fields: [
     {
       key: "apiKey",

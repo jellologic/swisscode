@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Card, Code, Muted, Page, Stack } from "../design";
 import { catalogFn } from "../lib/functions";
 
 export const Route = createFileRoute("/agents")({
@@ -9,16 +10,16 @@ export const Route = createFileRoute("/agents")({
 function AgentsPage() {
   const { agents } = Route.useLoaderData();
   return (
-    <section>
-      <h1>Coding agents</h1>
-      <p className="muted">Agent plugins know how to launch a CLI with provider env vars.</p>
-      {agents.map((a) => (
-        <article key={a.id} className="card">
-          <h2>{a.displayName} <code>{a.id}</code></h2>
-          <p>{a.description}</p>
-          <p className="muted">Command: <code>{a.command} {a.defaultArgs.join(" ")}</code></p>
-        </article>
-      ))}
-    </section>
+    <Page title="Coding agents" sub="Agent plugins know how to launch a CLI with provider env vars.">
+      <Stack>
+        {agents.map((a) => (
+          <Card key={a.id}>
+            <h2>{a.displayName} <Code>{a.id}</Code></h2>
+            <p>{a.description}</p>
+            <p><Muted>Command: <Code>{a.command}{a.defaultArgs.length > 0 ? ` ${a.defaultArgs.join(" ")}` : ""}</Code></Muted></p>
+          </Card>
+        ))}
+      </Stack>
+    </Page>
   );
 }

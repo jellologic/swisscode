@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   resolveLaunchSpec,
+  resolveProviderConfig,
   type AgentRegistry,
   type Profile,
   type ProviderRegistry,
@@ -35,6 +36,7 @@ const providers: ProviderRegistry = {
           displayName: "OpenRouter",
           description: "",
           fields: [{ key: "apiKey", label: "API Key", secret: true, required: true }],
+          accountCapabilities: { importActive: false, usageMetrics: false, switchVia: [] },
           buildEnv: (config) => ({
             ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
             ANTHROPIC_AUTH_TOKEN: config?.["apiKey"] ?? "",
@@ -76,6 +78,37 @@ describe("resolveLaunchSpec", () => {
         providerId: "openrouter",
         providerConfig: {},
       }),
+    );
+  });
+
+  it("merges a stored provider account under inline config", () => {
+    const get = (providerId: string, id: string) =>
+      providerId === "openrouter" && id === "work"
+        ? {
+            id: "work",
+            providerId: "openrouter",
+            label: "Work",
+            config: { apiKey: "stored-key", model: "stored-model" },
+            createdAt: "",
+            updatedAt: "",
+          }
+        : undefined;
+    const merged = resolveProviderConfig(
+      {
+        name: "x",
+        agentId: "claude-code",
+        providerId: "openrouter",
+        providerAccountId: "work",
+        providerConfig: { model: "inline-model" },
+      },
+      get,
+    );
+    assert.deepEqual(merged.providerConfig, { apiKey: "stored-key", model: "inline-model" });
+    assert.throws(() =>
+      resolveProviderConfig(
+        { name: "x", agentId: "claude-code", providerId: "openrouter", providerAccountId: "nope" },
+        get,
+      ),
     );
   });
 });

@@ -10,6 +10,28 @@ export interface FieldDef {
   help?: string;
 }
 
+/** One external reference from a plugin's help (docs, key pages, …). */
+export interface PluginLink {
+  label: string;
+  href: string;
+}
+
+/**
+ * Help owned by a plugin adapter — part of the port DNA. The /help page
+ * renders this verbatim, so adding an agent/provider automatically documents
+ * it. Keep steps user-actionable and commands copy-pasteable.
+ */
+export interface PluginHelp {
+  /** What this plugin is for, one paragraph. */
+  summary?: string;
+  /** Ordered setup steps shown to the user. */
+  setup?: string[];
+  /** CLI commands worth knowing, e.g. ["swisscode proxy run"]. */
+  commands?: string[];
+  /** External links. Only link pages known to exist. */
+  links?: PluginLink[];
+}
+
 /** A profile merges one coding agent with one AI provider. */
 export interface Profile {
   /** Unique profile name — this is what `swisscode <profileName>` takes. */
@@ -24,6 +46,23 @@ export interface Profile {
   providerConfig?: Record<string, string>;
   /** Optional model override passed through to the launch. */
   model?: string;
+  /**
+   * Stored subscription account id (only for providerId "claude-subscription").
+   * Omitted = use whatever Claude Code is currently logged in as.
+   */
+  subscriptionAccountId?: string;
+  /**
+   * Route this profile through the swisscode proxy (transparent switching +
+   * 429 failover) instead of swapping the shared credential file. Requires
+   * `swisscode proxy run` to be up; only meaningful with subscriptionAccountId.
+   */
+  useProxy?: boolean;
+  /**
+   * Generic stored account reference (key-based providers, e.g. OpenRouter).
+   * The account's config merges under the profile's inline providerConfig
+   * (inline fields win). Must belong to profile.providerId.
+   */
+  providerAccountId?: string;
 }
 
 /** The resolved OS-level launch plan for a profile. */

@@ -1,0 +1,86 @@
+/* Swisscode design tokens — Apple-density system type + glassmorphic surfaces.
+   Single source of truth: components consume these vars, never literals. */
+
+:root {
+  color-scheme: light dark;
+
+  /* Type */
+  --sw-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    "Segoe UI", system-ui, sans-serif;
+  --sw-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --sw-text-title: 28px;
+  --sw-text-h2: 20px;
+  --sw-text-h3: 16px;
+  --sw-text-body: 14px;
+  --sw-text-small: 12.5px;
+  --sw-weight-title: 700;
+  --sw-weight-heading: 600;
+  --sw-tracking-tight: -0.02em;
+  --sw-leading: 1.5;
+
+  /* Ink */
+  --sw-ink: #1d1d1f;
+  --sw-ink-2: #6e6e73;
+  --sw-ink-3: #a1a1a6;
+
+  /* Accent (royal blue, sourcexyz cue) */
+  --sw-accent: #3b6bf6;
+  --sw-accent-ink: #ffffff;
+  --sw-accent-soft: rgba(59, 107, 246, 0.12);
+
+  /* Tones */
+  --sw-success: #1a9e54;
+  --sw-warn: #b7791f;
+  --sw-danger: #d70015;
+
+  /* Glass surface */
+  --sw-glass: rgba(255, 255, 255, 0.62);
+  --sw-glass-strong: rgba(255, 255, 255, 0.8);
+  --sw-glass-hi: rgba(255, 255, 255, 0.75);
+  --sw-hairline: rgba(0, 0, 0, 0.08);
+  --sw-blur: blur(22px) saturate(1.6);
+  --sw-shadow: 0 8px 28px rgba(20, 30, 80, 0.1), 0 1px 0 rgba(255, 255, 255, 0.6) inset;
+  --sw-shadow-sm: 0 2px 10px rgba(20, 30, 80, 0.08);
+
+  /* Shape + space */
+  --sw-radius-lg: 20px;
+  --sw-radius-md: 14px;
+  --sw-radius-sm: 10px;
+  --sw-space-1: 4px;
+  --sw-space-2: 8px;
+  --sw-space-3: 12px;
+  --sw-space-4: 16px;
+  --sw-space-5: 24px;
+  --sw-space-6: 32px;
+
+  /* Controls */
+  --sw-control-bg: rgba(255, 255, 255, 0.7);
+  --sw-page-bg:
+    radial-gradient(1100px 500px at 85% -10%, rgba(59, 107, 246, 0.14), transparent 60%),
+    radial-gradient(900px 480px at -10% 0%, rgba(125, 211, 252, 0.16), transparent 55%),
+    #f5f5f7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sw-ink: #f5f5f7;
+    --sw-ink-2: #a1a1a6;
+    --sw-ink-3: #6e6e73;
+    --sw-accent: #5b8cff;
+    --sw-accent-soft: rgba(91, 140, 255, 0.18);
+    --sw-success: #34d17b;
+    --sw-warn: #e5a83b;
+    --sw-danger: #ff6961;
+    --sw-glass: rgba(28, 28, 32, 0.55);
+    --sw-glass-strong: rgba(36, 36, 40, 0.72);
+    --sw-glass-hi: rgba(255, 255, 255, 0.1);
+    --sw-hairline: rgba(255, 255, 255, 0.12);
+    --sw-shadow: 0 12px 34px rgba(0, 0, 0, 0.42), 0 1px 0 rgba(255, 255, 255, 0.08) inset;
+    --sw-shadow-sm: 0 2px 12px rgba(0, 0, 0, 0.4);
+    --sw-control-bg: rgba(255, 255, 255, 0.08);
+    --sw-page-bg:
+      radial-gradient(1100px 500px at 85% -10%, rgba(59, 107, 246, 0.22), transparent 60%),
+      radial-gradient(900px 480px at -10% 0%, rgba(56, 120, 200, 0.16), transparent 55%),
+      #0b0b0e;
+  }
+}

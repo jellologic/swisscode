@@ -4,6 +4,7 @@
 
 import type { LaunchSpec, Profile } from "./domain.js";
 import type { AgentRegistry, ProviderRegistry } from "./ports.js";
+import type { ProviderAccount } from "./subscriptions.js";
 
 export class ProfileError extends Error {}
 
@@ -37,6 +38,28 @@ export function validateProviderConfig(
       `Provider "${provider.id}" is missing required config: ${missing.join(", ")}`,
     );
   }
+}
+
+/**
+ * Merge a stored generic account under the profile's inline providerConfig
+ * (inline fields win). Returns a profile ready for resolveLaunchSpec.
+ * Throws ProfileError when the reference is missing or belongs to another provider.
+ */
+export function resolveProviderConfig(
+  profile: Profile,
+  getAccount: (providerId: string, id: string) => ProviderAccount | undefined,
+): Profile {
+  if (!profile.providerAccountId) return profile;
+  const account = getAccount(profile.providerId, profile.providerAccountId);
+  if (!account) {
+    throw new ProfileError(
+      `Unknown ${profile.providerId} account "${profile.providerAccountId}"`,
+    );
+  }
+  return {
+    ...profile,
+    providerConfig: { ...account.config, ...profile.providerConfig },
+  };
 }
 
 /**
