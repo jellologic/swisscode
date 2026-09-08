@@ -40,9 +40,9 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "build": "npm run build --if-present -w packages/core -w packages/adapters -w apps/cli -w apps/web",
+    "test": "npm run test --if-present -w packages/core -w packages/adapters -w apps/cli -w apps/web",
+    "typecheck": "npm run typecheck --if-present -w packages/core -w packages/adapters -w apps/cli -w apps/web"
   },
   "devDependencies": {
     "@types/node": "^26.5.0",
