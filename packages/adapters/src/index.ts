@@ -22,6 +22,8 @@ export {
   defaultCustomProvidersPath,
   loadCustomProviderPorts,
 } from "./store/customProviders.js";
+export { readJsonFile, writeFileAtomic, writeJsonAtomic } from "./store/atomicJson.js";
+export type { ReadJsonResult, WriteAtomicOptions } from "./store/atomicJson.js";
 export { createBundleRegistry } from "./store/configBundle.js";
 export type { BundleRegistry, BundleStoreDeps, ImportBundleOptions } from "./store/configBundle.js";
 export { ModelCatalogError, OpenRouterModelCatalog } from "./providers/openRouterModels.js";
@@ -41,6 +43,8 @@ export type {
 } from "./providers/modelCatalogCache.js";
 export { credentialIdentity, findAccountByCredential } from "./subscriptions/identity.js";
 export { liveResyncHook, resyncSubscriptionCredential } from "./subscriptions/liveResync.js";
+export { freshVaultCredential } from "./subscriptions/freshCredential.js";
+export type { FreshVaultCredentialOptions } from "./subscriptions/freshCredential.js";
 export type { LiveResyncDeps } from "./subscriptions/liveResync.js";
 export { CachingUsageClient, FileUsageCache, defaultUsageCachePath } from "./subscriptions/usageCache.js";
 export type { CachingUsageOptions, UsageCacheEntry } from "./subscriptions/usageCache.js";
@@ -58,6 +62,12 @@ export {
   OAUTH_CLIENT_ID,
 } from "./subscriptions/anthropic.js";
 export type { AnthropicOptions } from "./subscriptions/anthropic.js";
+export {
+  PROXY_TOKEN_HEADER,
+  createProxyToken,
+  defaultProxyTokenPath,
+  readProxyToken,
+} from "./proxy/proxyToken.js";
 export { SubscriptionProxy } from "./proxy/server.js";
 export { DEFAULT_PROXY_PORT } from "./proxy/server.js";
 import { DEFAULT_PROXY_PORT } from "./proxy/server.js";

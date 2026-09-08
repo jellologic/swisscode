@@ -66,6 +66,17 @@ export type {
   TrafficToolCall,
 } from "./traffic.js";
 export type { FreshCredential, FreshCredentialOptions } from "./subscriptionService.js";
+export { DENIED_ENV_NAMES, DENIED_ENV_PREFIXES, isDeniedEnvName } from "./envPolicy.js";
+export { DEFAULT_SECRET_NAME_RE, maskSecretValue, redactEnv } from "./redact.js";
+export type { RedactEnvOptions } from "./redact.js";
+export {
+  isOAuthCredentialShape,
+  isProfileShape,
+  isProviderAccountShape,
+  isSubscriptionAccountShape,
+  isSubscriptionBackupShape,
+} from "./shapes.js";
+export { SingleFlight } from "./singleFlight.js";
 export type { CustomProviderDef, CustomProviderTest, ValidateCustomOptions } from "./customProviders.js";
 export { validateCustomProviderDef } from "./customProviders.js";
 export type {
