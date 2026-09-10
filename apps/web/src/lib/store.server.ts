@@ -55,6 +55,7 @@ import {
 import {
   collectSecretValues,
   CredentialStoreError,
+  OAuthError,
   describeModelRoute,  isRecordId,
   isNewerVersion,
   redactEnv,
@@ -75,6 +76,8 @@ import {
   type GlobalSettings,
   type ModelEndpoint,
   type ModelRouteLabels,
+  type OAuthClient,
+  type OAuthCredential,
   type PluginHelp,
   type Profile,
   type ProviderAccount,
@@ -122,6 +125,14 @@ const profiles = new FileProfileRepository(defaultProfilesPath());
 const vault = new FileAccountRepository();
 const activeStore = new ClaudeActiveCredentialStore();
 const oauth = new AnthropicOAuthClient();
+/** Test-only seam: answer refreshes without the network. */
+let oauthOverride: OAuthClient | undefined;
+export function setOAuthOverride(client: OAuthClient | undefined): void {
+  oauthOverride = client;
+}
+function oauthClient(): OAuthClient {
+  return oauthOverride ?? oauth;
+}
 const usageApi = new AnthropicUsageClient();
 const usageClient = new CachingUsageClient(usageApi, new FileUsageCache());
 const providerAccounts = new FileProviderAccountRepository();
@@ -740,9 +751,38 @@ export async function switchSubscriptionAccount(id: string, force = false): Prom
     return { switched: false, needsConfirm: true, otherSessions };
   }
   const live = liveStore();
-  const { credential, refreshed } = await freshVaultCredential(vault, oauth, id, {
-    liveStore: live,
-  });
+  // adoptLive:false — same doctrine as the CLI switch: a dead vault credential
+  // must surface as re-login-needed, never "heal" by adopting whatever login
+  // happens to be live. The adopted stranger would be written straight back
+  // and verified as a switch that never happened.
+  let credential: OAuthCredential;
+  let refreshed: boolean;
+  try {
+    ({ credential, refreshed } = await freshVaultCredential(vault, oauthClient(), id, {
+      liveStore: live,
+      adoptLive: false,
+    }));
+  } catch (err) {
+    if (err instanceof OAuthError && (err.kind === "invalid_grant" || err.kind === "no_refresh_token")) {
+      // Name what IS live so the recovery step is obvious instead of a bare
+      // refresh error. No vault or live write has happened at this point.
+      const liveState = await live.readActive().catch(() => undefined);
+      const owner = liveState?.credential
+        ? await findAccountByCredential(vault, liveState.credential).catch(() => null)
+        : null;
+      const accountLabel = account.label ?? id;
+      return {
+        otherSessions,
+        switched: false,
+        verified: false,
+        warning:
+          owner && owner.id !== id
+            ? `Cannot switch: ${err.message} Claude Code is currently on "${owner.label ?? owner.id}" — switch to it instead, or log in as "${accountLabel}" (claude login), re-import it, and retry.`
+            : `Cannot switch: ${err.message} The live login could not be confirmed as "${accountLabel}". If Claude Code is already on this account, re-import it (swisscode accounts import ${id} --force) to heal the vault and retry; otherwise claude login as the right account first.`,
+      };
+    }
+    throw err;
+  }
   const before = await live.readActive();
   const beforeIdentity = before.credential ? credentialIdentity(before.credential) : null;
   const want = credentialIdentity(credential);

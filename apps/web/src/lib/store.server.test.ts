@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { maskSecretValue } from "@swisscode/core";
+import { maskSecretValue, OAuthError } from "@swisscode/core";
 import type { OAuthCredential } from "@swisscode/core";
 import {
   ClaudeActiveCredentialStore,
@@ -176,6 +176,7 @@ describe("switchSubscriptionAccount verify", () => {
   afterEach(() => {
     store.setActiveStoreOverride(undefined);
     store.setEmailLookupOverride(undefined);
+    store.setOAuthOverride(undefined);
   });
 
   const oldCred: OAuthCredential = {
@@ -285,6 +286,44 @@ describe("switchSubscriptionAccount verify", () => {
     assert.equal(result.verified, true);
     assert.equal(result.verifiedEmail, "new@example.com");
     assert.match(result.warning ?? "", /No Keychain item/);
+  });
+
+  it("refuses stranger adoption: dead vault credential plus live stranger warns, never switches", async () => {
+    // The switch-that-wasn't, web path: the vault copy for "gamma" is dead and
+    // the live login belongs to nobody in the vault. Adopting it would persist
+    // the stranger into this slot and toast a switch that never happened.
+    const repo = new FileAccountRepository(join(home, "subscriptions"));
+    const now = new Date().toISOString();
+    await repo.save(
+      { id: "gamma", label: "Gamma", email: "gamma@example.com", createdAt: now, updatedAt: now },
+      { accessToken: "gamma-old", refreshToken: "gamma-dead-rt", expiresAt: Date.now() - 1000 },
+    );
+    const stranger: OAuthCredential = {
+      accessToken: "stranger-access",
+      refreshToken: "stranger-rt",
+      expiresAt: Date.now() + 3_600_000,
+    };
+    const active = new ClaudeActiveCredentialStore({
+      configHome: await scratchHome(),
+      keychain: false,
+    });
+    await active.writeActive(stranger);
+    store.setActiveStoreOverride(active);
+    store.setOAuthOverride({
+      refresh: async () => {
+        throw new OAuthError("invalid_grant", "rejected");
+      },
+    });
+
+    const result = await store.switchSubscriptionAccount("gamma", true);
+
+    assert.equal(result.switched, false);
+    assert.equal(result.verified ?? false, false);
+    assert.match(result.warning ?? "", /could not be confirmed/);
+    // Vault untouched: the dead lineage is still there, not the stranger.
+    assert.equal((await repo.loadCredential("gamma"))?.refreshToken, "gamma-dead-rt");
+    // Live store untouched too — nothing was written back over it.
+    assert.equal((await active.readActive()).credential?.refreshToken, "stranger-rt");
   });
 });
 
