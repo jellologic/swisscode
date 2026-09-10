@@ -23,7 +23,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         node: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -39,7 +39,7 @@ jobs:
     name: bun
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: bun install
       - run: bun test packages/core/src packages/adapters/src apps/cli/src apps/web/src
