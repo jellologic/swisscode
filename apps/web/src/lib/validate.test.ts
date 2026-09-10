@@ -193,14 +193,18 @@ describe("model and custom-provider input", () => {
 });
 
 describe("parseGlobalSettings", () => {
-  it("takes the whole pair, either strategy", () => {
+  it("takes the whole record, defaulting a missing update mode to auto", () => {
     assert.deepEqual(
       parseGlobalSettings({ rotationEnabled: true, rotationStrategy: "reset-soonest" }),
-      { rotationEnabled: true, rotationStrategy: "reset-soonest" },
+      { rotationEnabled: true, rotationStrategy: "reset-soonest", updateMode: "auto" },
     );
     assert.deepEqual(
-      parseGlobalSettings({ rotationEnabled: false, rotationStrategy: "least-used" }),
-      { rotationEnabled: false, rotationStrategy: "least-used" },
+      parseGlobalSettings({
+        rotationEnabled: false,
+        rotationStrategy: "least-used",
+        updateMode: "notify-only",
+      }),
+      { rotationEnabled: false, rotationStrategy: "least-used", updateMode: "notify-only" },
     );
   });
 
@@ -214,6 +218,15 @@ describe("parseGlobalSettings", () => {
     rejects(
       () => parseGlobalSettings({ rotationEnabled: "yes", rotationStrategy: "reset-soonest" }),
       "rotationEnabled",
+    );
+    rejects(
+      () =>
+        parseGlobalSettings({
+          rotationEnabled: true,
+          rotationStrategy: "reset-soonest",
+          updateMode: "sometimes",
+        }),
+      "updateMode",
     );
     rejects(() => parseGlobalSettings(null), "data");
   });

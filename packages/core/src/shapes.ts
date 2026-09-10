@@ -204,14 +204,16 @@ export function isSubscriptionBackupShape(x: unknown): x is SubscriptionBackup {
 }
 
 /**
- * Structural only: the enable flag plus a strategy from the closed enum. Extra
- * fields are tolerated (settings grow over time); wrong types fall back to
+ * Structural only: the enable flag plus a strategy from the closed enum, plus
+ * an update mode from its closed enum. Extra fields are tolerated (settings
+ * grow over time); a missing updateMode is valid (pre-update-mode files read
+ * as auto at get() time); wrong types fall back to
  * DEFAULT_GLOBAL_SETTINGS at read time and fail the import record.
  */
 export function isGlobalSettingsShape(x: unknown): x is GlobalSettings {
   if (!isRecord(x)) return false;
-  return (
-    typeof x["rotationEnabled"] === "boolean" &&
-    (x["rotationStrategy"] === "reset-soonest" || x["rotationStrategy"] === "least-used")
-  );
+  if (typeof x["rotationEnabled"] !== "boolean") return false;
+  if (x["rotationStrategy"] !== "reset-soonest" && x["rotationStrategy"] !== "least-used") return false;
+  const mode = x["updateMode"];
+  return mode === undefined || mode === "off" || mode === "notify-only" || mode === "auto";
 }

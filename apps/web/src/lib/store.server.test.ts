@@ -5,7 +5,7 @@
 
 import { after, afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { maskSecretValue } from "@swisscode/core";
@@ -115,20 +115,34 @@ describe("globalSettings", () => {
     assert.deepEqual(await store.getGlobalSettings(), {
       rotationEnabled: false,
       rotationStrategy: "reset-soonest",
+      updateMode: "auto",
     });
   });
 
   it("round-trips a save", async () => {
-    await store.saveGlobalSettings({ rotationEnabled: true, rotationStrategy: "least-used" });
+    await store.saveGlobalSettings({
+      rotationEnabled: true,
+      rotationStrategy: "least-used",
+      updateMode: "notify-only",
+    });
     assert.deepEqual(await store.getGlobalSettings(), {
       rotationEnabled: true,
       rotationStrategy: "least-used",
+      updateMode: "notify-only",
     });
-    await store.saveGlobalSettings({ rotationEnabled: false, rotationStrategy: "reset-soonest" });
+    await store.saveGlobalSettings({
+      rotationEnabled: false,
+      rotationStrategy: "reset-soonest",
+      updateMode: "auto",
+    });
   });
 
   it("counts settings in the bundle inventory", async () => {
-    await store.saveGlobalSettings({ rotationEnabled: false, rotationStrategy: "reset-soonest" });
+    await store.saveGlobalSettings({
+      rotationEnabled: false,
+      rotationStrategy: "reset-soonest",
+      updateMode: "auto",
+    });
     const inventory = await store.getBundleInventory();
     assert.equal(inventory["settings"], 1);
   });
@@ -271,5 +285,65 @@ describe("switchSubscriptionAccount verify", () => {
     assert.equal(result.verified, true);
     assert.equal(result.verifiedEmail, "new@example.com");
     assert.match(result.warning ?? "", /No Keychain item/);
+  });
+});
+
+describe("updateStatus", () => {
+  const cachePath = join(home, "update-check.json");
+
+  afterEach(async () => {
+    await rm(cachePath, { force: true });
+    await store.saveGlobalSettings({
+      rotationEnabled: false,
+      rotationStrategy: "reset-soonest",
+      updateMode: "auto",
+    });
+  });
+
+  it("reports the build-time version, dev under plain tsc", async () => {
+    // Vite bakes __SWISSCODE_VERSION__ for the real UI; the dist-test build
+    // has no define pass, so the fallback names itself.
+    assert.deepEqual(store.getVersion(), { version: "dev" });
+  });
+
+  it("reads no update when no check has ever run", async () => {
+    assert.deepEqual(await store.getUpdateStatus(), {
+      current: "dev",
+      latest: null,
+      updateAvailable: false,
+      updateMode: "auto",
+    });
+  });
+
+  it("surfaces a cached newer release without ever fetching", async () => {
+    await writeFile(cachePath, JSON.stringify({ checkedAt: Date.now(), latest: "9.9.9" }), "utf8");
+    const status = await store.getUpdateStatus();
+    assert.equal(status.latest, "9.9.9");
+    // The dev fallback cannot name its version, so it never claims newer —
+    // the same guard that keeps unparseable currents quiet in production.
+    assert.equal(status.updateAvailable, false);
+    assert.equal(status.updateMode, "auto");
+  });
+
+  it("honors the off mode over a cached newer release", async () => {
+    await store.saveGlobalSettings({
+      rotationEnabled: false,
+      rotationStrategy: "reset-soonest",
+      updateMode: "off",
+    });
+    await writeFile(cachePath, JSON.stringify({ checkedAt: Date.now(), latest: "9.9.9" }), "utf8");
+    const status = await store.getUpdateStatus();
+    assert.equal(status.latest, "9.9.9");
+    assert.equal(status.updateAvailable, false);
+    assert.equal(status.updateMode, "off");
+  });
+
+  it("degrades torn and misshapen caches to no update", async () => {
+    for (const body of ["not json{{{", "{}", "[]", `{"checkedAt":${Date.now()}}`]) {
+      await writeFile(cachePath, body, "utf8");
+      const status = await store.getUpdateStatus();
+      assert.equal(status.latest, null, body);
+      assert.equal(status.updateAvailable, false, body);
+    }
   });
 });

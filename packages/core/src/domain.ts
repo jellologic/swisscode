@@ -212,6 +212,9 @@ export interface LaunchSpec {
 /** How the proxy's background rotation poller picks the next active account. */
 export type RotationStrategy = "reset-soonest" | "least-used";
 
+/** How swisscode reacts when a newer release exists on the registry. */
+export type UpdateMode = "off" | "notify-only" | "auto";
+
 /**
  * Global (home-level) runtime settings: one record for the whole home, not
  * per-profile. Persisted as `<base>/settings.json`, backed up as the bundle's
@@ -222,10 +225,13 @@ export interface GlobalSettings {
   /** Background subscription health check + auto-rollover. Off by default. */
   rotationEnabled: boolean;
   rotationStrategy: RotationStrategy;
+  /** Self-update behavior. Auto by default so installs stay current. */
+  updateMode: UpdateMode;
 }
 
 /** Cold-start defaults: rotation stays off until the user opts in. */
 export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
   rotationEnabled: false,
   rotationStrategy: "reset-soonest",
+  updateMode: "auto",
 };

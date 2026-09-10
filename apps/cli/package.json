@@ -37,17 +37,28 @@
   },
   "files": [
     "dist",
+    "web",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run bundle",
-    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/bundle.js --sourcemap --log-level=warning",
-    "prepack": "cp ../../README.md ./README.md && cp ../../LICENSE ./LICENSE",
+    "build": "tsc -p tsconfig.json && npm run bundle && npm run build:web-embed",
+    "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/bundle.js --sourcemap --log-level=warning --define:SWISSCODE_VERSION=\"\\\"$npm_package_version\\\"\"",
+    "build:web-embed": "npm run build -w @swisscode/web -w @swisscode/adapters -w @swisscode/core && rm -rf web && mkdir -p web/dist && cp ../web/server.mjs web/ && esbuild ../web/hostGuard.mjs --bundle --platform=node --format=esm --outfile=web/hostGuard.mjs --log-level=warning --banner:js=\"// Bundled from apps/web/hostGuard.mjs: the @swisscode/adapters import is inlined (workspace packages are not published).\" && cp -r ../web/dist/client web/dist/client && cp -r ../web/dist/server web/dist/server",
+    "prepack": "cp ../../README.md ./README.md && cp ../../LICENSE ./LICENSE && npm run build:web-embed",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsc -p tsconfig.json && node --test dist/*.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@tanstack/history": "1.162.2",
+    "@tanstack/react-router": "1.170.33",
+    "@tanstack/router-core": "1.171.28",
+    "h3-v2": "npm:h3@2.0.1-rc.20",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "seroval": "1.6.5",
+    "sonner": "2.0.8"
+  },
   "devDependencies": {
     "esbuild": "^0.28.2"
   }

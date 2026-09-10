@@ -2,8 +2,24 @@ import { Outlet, createRootRoute, HeadContent, Scripts } from "@tanstack/react-r
 import "../design/tokens.css";
 import "../design/components.css";
 import { Button, Card, Code, Muted, Notice, Page, RowActions, Stack, ToastHost, Topbar } from "../design";
+import { updateStatusFn, versionFn } from "../lib/functions";
 
 export const Route = createRootRoute({
+  // Version + update badge data: each failure degrades independently (no
+  // badge / no warn state), never a crash page.
+  loader: async () => {
+    const [version, update] = await Promise.all([
+      versionFn().catch(() => ({ version: "" })),
+      updateStatusFn().catch(
+        () => ({ updateAvailable: false as const, latest: null as string | null }),
+      ),
+    ]);
+    return {
+      version: version.version,
+      updateAvailable: update.updateAvailable,
+      latest: update.latest,
+    };
+  },
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -68,6 +84,7 @@ function NotFound() {
 }
 
 function RootComponent() {
+  const { version, updateAvailable } = Route.useLoaderData();
   return (
     <html lang="en">
       <head>
@@ -76,6 +93,8 @@ function RootComponent() {
       <body>
         <Topbar
           brand="swisscode"
+          version={version || undefined}
+          updateAvailable={updateAvailable}
           links={[
             { to: "/", label: "Home", exact: true },
             { to: "/profiles", label: "Profiles" },

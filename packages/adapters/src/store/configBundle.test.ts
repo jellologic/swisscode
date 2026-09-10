@@ -89,13 +89,14 @@ describe("config bundle carries the new profile fields", () => {
 });
 
 describe("config bundle carries the global settings record", () => {
-  const settings = { rotationEnabled: true, rotationStrategy: "least-used" } as const;
+  const settings = { rotationEnabled: true, rotationStrategy: "least-used", updateMode: "auto" } as const;
 
   it("export always writes settings; import restores them onto a fresh home", async () => {
     const src = await registry();
     assert.deepEqual((await src.exportBundle(true)).settings, {
       rotationEnabled: false,
       rotationStrategy: "reset-soonest",
+      updateMode: "auto",
     });
     const dst = await registry();
     const results = await dst.importBundle(
@@ -144,6 +145,7 @@ describe("config bundle carries the global settings record", () => {
     assert.deepEqual((await dst.exportBundle(true)).settings, {
       rotationEnabled: false,
       rotationStrategy: "reset-soonest",
+      updateMode: "auto",
     });
     assert.equal((await dst.inventory()).settings, 0);
   });
@@ -198,6 +200,7 @@ describe("config bundle carries the global settings record", () => {
     assert.deepEqual((await dst.exportBundle(true)).settings, {
       rotationEnabled: false,
       rotationStrategy: "reset-soonest",
+      updateMode: "auto",
     });
   });
 

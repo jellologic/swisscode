@@ -10,6 +10,7 @@ export type {
   PluginLink,
   Profile,
   RotationStrategy,
+  UpdateMode,
 } from "./domain.js";
 export { DEFAULT_GLOBAL_SETTINGS } from "./domain.js";
 export type {
@@ -25,7 +26,7 @@ export type {
   ProviderUsageReader,
 } from "./ports.js";
 export { RECORD_ID_RE, RESERVED_PROFILE_NAMES } from "./service.js";
-export {
+export { isNewerVersion } from "./updateCheck.js";export {
   ProfileError,
   isRecordId,
   resolveLaunchSpec,

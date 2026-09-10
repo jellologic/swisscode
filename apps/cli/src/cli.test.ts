@@ -186,9 +186,10 @@ function runCli(
   args: string[],
   extraEnv: Record<string, string> = {},
   onSpawn?: (child: ChildProcess, stdoutSoFar: () => string) => void,
+  bin: string = CLI,
 ): Promise<RunResult> {
   return new Promise<RunResult>((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, ...args], {
+    const child = spawn(process.execPath, [bin, ...args], {
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
@@ -279,6 +280,70 @@ describe("swisscode list", () => {
     assert.ok(dsub?.includes("\tdirect"), "direct opt-outs are visible");
     const ork = result.stdout.split("\n").find((l) => l.startsWith("ork\t"));
     assert.ok(ork && !ork.includes("routes="), "unrouted profiles stay unmarked");
+  });
+});
+
+describe("swisscode version and update", () => {
+  // The published binary is the esbuild bundle (bin → dist/bundle.js): only
+  // it carries the baked SWISSCODE_VERSION, while tsc output falls back to
+  // "dev". Rebuild it here so lockstep holds even on a fresh checkout where
+  // `npm run build` never ran.
+  const BUNDLE = fileURLToPath(new URL("./bundle.js", import.meta.url));
+  before(async () => {
+    const cliDir = fileURLToPath(new URL("..", import.meta.url));
+    const built = spawnSync("npm", ["run", "bundle"], {
+      cwd: cliDir,
+      encoding: "utf8",
+      timeout: 120_000,
+    });
+    assert.equal(built.status, 0, `npm run bundle failed: ${built.stderr}`);
+  });
+
+  async function cliVersion(): Promise<string> {
+    const manifest = JSON.parse(
+      await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    ) as { version: string };
+    return manifest.version;
+  }
+
+  test("--version prints the lockstep package version", async () => {
+    const [dash, upper] = await Promise.all([
+      runCli(["--version"], {}, undefined, BUNDLE),
+      runCli(["-V"], {}, undefined, BUNDLE),
+    ]);
+    assert.equal(dash.code, 0, dash.stderr);
+    assert.equal(upper.code, 0, upper.stderr);
+    assert.equal(dash.stdout.trim(), await cliVersion());
+    assert.equal(upper.stdout.trim(), await cliVersion());
+  });
+
+  test("update --check with checks off answers locally and makes zero requests", async () => {
+    await writeJson(join(home, "settings.json"), {
+      rotationEnabled: false,
+      rotationStrategy: "reset-soonest",
+      updateMode: "off",
+    });
+    // Earlier suites share this home and may have cached a check already —
+    // snapshot the cache so this test proves *it* performs no round-trip.
+    const cacheBefore = await stat(join(home, "update-check.json")).then(
+      (s) => s.mtimeMs,
+      () => null,
+    );
+    try {
+      const result = await runCli(["update", "--check"]);
+      assert.equal(result.code, 0, result.stderr);
+      // This branch returns before checkForUpdate is on the path: the output
+      // names the off state and the cache file is byte-untouched.
+      assert.match(result.stdout, /update checks are off/);
+      assert.equal(result.stderr, "");
+      const cacheAfter = await stat(join(home, "update-check.json")).then(
+        (s) => s.mtimeMs,
+        () => null,
+      );
+      assert.equal(cacheAfter, cacheBefore);
+    } finally {
+      await rm(join(home, "settings.json"), { force: true });
+    }
   });
 });
 

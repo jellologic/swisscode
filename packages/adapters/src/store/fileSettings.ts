@@ -46,7 +46,10 @@ export class FileSettingsStore {
       return { ...DEFAULT_GLOBAL_SETTINGS };
     }
     if (!isGlobalSettingsShape(parsed)) return { ...DEFAULT_GLOBAL_SETTINGS };
-    return parsed;
+    // Pre-update-mode files pass the shape but lack the field at runtime:
+    // normalize to auto. (The guard types updateMode as present; it may not be.)
+    const legacy = parsed as Partial<GlobalSettings>;
+    return { ...parsed, updateMode: legacy.updateMode ?? "auto" };
   }
 
   async save(settings: GlobalSettings): Promise<void> {

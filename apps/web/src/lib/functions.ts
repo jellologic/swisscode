@@ -25,6 +25,8 @@ import {
   getProxyReport,
   getSessionContext,
   getUsage,
+  getUpdateStatus,
+  getVersion,
   importConfigBundle,
   validateProviderAccount,
   importAccount,
@@ -76,6 +78,17 @@ export const listProfilesFn = createServerFn({ method: "GET" }).handler(async ()
   profiles: await getProfiles(),
   storePath: storePath(),
 }));
+
+/** Running server version — feeds the Topbar badge. Never fails the page. */
+export const versionFn = createServerFn({ method: "GET" }).handler(async () => getVersion());
+
+/**
+ * Update badge data from the check cache (offline-safe, never live-fetches).
+ * Failure degrades to "no update", never a crash page.
+ */
+export const updateStatusFn = createServerFn({ method: "GET" }).handler(
+  async () => getUpdateStatus(),
+);
 
 export const catalogFn = createServerFn({ method: "GET" }).handler(async () => ({
   agents: getAgents(),

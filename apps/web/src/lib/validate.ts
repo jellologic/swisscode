@@ -298,8 +298,10 @@ export function parseSessionRef(data: unknown): { sessionId: string } {
 }
 
 /**
- * Global rotation toggle + strategy. Both fields required: a partial save
- * would silently keep a stale half, and the form always sends the whole pair.
+ * Global rotation toggle + strategy + update mode. Rotation fields are
+ * required: a partial save would silently keep a stale half, and the form
+ * always sends the whole record. updateMode is optional on the wire (old
+ * clients) and defaults to auto; any other value is rejected.
  */
 export function parseGlobalSettings(data: unknown): GlobalSettings {
   const rec = asRecord(data, "data");
@@ -307,7 +309,15 @@ export function parseGlobalSettings(data: unknown): GlobalSettings {
   if (strategy !== "reset-soonest" && strategy !== "least-used") {
     throw new InputError("rotationStrategy", 'must be "reset-soonest" or "least-used"');
   }
-  return { rotationEnabled: flag(rec["rotationEnabled"], "rotationEnabled"), rotationStrategy: strategy };
+  const mode = rec["updateMode"];
+  if (mode !== undefined && mode !== "off" && mode !== "notify-only" && mode !== "auto") {
+    throw new InputError("updateMode", 'must be "off", "notify-only" or "auto"');
+  }
+  return {
+    rotationEnabled: flag(rec["rotationEnabled"], "rotationEnabled"),
+    rotationStrategy: strategy,
+    updateMode: mode ?? "auto",
+  };
 }
 
 /** Secrets ship only when the caller asks in this request — never by default. */

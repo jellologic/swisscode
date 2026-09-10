@@ -26,7 +26,7 @@ describe("FileSettingsStore", () => {
 
   it("falls back to defaults on corrupt JSON instead of throwing", async () => {
     const { file, store: s } = await store();
-    await s.save({ rotationEnabled: true, rotationStrategy: "least-used" });
+    await s.save({ rotationEnabled: true, rotationStrategy: "least-used", updateMode: "auto" });
     await writeFile(file, '{"rotationEnabled": tru', "utf8");
     assert.equal(await s.present(), true);
     assert.deepEqual(await s.get(), DEFAULT_GLOBAL_SETTINGS);
@@ -34,14 +34,14 @@ describe("FileSettingsStore", () => {
 
   it("falls back to defaults on a shape-bad record instead of throwing", async () => {
     const { file, store: s } = await store();
-    await s.save({ rotationEnabled: true, rotationStrategy: "least-used" });
+    await s.save({ rotationEnabled: true, rotationStrategy: "least-used", updateMode: "auto" });
     await writeFile(file, '{"rotationEnabled": "yes", "rotationStrategy": "soonest"}', "utf8");
     assert.deepEqual(await s.get(), DEFAULT_GLOBAL_SETTINGS);
   });
 
   it("round-trips and writes 0600 in a 0700 dir", async () => {
     const { file, store: s } = await store();
-    const next: GlobalSettings = { rotationEnabled: true, rotationStrategy: "least-used" };
+    const next: GlobalSettings = { rotationEnabled: true, rotationStrategy: "least-used", updateMode: "auto" };
     await s.save(next);
     assert.equal(await s.present(), true);
     assert.deepEqual(await s.get(), next);
@@ -58,8 +58,8 @@ describe("FileSettingsStore", () => {
 
   it("keeps the file valid when two saves race", async () => {
     const { store: s } = await store();
-    const on: GlobalSettings = { rotationEnabled: true, rotationStrategy: "reset-soonest" };
-    const off: GlobalSettings = { rotationEnabled: false, rotationStrategy: "least-used" };
+    const on: GlobalSettings = { rotationEnabled: true, rotationStrategy: "reset-soonest", updateMode: "auto" };
+    const off: GlobalSettings = { rotationEnabled: false, rotationStrategy: "least-used", updateMode: "off" };
     await Promise.all([s.save(on), s.save(off)]);
     // Last writer wins, but either way the file parses to a valid shape.
     const got = await s.get();

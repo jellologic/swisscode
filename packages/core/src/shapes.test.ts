@@ -233,6 +233,25 @@ describe("isGlobalSettingsShape", () => {
     );
   });
 
+  it("accepts a missing updateMode and every valid mode", () => {
+    // Missing = pre-update-mode files, read as auto at get() time.
+    assert.equal(
+      isGlobalSettingsShape({ rotationEnabled: false, rotationStrategy: "reset-soonest" }),
+      true,
+    );
+    for (const updateMode of ["off", "notify-only", "auto"]) {
+      assert.equal(
+        isGlobalSettingsShape({
+          rotationEnabled: false,
+          rotationStrategy: "reset-soonest",
+          updateMode,
+        }),
+        true,
+        updateMode,
+      );
+    }
+  });
+
   it("rejects wrong types, unknown strategies, and non-objects", () => {
     for (const value of [
       null,
@@ -245,6 +264,10 @@ describe("isGlobalSettingsShape", () => {
       { rotationEnabled: "yes", rotationStrategy: "reset-soonest" },
       { rotationEnabled: false, rotationStrategy: "soonest" },
       { rotationEnabled: false, rotationStrategy: 42 },
+      // updateMode is a closed enum: anything outside it fails the record.
+      { rotationEnabled: false, rotationStrategy: "reset-soonest", updateMode: "sometimes" },
+      { rotationEnabled: false, rotationStrategy: "reset-soonest", updateMode: 42 },
+      { rotationEnabled: false, rotationStrategy: "reset-soonest", updateMode: null },
     ]) {
       assert.equal(isGlobalSettingsShape(value), false, JSON.stringify(value));
     }

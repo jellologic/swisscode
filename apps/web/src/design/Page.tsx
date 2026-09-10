@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import { Badge } from "./data.js";
 
 /** Page header: exactly one h1 per page. */
 export function Page(props: { title: string; sub?: ReactNode; children: ReactNode }) {
@@ -20,8 +21,13 @@ export interface NavLink {
   exact?: boolean;
 }
 
-/** Sticky frosted top bar. */
-export function Topbar(props: { brand: string; links: NavLink[] }) {
+/** Sticky frosted top bar. Version badge is optional: the root loader feeds it. */
+export function Topbar(props: {
+  brand: string;
+  links: NavLink[];
+  version?: string;
+  updateAvailable?: boolean;
+}) {
   return (
     <header className="sw-topbar">
       <span className="sw-brand">{props.brand}</span>
@@ -32,6 +38,14 @@ export function Topbar(props: { brand: string; links: NavLink[] }) {
           </Link>
         ))}
       </nav>
+      {props.version ? (
+        <span style={{ marginLeft: "auto" }}>
+          <Badge tone={props.updateAvailable ? "warn" : "neutral"}>
+            v{props.version}
+            {props.updateAvailable ? " · update" : ""}
+          </Badge>
+        </span>
+      ) : null}
     </header>
   );
 }

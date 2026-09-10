@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi, useRouter } from "@tanstack/react-router";
 import type { StoreImportResult } from "@swisscode/core";
 import {
   Button,
@@ -57,6 +57,8 @@ const resultColumns: Column<StoreImportResult>[] = [
 
 function SettingsPage() {
   const { inventory, rotation } = Route.useLoaderData();
+  // Update badge state comes from the root loader — no second fetch.
+  const { updateAvailable, latest } = getRouteApi("__root__").useLoaderData();
   const router = useRouter();
   // Opt-in: a backup with live credentials is only produced when this session
   // asks for one, never as the default of a link someone can be sent.
@@ -68,6 +70,10 @@ function SettingsPage() {
   const [rotationEnabled, setRotationEnabled] = useState(rotation.rotationEnabled);
   const [rotationStrategy, setRotationStrategy] = useState<GlobalSettings["rotationStrategy"]>(
     rotation.rotationStrategy,
+  );
+  // Self-update mode: saved together with the rotation pair as one record.
+  const [updateMode, setUpdateMode] = useState<GlobalSettings["updateMode"]>(
+    rotation.updateMode ?? "auto",
   );
 
   async function onExport() {
@@ -90,8 +96,8 @@ function SettingsPage() {
   async function onSaveRotation() {
     setError(null);
     try {
-      await saveGlobalSettingsFn({ data: { rotationEnabled, rotationStrategy } });
-      notify.success("Rotation saved — the running proxy picks it up on its next tick");
+      await saveGlobalSettingsFn({ data: { rotationEnabled, rotationStrategy, updateMode } });
+      notify.success("Settings saved — the running proxy picks rotation up on its next tick");
       await router.invalidate();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -190,6 +196,40 @@ function SettingsPage() {
             <RowActions>
               <Button variant="primary" onClick={() => void onSaveRotation()}>
                 Save rotation
+              </Button>
+            </RowActions>
+          </Stack>
+        </Card>
+
+        <Card>
+          <h2>Updates</h2>
+          <Stack>
+            {updateAvailable ? (
+              <Notice tone="warn">
+                swisscode {latest ?? "newer"} is available
+                {updateMode === "auto"
+                  ? " — background self-update installs it automatically."
+                  : " — switch Self-update to auto, or upgrade manually."}
+              </Notice>
+            ) : null}
+            <Field
+              label="Self-update"
+              hint="Auto installs new releases in the background. Notify-only shows a badge. Off never checks."
+            >
+              <Select
+                value={updateMode}
+                onChange={(e) =>
+                  setUpdateMode(e.target.value as GlobalSettings["updateMode"])
+                }
+              >
+                <option value="auto">auto</option>
+                <option value="notify-only">notify-only</option>
+                <option value="off">off</option>
+              </Select>
+            </Field>
+            <RowActions>
+              <Button variant="primary" onClick={() => void onSaveRotation()}>
+                Save settings
               </Button>
             </RowActions>
           </Stack>

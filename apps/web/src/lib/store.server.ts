@@ -1,7 +1,9 @@
 // Server-only data access. The `.server.` suffix keeps node:fs + API keys
 // out of the client bundle. All domain logic goes through @swisscode/core.
 
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   AnthropicOAuthClient,
   AnthropicUsageClient,
@@ -54,6 +56,7 @@ import {
   collectSecretValues,
   CredentialStoreError,
   describeModelRoute,  isRecordId,
+  isNewerVersion,
   redactEnv,
   resolveLaunchSpec,
   resolveProviderConfig,
@@ -89,6 +92,7 @@ import {
 } from "@swisscode/core";
 import { mergeAccountConfig } from "./accountConfig.js";
 import { ProxyControlClient } from "./proxyClient.server.js";
+import { serverVersion } from "./version.server.js";
 import type { ProxyTrafficItem } from "./threadView.js";
 
 export type { ProxyTrafficItem } from "./threadView.js";
@@ -401,6 +405,51 @@ export async function getProxyReport(filter: TrafficFilter): Promise<ProxyReport
 
 export function storePath(): string {
   return profiles.path;
+}
+
+/** Build-time-baked server version for the UI badge and update checks. */
+export function getVersion(): { version: string } {
+  return { version: serverVersion() };
+}
+
+export interface UpdateStatus {
+  current: string;
+  latest: string | null;
+  updateAvailable: boolean;
+  updateMode: GlobalSettings["updateMode"];
+}
+
+/**
+ * Update badge data from the CLI's check cache — never live-fetches. The UI
+ * path stays offline-safe: no cache (or mode off) reads as "no update", and
+ * a torn cache file degrades the same way settings.json does.
+ */
+export async function getUpdateStatus(): Promise<UpdateStatus> {
+  const current = serverVersion();
+  let updateMode: GlobalSettings["updateMode"] = "auto";
+  try {
+    updateMode = (await settings.get()).updateMode ?? "auto";
+  } catch {
+    // Torn settings read as auto here; getGlobalSettings owns the defaulting.
+  }
+  let latest: string | null = null;
+  try {
+    const base = process.env["SWISSCODE_HOME"] ?? join(homedir(), ".swisscode");
+    const raw = JSON.parse(await readFile(join(base, "update-check.json"), "utf8")) as unknown;
+    const version =
+      typeof raw === "object" && raw !== null
+        ? (raw as Record<string, unknown>)["latest"]
+        : undefined;
+    if (typeof version === "string" && /^v?\d+\.\d+/.test(version.trim())) latest = version;
+  } catch {
+    // No check has run yet (or the cache is torn) — not an error.
+  }
+  return {
+    current,
+    latest,
+    updateAvailable: updateMode !== "off" && latest !== null && isNewerVersion(latest, current),
+    updateMode,
+  };
 }
 
 export async function getAccounts(): Promise<SubscriptionAccount[]> {

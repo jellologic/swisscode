@@ -32,4 +32,6 @@ jobs:
         env:
           SWISSCODE_HOME: ${{ runner.temp }}/swisscode-home
       - run: npm run typecheck
+      - name: web UI ships inside the artifact
+        run: test -f apps/cli/web/server.mjs && test -f apps/cli/web/hostGuard.mjs && test -f apps/cli/web/dist/server/server.js
       - run: npm publish -w apps/cli

@@ -8,3 +8,5 @@ apps/web/src/routeTree.gen.ts
 # Generated at pack time by apps/cli's prepack (root README/LICENSE copied in)
 apps/cli/README.md
 apps/cli/LICENSE
+# Built web UI embedded in the npm artifact (apps/cli build:web-embed)
+apps/cli/web/

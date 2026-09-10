@@ -16,6 +16,7 @@ import {
 } from "@swisscode/adapters";
 import { startOwnedProxy } from "./proxy.js";
 import type { OwnedProxy } from "./proxy.js";
+import { ensureAutoUpdate } from "./update.js";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -77,6 +78,11 @@ async function resolveWebDir(): Promise<string> {
   }
   const fromBundle = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
   if (await likeRoot(fromBundle)) return fromBundle;
+  // Embedded artifact: a true global install ships the built UI at the
+  // package root beside dist (apps/cli `files` includes `web/`), so the
+  // bundle at <root>/dist/bundle.js resolves <root>/web.
+  const fromEmbed = join(dirname(fileURLToPath(import.meta.url)), "..", "web");
+  if (await likeRoot(fromEmbed)) return fromEmbed;
   const fromCwd = join(process.cwd(), "apps", "web");
   if (await likeRoot(fromCwd)) return fromCwd;
   if (await likeRoot(process.cwd())) return process.cwd();
@@ -105,7 +111,7 @@ export async function cmdWeb(args: string[]): Promise<void> {
   const pport = parsePort(flag(args, "--proxy-port"), "--proxy-port", proxyPort());
   const noProxy = args.includes("--no-proxy");
   // Missing build aborts before the proxy is probed or a token is minted.
-  const webDir = await resolveWebDir();
+  let webDir = await resolveWebDir();
   let owned: OwnedProxy | undefined;
   if (!noProxy) {
     if (await proxyAlive(pport)) {
@@ -120,13 +126,7 @@ export async function cmdWeb(args: string[]): Promise<void> {
   } else {
     console.log("Proxy disabled (--no-proxy): proxy pages will show not-running.");
   }
-  const child: ChildProcess = spawn(process.execPath, ["server.mjs"], {
-    cwd: webDir,
-    env: { ...process.env, PORT: String(uiPort), SWISSCODE_PROXY_PORT: String(pport) },
-    stdio: "inherit",
-  });
   const host = process.env["SWISSCODE_WEB_HOST"] ?? "127.0.0.1";
-  console.log(`Web UI on http://${host}:${uiPort}. Ctrl-C to stop.`);
   // One deferred unblocks the foreground wait from either trigger: our signal
   // (kill child, then close what we own) or the child's own exit (crash or a
   // taken UI port — the inherited stderr already shows why).
@@ -136,6 +136,7 @@ export async function cmdWeb(args: string[]): Promise<void> {
   });
   let exitCode = 0;
   let signalled = false;
+  let lastSignal: NodeJS.Signals | null = null;
   const closeOwned = async (): Promise<void> => {
     try {
       owned?.trafficStore?.close();
@@ -150,20 +151,86 @@ export async function cmdWeb(args: string[]): Promise<void> {
       }
     }
   };
-  child.once("exit", (code, signal) => {
-    void closeOwned().finally(() => {
-      if (!signalled) {
-        if (code !== 0 && code !== null) {
-          console.error(`Web UI exited with code ${code}. If the port is taken, retry with --port <n>.`);
+  // The UI child is restartable (self-update swaps the files under it), so the
+  // spawn + exit wiring is a function and every exit handler carries the
+  // generation it was born in. A superseded child resolves nothing — the
+  // restart owns what happens next.
+  let generation = 0;
+  let child: ChildProcess;
+  const watchChild = (proc: ChildProcess, myGeneration: number): void => {
+    proc.once("exit", (code, signal) => {
+      if (myGeneration !== generation) return;
+      void closeOwned().finally(() => {
+        if (!signalled) {
+          if (code !== 0 && code !== null) {
+            console.error(`Web UI exited with code ${code}. If the port is taken, retry with --port <n>.`);
+          }
+          exitCode = signal ? signalExitCode(signal) : (code ?? 0);
         }
-        exitCode = signal ? signalExitCode(signal) : (code ?? 0);
-      }
-      resolveDone();
+        resolveDone();
+      });
     });
+  };
+  const spawnUI = (): void => {
+    const myGeneration = ++generation;
+    child = spawn(process.execPath, ["server.mjs"], {
+      cwd: webDir,
+      env: { ...process.env, PORT: String(uiPort), SWISSCODE_PROXY_PORT: String(pport) },
+      stdio: "inherit",
+    });
+    watchChild(child, myGeneration);
+  };
+  spawnUI();
+  console.log(`Web UI on http://${host}:${uiPort}. Ctrl-C to stop.`);
+  /**
+   * Restart only the UI child onto freshly installed files. The in-process
+   * proxy keeps running; the user's `claude` sessions are untouched. A stop
+   * signal landing mid-restart wins: no respawn, normal teardown instead.
+   */
+  const restartUI = async (latest: string): Promise<void> => {
+    let freshDir: string;
+    try {
+      freshDir = await resolveWebDir();
+    } catch {
+      return; // New files unresolvable — stay on the running child.
+    }
+    console.error(`Updated swisscode to ${latest} — restarting UI…`);
+    generation++; // detach the old child's exit handler
+    const prev = child;
+    const exited = new Promise<void>((resolve) => prev.once("exit", () => resolve()));
+    try {
+      prev.kill("SIGTERM");
+    } catch {
+      // Already gone — the wait below returns at once.
+    }
+    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
+    if (prev.exitCode === null && prev.signalCode === null) {
+      try {
+        prev.kill("SIGKILL");
+      } catch {
+        // The exit wait still settles teardown.
+      }
+      await exited;
+    }
+    if (signalled) {
+      exitCode = lastSignal ? signalExitCode(lastSignal) : 0;
+      await closeOwned();
+      resolveDone();
+      return;
+    }
+    webDir = freshDir;
+    spawnUI();
+  };
+  // This command's own update pass: apply restarts the child above, anything
+  // else is a stderr line. Fire-and-forget — UI startup never waits on it.
+  void ensureAutoUpdate().then((r) => {
+    if (r.applied && r.latest) void restartUI(r.latest);
+    else if (r.notice) console.error(r.notice);
   });
   const onSignal = (signal: NodeJS.Signals): void => {
     if (signalled) return;
     signalled = true;
+    lastSignal = signal;
     try {
       child.kill(signal);
     } catch {

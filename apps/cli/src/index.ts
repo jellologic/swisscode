@@ -47,6 +47,8 @@ import { activateAccount, cmdAccounts } from "./accounts.js";
 import { checkProxyUp, cmdProxy, ensureProxyAccount } from "./proxy.js";
 import { cmdInit } from "./init.js";
 import { cmdWeb } from "./web.js";
+import { cmdUpdate, ensureAutoUpdate } from "./update.js";
+import { currentVersion } from "./version.js";
 
 const agents = createAgentRegistry();
 const repo = new FileProfileRepository(defaultProfilesPath());
@@ -71,6 +73,8 @@ function help(): string {
     "  swisscode proxy <run|use|status> ...",
   "  swisscode web [--port <n>] [--proxy-port <n>] [--no-proxy]",
     "  swisscode init [<preset>] [--name <name>] [--dry-run]",
+  "  swisscode update [--check|--apply]",
+  "  swisscode --version",
     "",
     "Profiles live in ~/.swisscode/profiles.json (or $SWISSCODE_HOME).",
     "Create them in the TanStack Start UI or by editing that file.",
@@ -438,6 +442,20 @@ async function main(): Promise<void> {
     return;
   }
   const [first, ...rest] = head as [string, ...string[]];
+  if (first === "--version" || first === "-V") {
+    console.log(currentVersion());
+    return;
+  }
+  // Background self-update check: fire-and-forget (a slow registry must not
+  // delay a launch), stderr only — stdout may be machine-readable JSON. Past
+  // this point --version/--help already returned; the long-lived `web`
+  // command owns its own pass (it can restart the UI child), and `update`
+  // already checked explicitly.
+  if (first !== "web" && first !== "update") {
+    void ensureAutoUpdate().then((r) => {
+      if (r.notice) console.error(r.notice);
+    });
+  }
   if (first === "list") return cmdList();
   if (first === "show") {
     if (!rest[0]) {
@@ -451,6 +469,7 @@ async function main(): Promise<void> {
   if (first === "proxy") return cmdProxy(rest);
   if (first === "web") return cmdWeb(rest);
   if (first === "init") return cmdInit(rest);
+  if (first === "update") return cmdUpdate(rest);
   // Launch path: swisscode <profile> [--dry-run] [--force] [-- extra...]
   // A leading flag is an option we do not know, never a profile name.
   if (first.startsWith("-")) {

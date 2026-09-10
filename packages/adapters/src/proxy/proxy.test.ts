@@ -1936,6 +1936,7 @@ describe("profile identity + model routing", () => {
         get: async (): Promise<GlobalSettings> => ({
           rotationEnabled: true,
           rotationStrategy: "reset-soonest",
+          updateMode: "auto",
         }),
       };
       return new SubscriptionProxy(world.vault, new AnthropicOAuthClient(), {

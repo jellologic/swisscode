@@ -74,8 +74,16 @@ function settingsFixture(settings: GlobalSettings): { get(): Promise<GlobalSetti
   return { get: async () => settings };
 }
 
-const ON = { rotationEnabled: true, rotationStrategy: "reset-soonest" } as GlobalSettings;
-const OFF = { rotationEnabled: false, rotationStrategy: "reset-soonest" } as GlobalSettings;
+const ON = {
+  rotationEnabled: true,
+  rotationStrategy: "reset-soonest",
+  updateMode: "auto",
+} as GlobalSettings;
+const OFF = {
+  rotationEnabled: false,
+  rotationStrategy: "reset-soonest",
+  updateMode: "auto",
+} as GlobalSettings;
 
 interface Harness {
   poller: RotationPoller;
@@ -224,7 +232,7 @@ describe("RotationPoller", () => {
         id === "hot"
           ? usage(id, { fiveHour: window(10, 5), models: { opus: window(91, 60) } })
           : usage(id, { fiveHour: window(20, 60) }),
-      { getActive: () => "hot", settings: { rotationEnabled: true, rotationStrategy: "least-used" } },
+      { getActive: () => "hot", settings: { rotationEnabled: true, rotationStrategy: "least-used", updateMode: "auto" } },
     );
     await h.poller.tick();
     assert.equal(h.active.id, "cool");
