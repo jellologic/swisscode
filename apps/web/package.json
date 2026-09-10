@@ -1,6 +1,6 @@
 {
   "name": "@swisscode/web",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,8 +11,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@swisscode/adapters": "2.1.3",
-    "@swisscode/core": "2.1.3",
+    "@swisscode/adapters": "2.1.4",
+    "@swisscode/core": "2.1.4",
     "@tanstack/react-router": "^1.120.0",
     "@tanstack/react-start": "^1.120.0",
     "react": "^19.1.0",

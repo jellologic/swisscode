@@ -20,6 +20,11 @@ import { SubscriptionProxy, cooldownMsFromRetryAfter, isLoopbackHost, parseProfi
 // home before any proxy runs. Nothing here may touch the user's real vault.
 process.env["SWISSCODE_HOME"] = mkdtempSync(join(tmpdir(), "proxy-home-"));
 
+// Bun's node:http server never surfaces a client abort (no req/res/socket
+// close fires, even on poll) — upstream keeps generating where Node would cut
+// it off. The abort test below is Node-only until that upstream gap closes.
+const isBun = typeof process !== "undefined" && (process.versions as Record<string, string>).bun !== undefined;
+
 /** A vault in a throwaway dir — never the real ~/.swisscode. */
 async function tempVault(prefix: string): Promise<FileAccountRepository> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
@@ -159,8 +164,9 @@ describe("SubscriptionProxy", () => {
       );
       // Before the listen error listener, this surfaced as an unhandled
       // 'error' event that killed the process — `proxy run`/`web` could never
-      // print their "port in use" guidance.
-      await assert.rejects(() => proxy.listen(taken), /EADDRINUSE/);
+      // print their "port in use" guidance. Bun's message says "in use"
+      // without the EADDRINUSE code, so match either phrasing.
+      await assert.rejects(() => proxy.listen(taken), /EADDRINUSE|in use/);
       await proxy.close().catch(() => undefined);
     } finally {
       squatter.close();
@@ -786,7 +792,7 @@ describe("SubscriptionProxy", () => {
     );
   });
 
-  it("aborts the upstream request when the client hangs up", async () => {
+  it("aborts the upstream request when the client hangs up", { skip: isBun }, async () => {
     // Esc in Claude Code closes the socket; without propagating the abort the
     // model keeps generating (and billing) into a response nobody reads.
     let upstreamAborted = false;

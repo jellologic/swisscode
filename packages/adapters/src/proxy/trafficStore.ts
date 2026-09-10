@@ -6,8 +6,10 @@
 //
 // `node:sqlite` is imported dynamically inside `openTrafficStore`, so processes
 // that never open the store (every non-report CLI command) never pay its
-// ExperimentalWarning. Engines require Node ≥22; the store itself needs 22.5+
-// and says so plainly when the import fails.
+// ExperimentalWarning. Bun has no `node:sqlite`, so under Bun the same call
+// falls back to `bun:sqlite` (Database/exec/query/run/all/close all line up
+// with the surface this store uses). Engines require Node ≥22; the store
+// itself needs Node 22.5+ (or Bun) and says so plainly when both imports fail.
 
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
@@ -317,20 +319,59 @@ export async function openTrafficStore(
   opts: TrafficStoreOptions = {},
 ): Promise<SqliteTrafficLog> {
   await mkdir(dirname(path), { recursive: true });
-  let sqlite: typeof import("node:sqlite");
-  try {
-    sqlite = await import("node:sqlite");
-  } catch {
-    throw new Error(
-      "The queryable traffic store needs Node 22.5 or newer (node:sqlite). " +
-        "The JSONL traffic log is unaffected.",
-    );
-  }
-  const db = new sqlite.DatabaseSync(path);
+  const db = await openDatabase(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   return new SqliteTrafficLog(db, {
     maxDays: opts.maxDays ?? envBound("SWISSCODE_TRAFFIC_STORE_DAYS", DEFAULT_MAX_DAYS),
     maxRows: opts.maxRows ?? envBound("SWISSCODE_TRAFFIC_STORE_ROWS", DEFAULT_MAX_ROWS),
   });
+}
+
+/** Open the SQLite file through `node:sqlite`, or `bun:sqlite` under Bun. */
+async function openDatabase(path: string): Promise<DatabaseSync> {
+  try {
+    return new (await import("node:sqlite")).DatabaseSync(path);
+  } catch {
+    // Not Node 22.5+ (or a runtime without `node:sqlite`, like Bun) — try
+    // Bun's own sqlite build before giving up.
+  }
+  try {
+    // A `string`-typed specifier keeps tsc green without @types/bun: a
+    // literal `import("bun:sqlite")` would fail type resolution on Node.
+    const specifier: string = "bun:sqlite";
+    const bun = (await import(specifier)) as unknown as {
+      Database: new (path: string) => {
+        exec(sql: string): void;
+        query(sql: string): {
+          run(...params: unknown[]): unknown;
+          all(...params: unknown[]): unknown[];
+        };
+        close(): void;
+      };
+    };
+    // Bun speaks query/run/all where node:sqlite speaks prepare/run/all; the
+    // store only touches exec/prepare→{run,all}/close, so adapt that slice.
+    const inner = new bun.Database(path);
+    return {
+      exec: (sql: string) => {
+        inner.exec(sql);
+      },
+      prepare: (sql: string) => {
+        const stmt = inner.query(sql);
+        return {
+          run: (...params: unknown[]) => stmt.run(...params),
+          all: (...params: unknown[]) => stmt.all(...params),
+        };
+      },
+      close: () => {
+        inner.close();
+      },
+    } as unknown as DatabaseSync;
+  } catch {
+    throw new Error(
+      "The queryable traffic store needs Node 22.5 or newer (node:sqlite) or Bun (bun:sqlite). " +
+        "The JSONL traffic log is unaffected.",
+    );
+  }
 }

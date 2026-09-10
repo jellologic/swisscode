@@ -41,6 +41,38 @@ async function tempStore(name: string, opts?: { maxDays?: number; maxRows?: numb
   return openTrafficStore(join(dir, "proxy-traffic.sqlite"), opts);
 }
 
+/**
+ * Raw read-back handle for asserting on the file itself: `node:sqlite` on
+ * Node, `bun:sqlite` under Bun (same query/all shape, mirrored from the
+ * fallback in trafficStore.ts — production API stays narrow).
+ */
+async function openRawDb(path: string): Promise<{
+  prepare(sql: string): { all(...params: unknown[]): unknown[] };
+  close(): void;
+}> {
+  try {
+    return new (await import("node:sqlite")).DatabaseSync(path);
+  } catch {
+    const specifier: string = "bun:sqlite";
+    const bun = (await import(specifier)) as unknown as {
+      Database: new (path: string) => {
+        query(sql: string): { all(...params: unknown[]): unknown[] };
+        close(): void;
+      };
+    };
+    const inner = new bun.Database(path);
+    return {
+      prepare: (sql: string) => {
+        const stmt = inner.query(sql);
+        return { all: (...params: unknown[]) => stmt.all(...params) };
+      },
+      close: () => {
+        inner.close();
+      },
+    };
+  }
+}
+
 describe("toStoredExchange", () => {
   it("keeps named scalars and drops bodies, headers, and secrets", () => {
     const stored = toStoredExchange(
@@ -275,8 +307,7 @@ describe("SqliteTrafficLog", () => {
     } finally {
       store.close();
     }
-    const sqlite = await import("node:sqlite");
-    const db = new sqlite.DatabaseSync(path);
+    const db = await openRawDb(path);
     try {
       const columns = (table: string) =>
         (db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as { name: string }[]).map(

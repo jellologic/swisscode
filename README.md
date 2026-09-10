@@ -9,6 +9,7 @@
   <a href="https://www.npmjs.com/package/swisscode"><img src="https://img.shields.io/npm/v/swisscode?logo=npm&logoColor=white" alt="npm version"></a>
   <img src="https://img.shields.io/npm/dm/swisscode" alt="npm monthly downloads">
   <img src="https://img.shields.io/badge/node-%3E%3D22-5fa04e?logo=node.js&logoColor=white" alt="Node.js 22 or newer">
+  <img src="https://img.shields.io/badge/bun-%3E%3D1.4-f472b6?logo=bun&logoColor=white" alt="Bun 1.4 or newer">
   <img src="https://img.shields.io/badge/license-MIT-3da639" alt="MIT license">
   <img src="https://img.shields.io/badge/runs%20on-macOS%20%7C%20Linux-8957e5" alt="macOS and Linux">
 </p>
@@ -68,7 +69,8 @@ and it looks to Anthropic exactly like Claude Code itself.
 npm i -g swisscode
 ```
 
-Requires Node.js 22 or newer and an installed `claude` binary. To build from
+Requires Node.js 22 or newer (22, 24, and 26 tested) or Bun 1.4 or newer,
+plus an installed `claude` binary. To build from
 source instead:
 
 ```sh
@@ -95,7 +97,8 @@ swisscode myprofile                     # launch Claude Code
 swisscode myprofile -- --resume         # everything after -- goes to claude verbatim
 ```
 
-Requires Node.js 22 or newer and an installed `claude` binary.
+Requires Node.js 22 or newer (22, 24, and 26 tested) or Bun 1.4 or newer,
+plus an installed `claude` binary.
 
 ## Multiple Claude accounts: usage limits and switching
 
@@ -309,6 +312,15 @@ prompts or split requests across models.
 v2.1 ships one agent plugin, Claude Code. Adding another is one adapter file plus one
 registry line; see [Architecture](#architecture-and-contributing).
 
+**Does it run on Bun?**
+Yes. The CLI, the proxy, the queryable traffic store (via `bun:sqlite`), and
+the web server all run under Bun 1.4+, and `bun install` resolves the
+workspace. One known upstream gap: Bun's HTTP server never surfaces a client
+abort, so stopping a stream with Esc still stops your client but the proxy
+can't cut the upstream request the way it does on Node. The canonical test
+runner stays `node:test` — `bun test` passes too, with that one abort test
+skipped under Bun.
+
 **Where are my keys?**
 `~/.swisscode/accounts/<provider>/<id>.json` and `~/.swisscode/subscriptions/<id>.json`,
 mode 0600. Nothing is uploaded anywhere.
@@ -341,8 +353,9 @@ A new agent or provider is one adapter file plus one line in
 
 ```sh
 npm run build      # all workspaces
-npm run test       # node:test, colocated *.test.ts
+npm run test       # node:test, colocated *.test.ts (canonical runner)
 npm run typecheck
+bun test packages/core/src packages/adapters/src apps/cli/src apps/web/src   # also green under Bun 1.4+
 ```
 
 Storage and environment reference: `profiles.json`, `subscriptions/`, `accounts/`,

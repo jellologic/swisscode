@@ -44,6 +44,12 @@ npm run typecheck --workspaces --if-present
   `src/routeTree.gen.ts` generates on first dev/build), `npm start` serves a prod build.
   `typecheck` only, no tests.
 
+- Runtimes: Node 22/24/26 and Bun 1.4+ are all supported and CI-checked. `npm test`
+  stays the canonical runner; the same suites pass via
+  `bun test packages/core/src packages/adapters/src apps/cli/src apps/web/src`
+  (one proxy abort test skips under Bun — its HTTP server never surfaces client
+  aborts upstream). The traffic store prefers `node:sqlite`, falls back to `bun:sqlite`.
+
 ## Architecture (hexagonal: core owns ports, adapters implement)
 
 - `packages/core` — pure TS, zero I/O. `domain.ts` (Profile, LaunchSpec, FieldDef,

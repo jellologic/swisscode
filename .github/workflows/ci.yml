@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        node: [22, 24]
+        node: [22, 24, 26]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,3 +34,14 @@ jobs:
         env:
           SWISSCODE_HOME: ${{ runner.temp }}/swisscode-home
       - run: npm run typecheck
+
+  bun:
+    name: bun
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun test packages/core/src packages/adapters/src apps/cli/src apps/web/src
+        env:
+          SWISSCODE_HOME: ${{ runner.temp }}/swisscode-home
