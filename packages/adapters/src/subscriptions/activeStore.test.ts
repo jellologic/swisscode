@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { CredentialStoreError } from "@swisscode/core";
 import type { OAuthCredential } from "@swisscode/core";
 import { CLAUDE_KEYCHAIN_SERVICE, ClaudeActiveCredentialStore } from "./activeStore.js";
+import { credentialIdentity } from "./identity.js";
 import type { ExecFn } from "./activeStore.js";
 
 async function tempDir(prefix: string): Promise<string> {
@@ -282,6 +283,97 @@ describe("ClaudeActiveCredentialStore keychain diagnosis", () => {
     await assert.rejects(
       () => store.writeActive(credential),
       (err: unknown) => err instanceof CredentialStoreError && err.kind === "write-failed",
+    );
+  });
+});
+
+describe("ClaudeActiveCredentialStore writeActiveReport", () => {
+  it("attempts the Keychain even when the pre-read missed a live item", async () => {
+    // The old code branched the write target on the pre-read backend: a
+    // file/none pre-read while the Keychain held the live login produced a
+    // file-only write `claude` never saw, reported as success.
+    const kc = fakeKeychain({ claudeAiOauth: { accessToken: "a", refreshToken: "r" } });
+    let reads = 0;
+    const home = await tempDir("claude-missed-");
+    await writeFile(
+      join(home, ".credentials.json"),
+      JSON.stringify({ claudeAiOauth: { accessToken: "b", refreshToken: "rb" } }),
+    );
+    const store = new ClaudeActiveCredentialStore({
+      configHome: home,
+      execFn: async (file, args) => {
+        // The pre-reads miss the item; the write-time re-read finds it.
+        if (args[0] === "find-generic-password" && args.includes("-w") && reads++ < 2) {
+          throw exitError(44);
+        }
+        return kc.exec(file, args);
+      },
+    });
+    assert.equal((await store.readActiveDetail()).backend, "file");
+    const report = await store.writeActiveReport(credential);
+    assert.equal(report.keychain, "written");
+    assert.equal(report.verifiedBackend, "keychain");
+    assert.equal(report.verifiedIdentity, credentialIdentity(credential));
+    assert.equal(
+      (kc.item() as Record<string, unknown> & { claudeAiOauth: { refreshToken: string } })
+        .claudeAiOauth.refreshToken,
+      "r2",
+    );
+  });
+
+  it("reports an absent Keychain and still switches the file", async () => {
+    const home = await tempDir("claude-absent-");
+    const store = new ClaudeActiveCredentialStore({ configHome: home, execFn: failingExec(44) });
+    const report = await store.writeActiveReport(credential);
+    assert.equal(report.keychain, "absent");
+    assert.equal(report.file, "written");
+    assert.equal(report.verifiedBackend, "file");
+    assert.equal(report.verifiedIdentity, credentialIdentity(credential));
+    const written = JSON.parse(await readFile(join(home, ".credentials.json"), "utf8")) as {
+      claudeAiOauth: Record<string, unknown>;
+    };
+    assert.equal(written.claudeAiOauth["refreshToken"], "r2");
+  });
+
+  it("returns proof of what landed on the Keychain path", async () => {
+    const kc = fakeKeychain({ claudeAiOauth: { accessToken: "a", refreshToken: "r" } });
+    const home = await tempDir("claude-proof-");
+    const store = new ClaudeActiveCredentialStore({ configHome: home, execFn: kc.exec });
+    const report = await store.writeActiveReport(credential);
+    assert.equal(report.keychain, "written");
+    assert.equal(report.file, "written");
+    assert.equal(report.verifiedBackend, "keychain");
+    assert.equal(report.verifiedIdentity, credentialIdentity(credential));
+  });
+
+  it("reports a failed file mirror without failing the Keychain switch", async () => {
+    const kc = fakeKeychain({ claudeAiOauth: { accessToken: "a", refreshToken: "r" } });
+    const blocker = join(await tempDir("claude-mirror-"), "blocker");
+    await writeFile(blocker, "not a directory");
+    const store = new ClaudeActiveCredentialStore({
+      configHome: join(blocker, "sub"),
+      execFn: kc.exec,
+    });
+    const report = await store.writeActiveReport(credential);
+    assert.equal(report.keychain, "written");
+    assert.equal(report.file, "failed");
+    assert.equal(report.verifiedBackend, "keychain");
+  });
+
+  it("fails loudly when the effective file write fails", async () => {
+    const blocker = join(await tempDir("claude-filefail-"), "blocker");
+    await writeFile(blocker, "not a directory");
+    const store = new ClaudeActiveCredentialStore({
+      configHome: join(blocker, "sub"),
+      execFn: noSecurityBinary,
+    });
+    await assert.rejects(
+      () => store.writeActive(credential),
+      (err: unknown) => {
+        assert.ok(err instanceof CredentialStoreError && err.kind === "write-failed");
+        assert.match(err.message, /\.credentials\.json/);
+        return true;
+      },
     );
   });
 });

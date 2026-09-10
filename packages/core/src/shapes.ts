@@ -7,7 +7,7 @@
 // validateProfile/validateAccountId), and NEVER throw. A malformed record is
 // data, so callers can report it per record instead of losing the whole import.
 
-import type { Profile } from "./domain.js";
+import type { GlobalSettings, Profile } from "./domain.js";
 import type { OAuthCredential, ProviderAccount, SubscriptionAccount } from "./subscriptions.js";
 import type { SubscriptionBackup } from "./configBundle.js";
 
@@ -201,4 +201,17 @@ export function isSubscriptionBackupShape(x: unknown): x is SubscriptionBackup {
   if (!isRecord(x)) return false;
   if (!isSubscriptionAccountShape(x["account"])) return false;
   return x["credential"] === undefined || isOAuthCredentialShape(x["credential"]);
+}
+
+/**
+ * Structural only: the enable flag plus a strategy from the closed enum. Extra
+ * fields are tolerated (settings grow over time); wrong types fall back to
+ * DEFAULT_GLOBAL_SETTINGS at read time and fail the import record.
+ */
+export function isGlobalSettingsShape(x: unknown): x is GlobalSettings {
+  if (!isRecord(x)) return false;
+  return (
+    typeof x["rotationEnabled"] === "boolean" &&
+    (x["rotationStrategy"] === "reset-soonest" || x["rotationStrategy"] === "least-used")
+  );
 }

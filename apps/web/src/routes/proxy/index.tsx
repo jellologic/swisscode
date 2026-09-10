@@ -71,6 +71,13 @@ export const Route = createFileRoute("/proxy/")({
   component: ProxyPage,
 });
 
+/** One rotation row on the proxy state card; the toggle itself lives in /settings. */
+function rotationLine(rotation: NonNullable<Awaited<ReturnType<typeof proxyStateFn>>["rotation"]>): string {
+  if (!rotation.enabled) return "Rotation off";
+  if (rotation.lastRunAt === null) return `Rotation on (${rotation.strategy}) — waiting for first tick`;
+  return `Rotation on (${rotation.strategy}) — checked ${rotation.checked} (${rotation.usable} usable), ${rotation.switched ?? "no switch"}: ${rotation.reason ?? "—"}`;
+}
+
 function ProxyPage() {
   const { proxy, traffic, report } = Route.useLoaderData();
   const search = Route.useSearch();
@@ -314,6 +321,11 @@ function ProxyPage() {
                     </Button>
                   </span>
                 </RowActions>
+                {proxy.rotation && (
+                  <Muted>
+                    {rotationLine(proxy.rotation)} · <Link to="/settings">change</Link>
+                  </Muted>
+                )}
                 <RowActions>
                   <Field
                     label="Keep last N requests"

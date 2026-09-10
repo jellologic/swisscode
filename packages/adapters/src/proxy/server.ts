@@ -28,10 +28,12 @@ import type {
   ProviderAccountRepository,
   ProviderPort,
   ProviderRegistry,
+  RotationStrategy,
   SubscriptionAccount,
   TrafficLog,
   TrafficParser,
   TrafficRequestSummary,
+  UsageClient,
 } from "@swisscode/core";
 import {
   SingleFlight,
@@ -46,6 +48,10 @@ import { resyncSubscriptionCredential } from "../subscriptions/liveResync.js";
 import { freshVaultCredential } from "../subscriptions/freshCredential.js";
 import { PROXY_TOKEN_HEADER } from "./proxyToken.js";
 import { parseRetryAfterMs } from "../subscriptions/retryAfter.js";
+import { RotationPoller } from "./rotationPoller.js";
+import type { RotationSnapshot } from "./rotationPoller.js";
+import { FileUsageCache } from "../subscriptions/usageCache.js";
+import type { FileSettingsStore } from "../store/fileSettings.js";
 
 export const DEFAULT_PROXY_PORT = 8123;
 
@@ -348,6 +354,30 @@ export interface ProxyOptions {
    * built-ins; `proxy run` passes the full registry (built-ins + customs).
    */
   providers?: ProviderRegistry;
+  /**
+   * Background subscription health check + auto-rollover. Absent = off: the
+   * proxy keeps pure per-request failover and spawns no timers. When present
+   * the poller starts on listen() and stops on close(); the verdict is
+   * applied through setActive(), so pins stay preferences, not cages.
+   */
+  rotation?: {
+    /** Live usage fetcher (CachingUsageClient over AnthropicUsageClient). */
+    usageClient: UsageClient;
+    /** Read-only pre-check for Retry-After backoffs. Defaults to the shared file. */
+    usageCache?: FileUsageCache;
+    /** Re-read every tick, so the /settings toggle needs no restart. */
+    settings: FileSettingsStore;
+    /** Stable identity for usage-cache keying (defaults to vault email). */
+    accountIdentity?: (accountId: string) => Promise<string | undefined>;
+    /** CLI `--rotation on|off`: top precedence, above env, above the file. */
+    enabled?: boolean;
+    /** CLI `--rotation-strategy`: top precedence, above env, above the file. */
+    strategy?: RotationStrategy;
+    /** CLI `--rotation-poll-ms`: top precedence, above env, above the default. */
+    pollMs?: number;
+    /** Rotation log lines. Default console.log. */
+    log?: (message: string) => void;
+  };
 }
 
 /** One failover step inside a proxied request. */
@@ -417,6 +447,8 @@ export interface ProxyStatus {
   activeAccountId: string | null;
   accounts: { id: string; label: string; email?: string }[];
   traffic: { kept: number; size: number };
+  /** Background rotation state; absent when the proxy runs without rotation. */
+  rotation?: RotationSnapshot;
 }
 
 export class SubscriptionProxy {
@@ -448,6 +480,8 @@ export class SubscriptionProxy {
    * the live-lineage resync in front of it, which it does not.
    */
   private readonly recovering = new SingleFlight<string | undefined>();
+  /** Background rotation poller; undefined when `options.rotation` is absent. */
+  private readonly rotationPoller?: RotationPoller;
 
   constructor(
     private readonly accounts: AccountRepository,
@@ -472,6 +506,25 @@ export class SubscriptionProxy {
     this.profiles = options.profiles;
     this.providerAccounts = options.providerAccounts;
     this.providers = options.providers ?? createProviderRegistry();
+    if (options.rotation) {
+      const rot = options.rotation;
+      this.rotationPoller = new RotationPoller({
+        accounts: this.accounts,
+        usageClient: rot.usageClient,
+        usageCache: rot.usageCache ?? new FileUsageCache(),
+        settings: rot.settings,
+        ...(rot.accountIdentity ? { accountIdentity: rot.accountIdentity } : {}),
+        overrides: {
+          ...(rot.enabled !== undefined ? { enabled: rot.enabled } : {}),
+          ...(rot.strategy ? { strategy: rot.strategy } : {}),
+          ...(rot.pollMs !== undefined ? { pollMs: rot.pollMs } : {}),
+        },
+        cooldownUntil: (id) => this.cooldowns.get(id) ?? 0,
+        getActive: () => this.activeAccountId,
+        setActive: (id) => this.setActive(id),
+        ...(rot.log ? { log: rot.log } : {}),
+      });
+    }
     void options.port;
   }
 
@@ -483,7 +536,13 @@ export class SubscriptionProxy {
       activeAccountId: this.activeAccountId ?? all[0]?.id ?? null,
       accounts: all.map((a) => ({ id: a.id, label: a.label, email: a.email })),
       traffic: { kept: this.traffic.length, size: this.trafficBufferSize },
+      ...(this.rotationPoller ? { rotation: this.rotationPoller.snapshot() } : {}),
     };
+  }
+
+  /** Background rotation state, undefined when rotation is not configured. */
+  rotationState(): RotationSnapshot | undefined {
+    return this.rotationPoller?.snapshot();
   }
 
   /** Newest-first copy of the buffered traffic entries, optionally filtered by profile. */
@@ -1327,6 +1386,9 @@ export class SubscriptionProxy {
           if (useMatch && req.method === "POST") {
             try {
               const account = await this.setActive(useMatch[1] as string);
+              // A manual choice, not noise: the poller's min-hold clock must
+              // not revert it on the next tick.
+              this.rotationPoller?.noteManualSwitch();
               sendJson(res, 200, { ok: true, activeAccountId: account.id });
             } catch (err) {
               sendJson(res, 404, { error: (err as Error).message });
@@ -1430,10 +1492,14 @@ export class SubscriptionProxy {
       });
     });
     const address = this.server.address();
+    // Only a bound proxy rotates: a taken port rejects above, so starting the
+    // poller here can't leave a timer running without a server.
+    this.rotationPoller?.start();
     return typeof address === "object" && address ? address.port : port;
   }
 
   async close(): Promise<void> {
+    this.rotationPoller?.stop();
     if (!this.server) return;
     await new Promise<void>((resolve, reject) =>
       this.server?.close((err) => (err ? reject(err) : resolve())),

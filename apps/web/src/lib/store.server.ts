@@ -7,6 +7,7 @@ import {
   AnthropicUsageClient,
   CachingModelCatalog,
   CachingUsageClient,
+  CLAUDE_KEYCHAIN_SERVICE,
   ClaudeActiveCredentialStore,
   CustomAccountValidator,
   FileAccountRepository,
@@ -14,6 +15,7 @@ import {
   FileModelCatalogCache,
   FileProfileRepository,
   FileProviderAccountRepository,
+  FileSettingsStore,
   PROFILE_PRESETS,
   PROMPT_PRESETS,
   freshVaultCredential,
@@ -26,11 +28,13 @@ import {
   createBundleRegistry,
   defaultProviders,
   findAccountByCredential,
+  credentialIdentity,
   loadCustomProviderPorts,
   countOtherClaudeSessions,
   createAgentRegistry,
   createProviderRegistry,
   defaultProfilesPath,
+  defaultSettingsPath,
   defaultTrafficStorePath,
   maskSecret,
   groupTrafficConversations,
@@ -42,11 +46,14 @@ import {
   type ProcessProbe,
   type SessionContext,
   type TrafficConversation,
+  type RotationSnapshot,
+  type ActiveWriteReport,
+  type EmailLookup,
 } from "@swisscode/adapters";
 import {
   collectSecretValues,
-  describeModelRoute,
-  isRecordId,
+  CredentialStoreError,
+  describeModelRoute,  isRecordId,
   redactEnv,
   resolveLaunchSpec,
   resolveProviderConfig,
@@ -62,6 +69,7 @@ import {
   type ConfigBundle,
   type CustomProviderDef,
   type FieldDef,
+  type GlobalSettings,
   type ModelEndpoint,
   type ModelRouteLabels,
   type PluginHelp,
@@ -113,12 +121,14 @@ const oauth = new AnthropicOAuthClient();
 const usageApi = new AnthropicUsageClient();
 const usageClient = new CachingUsageClient(usageApi, new FileUsageCache());
 const providerAccounts = new FileProviderAccountRepository();
+const settings = new FileSettingsStore(defaultSettingsPath());
 /** Backup/restore registry: one entry per store (see createBundleRegistry). */
 const bundles = createBundleRegistry({
   profiles,
   vault,
   providerAccounts,
   customProviders: customProviderStore,
+  settings,
   secretKeysFor,
 });
 const usageReaders = [new OpenRouterUsageReader()];
@@ -466,6 +476,8 @@ export interface ProxyState {
   running: boolean;
   activeAccountId: string | null;
   port: number;
+  /** Latest rotation tick, when the running proxy has rotation wired. */
+  rotation?: RotationSnapshot;
 }
 
 /** Control-route client: signs every call with the proxy's per-run token. */
@@ -475,7 +487,12 @@ export async function getProxyState(): Promise<ProxyState> {
   const port = proxyPort();
   try {
     const status = await proxyControl.status();
-    return { running: true, activeAccountId: status.activeAccountId ?? null, port };
+    return {
+      running: true,
+      activeAccountId: status.activeAccountId ?? null,
+      port,
+      ...(status.rotation ? { rotation: status.rotation } : {}),
+    };
   } catch {
     return { running: false, activeAccountId: null, port };
   }
@@ -600,6 +617,8 @@ export interface CurrentLogin {
   source?: string;
   email?: string;
   matchedAccountId: string | null;
+  configHome?: string;
+  credentialsPath?: string;
 }
 
 export interface SwitchResult {
@@ -607,8 +626,35 @@ export interface SwitchResult {
   /** Refused: other sessions hold the shared credential (re-call with force). */
   needsConfirm?: boolean;
   otherSessions?: number;
+  /** Pre-read backend: where the previous login was found. */
   backend?: string;
   refreshed?: boolean;
+  /** Backend(s) the write targeted, e.g. "keychain+file" or "file". */
+  writtenBackend?: string;
+  /** True when the post-write reread holds the credential we wrote. */
+  verified?: boolean;
+  /** Email on the verified login — proof for the UI, never a token. */
+  verifiedEmail?: string;
+  matchedAccountId?: string | null;
+  /** The reread still holds the pre-switch lineage: a live session reverted us. */
+  revertSuspected?: boolean;
+  warning?: string;
+  configHome?: string;
+  credentialsPath?: string;
+}
+
+/** Test-only seam: point the switch/login path at a scratch credential store. */
+let activeStoreOverride: ClaudeActiveCredentialStore | undefined;
+export function setActiveStoreOverride(store: ClaudeActiveCredentialStore | undefined): void {
+  activeStoreOverride = store;
+}
+function liveStore(): ClaudeActiveCredentialStore {
+  return activeStoreOverride ?? activeStore;
+}
+/** Test-only seam: answer "whose token is this" without the network. */
+let emailLookupOverride: EmailLookup | undefined;
+export function setEmailLookupOverride(lookup: EmailLookup | undefined): void {
+  emailLookupOverride = lookup;
 }
 
 /** Runs pgrep. Its "no match" exit code 1 rejects; the counter treats that as none. */
@@ -630,7 +676,10 @@ async function otherClaudeSessionCount(): Promise<number> {
 /**
  * Make a vault account the system-wide Claude Code login (Keychain/file swap,
  * same path as `swisscode accounts use`). Two-phase: returns needsConfirm
- * instead of moving other live sessions unless force is set.
+ * instead of moving other live sessions unless force is set. The write is
+ * verified by rereading afterwards — success is only reported when the active
+ * login provably holds the account we wrote, so a concurrent write-back from
+ * a running session surfaces as `revertSuspected` instead of a false toast.
  */
 export async function switchSubscriptionAccount(id: string, force = false): Promise<SwitchResult> {
   const account = await vault.get(id);
@@ -641,19 +690,90 @@ export async function switchSubscriptionAccount(id: string, force = false): Prom
   if (!force && otherSessions > 0) {
     return { switched: false, needsConfirm: true, otherSessions };
   }
+  const live = liveStore();
   const { credential, refreshed } = await freshVaultCredential(vault, oauth, id, {
-    liveStore: activeStore,
+    liveStore: live,
   });
-  const before = await activeStore.readActive();
-  await activeStore.writeActive(credential);
-  return { switched: true, otherSessions, backend: before.backend, refreshed };
+  const before = await live.readActive();
+  const beforeIdentity = before.credential ? credentialIdentity(before.credential) : null;
+  const want = credentialIdentity(credential);
+  const configHome = live.configHomeDir();
+  const credentialsPath = live.credentialsFilePath();
+  const base = { otherSessions, backend: before.backend, refreshed, configHome, credentialsPath };
+  // Bounded re-write of the SAME credential object (tokens are single-use —
+  // never a second freshVaultCredential): one retry covers a single in-flight
+  // write-back from a running session. A persistent mismatch is reported.
+  let report: ActiveWriteReport;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      report = await live.writeActiveReport(credential);
+      break;
+    } catch (err) {
+      if (
+        attempt >= 1 ||
+        !(err instanceof CredentialStoreError) ||
+        err.kind !== "write-failed"
+      ) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  const writtenBackend =
+    report.keychain === "written"
+      ? report.file === "written"
+        ? "keychain+file"
+        : "keychain"
+      : "file";
+  // Post-write proof, read AFTER the report returned: a write-back that landed
+  // between the adapter's guard and now is caught here, not toasted as success.
+  const after = await live.readActiveDetail();
+  const afterIdentity = after.credential ? credentialIdentity(after.credential) : null;
+  if (afterIdentity === want && after.credential) {
+    const verifiedEmail = await (emailLookupOverride ?? usageApi)
+      .fetchEmail(after.credential.accessToken)
+      .catch(() => undefined);
+    const matchedAccountId = (await findAccountByCredential(vault, after.credential))?.id ?? null;
+    if (report.keychain === "absent") {
+      // No Keychain item exists, so the file IS the login (Claude Code falls
+      // back to it). Verified — but say so, and how to restore the Keychain copy.
+      return {
+        ...base,
+        switched: true,
+        writtenBackend,
+        verified: true,
+        verifiedEmail,
+        matchedAccountId,
+        warning:
+          `No Keychain item "${CLAUDE_KEYCHAIN_SERVICE}" exists yet — the credentials ` +
+          `file now holds "${id}", which Claude Code reads as fallback. Run \`claude login\` ` +
+          `once to restore the Keychain copy.`,
+      };
+    }
+    return { ...base, switched: true, writtenBackend, verified: true, verifiedEmail, matchedAccountId };
+  }
+  const revertSuspected = beforeIdentity !== null && afterIdentity === beforeIdentity;
+  const beforeAccount =
+    before.credential && revertSuspected
+      ? await findAccountByCredential(vault, before.credential).catch(() => null)
+      : null;
+  const warning = revertSuspected
+    ? `The login changed back to "${beforeAccount?.label ?? beforeAccount?.id ?? "the previous account"}" ` +
+      `right after the switch — a running Claude Code session wrote back the previous account. ` +
+      `Re-run "Switch anyway", then let that session exit (or start new sessions after switching). ` +
+      `Proxy sessions are unaffected: they use the vault, not the shared login.`
+    : `Switch could not be verified: the active login (${after.backend}) does not hold "${id}" ` +
+      `after writing. Retry the switch; if it persists, check which backend your terminal's ` +
+      `Claude Code reads (${credentialsPath}).`;
+  return { ...base, switched: false, writtenBackend, verified: false, revertSuspected, warning };
 }
 
 /** Identify the current Claude Code login; never exposes secrets. */
 export async function getCurrentLogin(): Promise<CurrentLogin | null> {
-  const active = await activeStore.readActive();
+  const live = liveStore();
+  const active = await live.readActive();
   if (!active.credential) return null;
-  const email = await usageApi.fetchEmail(active.credential.accessToken);
+  const email = await (emailLookupOverride ?? usageApi).fetchEmail(active.credential.accessToken);
   const matched = await findAccountByCredential(vault, active.credential);
   const matchedAccountId = matched?.id ?? null;
   return {
@@ -661,6 +781,8 @@ export async function getCurrentLogin(): Promise<CurrentLogin | null> {
     source: active.source,
     email,
     matchedAccountId,
+    configHome: live.configHomeDir(),
+    credentialsPath: live.credentialsFilePath(),
   };
 }
 
@@ -778,6 +900,18 @@ export async function removeCustomProvider(id: string): Promise<boolean> {
 }
 
 // ---- Config backup/restore (one registry entry per store) ----
+
+/**
+ * Global toggle + rotation strategy. Missing/corrupt file reads as defaults
+ * (rotation off) — the settings card then shows the truth, not a crash.
+ */
+export async function getGlobalSettings(): Promise<GlobalSettings> {
+  return settings.get();
+}
+
+export async function saveGlobalSettings(data: GlobalSettings): Promise<void> {
+  await settings.save(data);
+}
 
 /** Live record counts per bundled store (settings inventory). */
 export async function getBundleInventory(): Promise<Record<string, number>> {

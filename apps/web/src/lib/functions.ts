@@ -11,6 +11,7 @@ import {
   getAgents,
   getBundleInventory,
   getCurrentLogin,
+  getGlobalSettings,
   getPresets,
   getProfiles,
   getProviderModelEndpoints,
@@ -35,6 +36,7 @@ import {
   removeProviderAccount,
   renameSubscriptionAccount,
   saveCustomProvider,
+  saveGlobalSettings,
   saveProfile,
   saveProviderAccount,
   setProxyTrafficSize,
@@ -48,6 +50,7 @@ import {
   parseAccountUsage,
   parseCustomProvider,
   parseExportBundle,
+  parseGlobalSettings,
   parseImportAccount,
   parseImportBundle,
   parseModelRef,
@@ -260,3 +263,14 @@ export const importBundleFn = createServerFn({ method: "POST" })
 export const validateProviderAccountFn = createServerFn({ method: "POST" })
   .validator(parseValidateProviderAccount)
   .handler(async ({ data }) => validateProviderAccount(data.providerId, data.config));
+
+export const getGlobalSettingsFn = createServerFn({ method: "GET" }).handler(
+  async () => ({ settings: await getGlobalSettings() }),
+);
+
+export const saveGlobalSettingsFn = createServerFn({ method: "POST" })
+  .validator(parseGlobalSettings)
+  .handler(async ({ data }) => {
+    await saveGlobalSettings(data);
+    return { ok: true as const };
+  });

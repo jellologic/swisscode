@@ -62,6 +62,7 @@ function AccountsPage() {
   const { catalog, login, subs, subUsage, proxy, generic, genericUsage } = Route.useLoaderData();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [pendingSwitch, setPendingSwitch] = useState<{ id: string; otherSessions: number } | null>(null);
 
   const providerById = new Map(catalog.providers.map((p) => [p.id, p]));
@@ -76,6 +77,7 @@ function AccountsPage() {
 
   async function run(fn: () => Promise<unknown>, success?: string) {
     setError(null);
+    setNotice(null);
     try {
       await fn();
       if (success) notify.success(success);
@@ -87,12 +89,21 @@ function AccountsPage() {
 
   async function doSwitch(id: string, force: boolean) {
     setError(null);
+    setNotice(null);
     try {
       const result = await switchSubscriptionFn({ data: { id, force } });
       if (result.needsConfirm) {
         setPendingSwitch({ id, otherSessions: result.otherSessions ?? 0 });
+      } else if (result.verified) {
+        // Proof, not assumption: the server reread the login after writing.
+        notify.success(`"${id}" is now the system login (${result.verifiedEmail ?? "email unavailable"})`);
+        if (result.warning) setNotice(result.warning);
+        await refresh();
+      } else if (result.revertSuspected) {
+        setNotice(result.warning ?? "The login changed back right after the switch.");
+        await refresh();
       } else {
-        notify.success(`"${id}" is now the system login`);
+        setError(result.warning ?? `Switch to "${id}" could not be verified.`);
         await refresh();
       }
     } catch (err) {
@@ -194,6 +205,7 @@ function AccountsPage() {
                       login — a proxied one does not — so this is an upper bound. */}
                   <Muted>
                     {pendingSwitch.otherSessions} other Claude session(s) may move too.
+                    Restart running `claude` sessions after switching — macOS caches Keychain reads.
                   </Muted>{" "}
                   <Button size="sm" variant="primary" onClick={() => void doSwitch(r.id, true)}>Switch anyway</Button>{" "}
                   <Button size="sm" variant="ghost" onClick={() => setPendingSwitch(null)}>Cancel</Button>
@@ -238,6 +250,9 @@ function AccountsPage() {
                 ? <>Matches stored account <Code>{login.login.matchedAccountId}</Code>.</>
                 : "Not imported yet — snapshot it below to keep it."}
             </Muted></p>
+            {login.login.credentialsPath && (
+              <p><Muted>Credential file: <Code>{login.login.credentialsPath}</Code></Muted></p>
+            )}
           </Card>
         )}
 
@@ -261,6 +276,7 @@ function AccountsPage() {
         {subErrors.map((e) => (
           <Notice key={e} tone="danger">{e}</Notice>
         ))}
+        {notice && <Notice tone="warn">{notice}</Notice>}
         {error && <Notice tone="danger">{error}</Notice>}
       </Stack>
     </Page>

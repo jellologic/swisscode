@@ -16,6 +16,7 @@ import type {
 import {
   BUNDLE_STORE_KEYS,
   blankSecretValues,
+  isGlobalSettingsShape,
   isProfileShape,
   isSecretConfigKey,
   isProviderAccountShape,
@@ -30,12 +31,14 @@ import type { FileAccountRepository } from "../subscriptions/accountVault.js";
 import type { FileProfileRepository } from "./fileProfiles.js";
 import type { FileProviderAccountRepository } from "./providerAccounts.js";
 import type { FileCustomProviderStore } from "./customProviders.js";
+import type { FileSettingsStore } from "./fileSettings.js";
 
 export interface BundleStoreDeps {
   profiles: FileProfileRepository;
   vault: FileAccountRepository;
   providerAccounts: FileProviderAccountRepository;
   customProviders: FileCustomProviderStore;
+  settings: FileSettingsStore;
   /** Secret field keys per provider (blanked when secrets are excluded). */
   secretKeysFor: (providerId: string) => Promise<Set<string>>;
 }
@@ -132,6 +135,7 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
       subscriptionAccounts,
       providerAccounts,
       customProviders: includeSecrets ? customProviders : customProviders.map(blankEnvStatic),
+      settings: await deps.settings.get(),
     };
   }
 
@@ -169,6 +173,7 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
       await importProfiles(bundle, opts),
       await importProviderAccounts(bundle, opts, knownProviders),
       await importSubscriptionAccounts(bundle, opts),
+      await importSettings(bundle, opts),
     ];
   }
 
@@ -299,13 +304,38 @@ export function createBundleRegistry(deps: BundleStoreDeps): BundleRegistry {
     return res;
   }
 
+  /**
+   * One record, not a list: absent means "exported before settings existed" and
+   * imports onto the defaults (no version bump). With overwrite off, a present
+   * local file wins — the toggle is the user's live choice, not import data.
+   */
+  async function importSettings(
+    bundle: ConfigBundle,
+    opts: ImportBundleOptions,
+  ): Promise<StoreImportResult> {
+    const res: StoreImportResult = { store: "settings", imported: 0, skipped: 0, errors: [] };
+    if (bundle.settings === undefined) return res;
+    if (!isGlobalSettingsShape(bundle.settings)) {
+      res.errors.push("settings: malformed record (needs rotationEnabled and rotationStrategy)");
+      return res;
+    }
+    if (!opts.overwrite && (await deps.settings.present())) {
+      res.skipped++;
+      return res;
+    }
+    await deps.settings.save(bundle.settings);
+    res.imported++;
+    return res;
+  }
+
   return {
-    keys: () => ["customProviders", "profiles", "providerAccounts", "subscriptionAccounts"],
+    keys: () => ["customProviders", "profiles", "providerAccounts", "subscriptionAccounts", "settings"],
     inventory: async () => ({
       customProviders: (await deps.customProviders.list()).length,
       profiles: (await deps.profiles.list()).length,
       providerAccounts: (await deps.providerAccounts.list()).length,
       subscriptionAccounts: (await deps.vault.list()).length,
+      settings: (await deps.settings.present()) ? 1 : 0,
     }),
     exportBundle,
     importBundle,

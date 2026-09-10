@@ -4,7 +4,7 @@
 // real ~/.claude, the Keychain, or a real `claude` binary.
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,6 +13,7 @@ import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { openTrafficStore, toStoredExchange } from "@swisscode/adapters";
 import type { ProxyTrafficEntry } from "@swisscode/adapters";
+import { parseRotationFlags } from "./proxy.js";
 
 const CLI = fileURLToPath(new URL("./index.js", import.meta.url));
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -54,6 +55,12 @@ before(async () => {
     join(binDir, "pgrep"),
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$SWISSCODE_HOME/pgrep-args"\necho 99999\n',
   );
+  // No Keychain item exists in this hermetic world: every `security`
+  // invocation reports "not found" (exit 44), so switches exercise the
+  // file-only path and can never touch the real Keychain. Placed in the
+  // fixture bin ahead of /usr/bin, it shadows the system binary for spawned
+  // CLI runs only.
+  await writeExecutable(join(binDir, "security"), "#!/bin/sh\nexit 44\n");
 
   await writeJson(join(home, "profiles.json"), [
     // Stored key-account reference (item 17).
@@ -503,6 +510,81 @@ describe("launching the agent", () => {
 });
 
 describe("swisscode proxy run", () => {
+  test("help documents the rotation flags", async () => {
+    const result = await runCli(["proxy"]);
+    assert.match(result.stdout, /--rotation on\|off/);
+    assert.match(result.stdout, /--rotation-strategy reset-soonest\|least-used/);
+    assert.match(result.stdout, /--rotation-poll-ms <ms>/);
+  });
+
+  test("a bad rotation flag aborts before starting", async () => {
+    const keyHome = await mkdtemp(join(tmpdir(), "swisscode-cli-rotflag-"));
+    try {
+      await writeJson(join(keyHome, "accounts", "openrouter", "main.json"), {
+        id: "main",
+        providerId: "openrouter",
+        label: "Main",
+        config: { apiKey: OPENROUTER_KEY },
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const result = await runCli(
+        ["proxy", "run", "--port", "18350", "--no-traffic-log", "--rotation", "bogus"],
+        { HOME: keyHome, SWISSCODE_HOME: keyHome },
+      );
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /--rotation expects on\|off/);
+    } finally {
+      await rm(keyHome, { recursive: true, force: true });
+    }
+  });
+
+  test("rotation flags reach the running proxy and status reports them", async () => {
+    const keyHome = await mkdtemp(join(tmpdir(), "swisscode-cli-rot-"));
+    try {
+      await writeJson(join(keyHome, "accounts", "openrouter", "main.json"), {
+        id: "main",
+        providerId: "openrouter",
+        label: "Main",
+        config: { apiKey: OPENROUTER_KEY },
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      // Zero vault accounts: the tick is network-free, so this stays offline.
+      const port = "18349";
+      let statusOut = "";
+      const result = await runCli(
+        ["proxy", "run", "--port", port, "--no-traffic-log", "--rotation", "on", "--rotation-strategy", "least-used"],
+        // The flag beats the env: off in the environment, on on the command line.
+        { HOME: keyHome, SWISSCODE_HOME: keyHome, SWISSCODE_ROTATION_ENABLED: "0" },
+        (child, stdoutSoFar) => {
+          const poll = setInterval(() => {
+            if (!stdoutSoFar().includes("key account(s)")) return;
+            clearInterval(poll);
+            void (async () => {
+              const deadline = Date.now() + 5000;
+              while (Date.now() < deadline) {
+                const st = spawnSync(process.execPath, [CLI, "proxy", "status", "--port", port], {
+                  encoding: "utf8",
+                  env: { PATH: "/usr/bin:/bin", HOME: keyHome, SWISSCODE_HOME: keyHome },
+                });
+                statusOut = String(st.stdout);
+                if (statusOut.includes("checked 0")) break;
+                await new Promise((r) => setTimeout(r, 50));
+              }
+              child.kill("SIGTERM");
+            })();
+          }, 20);
+          child.on("close", () => clearInterval(poll));
+        },
+      );
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(statusOut, /rotation: on \(least-used\) — checked 0 \(0 usable\), no switch: only one account/);
+    } finally {
+      await rm(keyHome, { recursive: true, force: true });
+    }
+  });
+
   test("refuses a home with no accounts at all", async () => {
     const emptyHome = await mkdtemp(join(tmpdir(), "swisscode-cli-empty-"));
     try {
@@ -574,6 +656,26 @@ describe("swisscode proxy run", () => {
     } finally {
       await rm(keyHome, { recursive: true, force: true });
     }
+  });
+});
+
+describe("proxy rotation flag parsing", () => {
+  test("accepts on/off synonyms, strategies, and poll intervals", () => {
+    assert.deepEqual(parseRotationFlags([]), {});
+    assert.deepEqual(parseRotationFlags(["--rotation", "on"]), { enabled: true });
+    assert.deepEqual(parseRotationFlags(["--rotation", "OFF"]), { enabled: false });
+    assert.deepEqual(parseRotationFlags(["--rotation", "0", "--rotation-strategy", "least-used"]), {
+      enabled: false,
+      strategy: "least-used",
+    });
+    assert.deepEqual(parseRotationFlags(["--rotation-poll-ms", "90000"]), { pollMs: 90000 });
+  });
+
+  test("rejects bad values", () => {
+    assert.throws(() => parseRotationFlags(["--rotation", "bogus"]), /expects on\|off/);
+    assert.throws(() => parseRotationFlags(["--rotation-strategy", "soonest"]), /expects reset-soonest\|least-used/);
+    assert.throws(() => parseRotationFlags(["--rotation-poll-ms", "soon"]), /expects a positive/);
+    assert.throws(() => parseRotationFlags(["--rotation-poll-ms", "-5"]), /expects a positive/);
   });
 });
 
@@ -995,5 +1097,30 @@ describe("swisscode accounts use", () => {
       "npm install running as node",
     );
     assert.ok(!nodeCli.test("/home/me/.claude/statusline.sh"), "unrelated ~/.claude tooling");
+  });
+
+  test("proves a file-only switch instead of assuming it", async () => {
+    // Unexpired on purpose: the fast path spends no rotation and needs no
+    // network, unlike the expired "personal" seed above.
+    await writeJson(join(home, "subscriptions", "work.json"), {
+      account: { id: "work", label: "Work", email: "work@example.com", createdAt: NOW, updatedAt: NOW },
+      credential: {
+        accessToken: "work-access",
+        refreshToken: "work-refresh",
+        expiresAt: Date.now() + 3_600_000,
+      },
+    });
+    const result = await runCli(["accounts", "use", "work", "--force"]);
+    assert.equal(result.code, 0);
+    // Proof, not assumption: the success line names the login behind the
+    // token ("email unavailable" when the profile endpoint cannot be reached).
+    assert.match(result.stdout, /Switched Claude Code to "work" \(.+\)\./);
+    // The fixture `security` always reports "not found", so the file IS the
+    // login here — and the CLI says so instead of implying a Keychain write.
+    assert.match(result.stdout, /No Keychain item/);
+    const written = JSON.parse(
+      await readFile(join(home, ".claude", ".credentials.json"), "utf8"),
+    ) as { claudeAiOauth: { refreshToken: string } };
+    assert.equal(written.claudeAiOauth.refreshToken, "work-refresh");
   });
 });

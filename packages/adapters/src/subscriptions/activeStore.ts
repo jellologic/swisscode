@@ -19,6 +19,7 @@ import type {
   OAuthCredential,
 } from "@swisscode/core";
 import { CredentialStoreError, isRecord } from "@swisscode/core";
+import { credentialIdentity } from "./identity.js";
 import { readJsonFile, writeJsonAtomic } from "../store/atomicJson.js";
 
 const execFileAsync = promisify(execFile);
@@ -47,10 +48,23 @@ export type ExecFn = (file: string, args: string[]) => Promise<ExecResult>;
  */
 export type KeychainReadState = "ok" | "not-found" | "unreadable" | "unavailable" | "skipped";
 
-/** ActiveCredentialState plus why the Keychain leg produced what it did. */
+/** ActiveCredentialDetail plus why the Keychain leg produced what it did. */
 export interface ActiveCredentialDetail extends ActiveCredentialState {
   keychain: KeychainReadState;
   /** `security` diagnostic; only set when `keychain` is "unreadable". */
+  keychainError?: string;
+}
+
+/**
+ * What a switch write did, per leg, plus what the verifying reread found.
+ * `verifiedIdentity` is the reread's credentialIdentity() ("none" when the
+ * reread found no credential) — a one-way hash, safe to log and return.
+ */
+export interface ActiveWriteReport {
+  file: "written" | "failed";
+  keychain: "written" | "absent" | "unavailable" | "skipped" | "failed";
+  verifiedBackend: "keychain" | "file" | "none";
+  verifiedIdentity: string;
   keychainError?: string;
 }
 
@@ -248,7 +262,31 @@ export class ClaudeActiveCredentialStore implements ActiveCredentialStore {
     return this.readActiveDetail();
   }
 
+  /** Where this store reads/writes the credentials file (see resolveConfigHome). */
+  configHomeDir(): string {
+    return this.configHome;
+  }
+
+  /** Full path of the credentials file this store reads/writes. */
+  credentialsFilePath(): string {
+    return this.credentialsPath();
+  }
+
   async writeActive(credential: OAuthCredential): Promise<void> {
+    await this.writeActiveReport(credential);
+  }
+
+  /**
+   * Write to whichever backends are available, then prove the switch landed by
+   * rereading. The old code branched the write target on the PRE-read backend —
+   * a `file`/`none` pre-read while the Keychain held the live login produced a
+   * file-only write `claude` never saw, reported as success. Now: the Keychain
+   * is attempted whenever it might hold the login, the file mirrors whenever
+   * the Keychain takes the write, and a reread mismatch throws instead of
+   * reporting a switch that is not there. Throws CredentialStoreError on any
+   * leg the effective login depends on; the report carries the rest.
+   */
+  async writeActiveReport(credential: OAuthCredential): Promise<ActiveWriteReport> {
     const current = await this.readActiveDetail();
     if (current.keychain === "unreadable") {
       // Writing the file here would report success while `claude` keeps
@@ -261,20 +299,77 @@ export class ClaudeActiveCredentialStore implements ActiveCredentialStore {
           `on the previous account.`,
       );
     }
-    if (current.backend === "keychain") {
+    // The Keychain holds the live login whenever it is readable — including
+    // the `not-found` pre-read, where the item may have appeared between read
+    // and write or the pre-read misclassified it. Attempt it either way.
+    let keychain: ActiveWriteReport["keychain"];
+    if (current.keychain === "ok") {
+      // Throws itself (with its own reread guard) when the update does not take.
       await this.writeKeychain(credential);
-      // Mirror to the file too (what cswap does): keeps both backends in sync
-      // so a future Keychain outage falls back to the same account.
-      // Keychain remains the effective store; mirror failure only warns.
+      keychain = "written";
+    } else if (current.keychain === "not-found") {
       try {
-        await this.writeFile(credential);
+        await this.writeKeychain(credential);
+        keychain = "written";
       } catch (err) {
-        console.warn(`Keychain updated; file mirror failed (harmless): ${(err as Error).message}`);
+        // Genuinely no item to update: the file below IS the switch. Anything
+        // else (denied, duplicate) means `claude` may still read the Keychain —
+        // a file-only write would half-switch, so let it throw.
+        if (!(err instanceof CredentialStoreError && err.kind === "keychain-missing")) throw err;
+        keychain = "absent";
       }
-      return;
+    } else {
+      keychain = current.keychain;
     }
-    // Default (and "none") backend: the credentials file.
-    await this.writeFile(credential);
+    // The file is the effective store when the Keychain took nothing, and the
+    // fallback mirror when it did (what cswap does). A failed mirror only
+    // warns; a failed effective write throws below via the reread check.
+    let file: ActiveWriteReport["file"] = "written";
+    try {
+      await this.writeFile(credential);
+    } catch (err) {
+      if (keychain !== "written") {
+        throw new CredentialStoreError(
+          "write-failed",
+          `Could not write ${this.credentialsPath()}: ${(err as Error).message}. ` +
+            `The active login is unchanged.`,
+        );
+      }
+      console.warn(`Keychain updated; file mirror failed (harmless): ${(err as Error).message}`);
+      file = "failed";
+    }
+    // Prove the switch landed: identity (sha256 of the refresh token, so
+    // in-lineage access-token rotation cannot false-fail) must match what we
+    // wrote, on a backend we wrote. A mismatch here is a concurrent revert —
+    // typically a running `claude` session persisting the previous lineage —
+    // or a lost write; either way success must not be reported.
+    const reread = await this.readActiveDetail();
+    const expected = credentialIdentity(credential);
+    const actual = reread.credential ? credentialIdentity(reread.credential) : null;
+    const report: ActiveWriteReport = {
+      file,
+      keychain,
+      verifiedBackend: reread.backend,
+      verifiedIdentity: actual ?? "none",
+    };
+    if (reread.keychainError !== undefined) report.keychainError = reread.keychainError;
+    if (actual !== expected) {
+      throw new CredentialStoreError(
+        "write-failed",
+        `Switch did not take effect: reread ${reread.backend} holds a different login ` +
+          `(want ${expected.slice(0, 12)}…, got ${(actual ?? "none").slice(0, 12)}…). ` +
+          `A running Claude Code session likely wrote back the previous account — ` +
+          `retry the switch, then restart that session.`,
+      );
+    }
+    if (keychain === "written" && reread.backend !== "keychain") {
+      throw new CredentialStoreError(
+        "write-failed",
+        "Keychain write did not take effect — the active login is unchanged. " +
+          "Aborting rather than leaving a half-switched state.",
+      );
+    }
+    return report;
   }
 
   private async readCredentialsFile(): Promise<{

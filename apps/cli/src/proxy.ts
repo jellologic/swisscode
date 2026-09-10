@@ -4,12 +4,16 @@
 import { appendFile, readFile, stat } from "node:fs/promises";
 import {
   AnthropicOAuthClient,
+  AnthropicUsageClient,
+  CachingUsageClient,
   ClaudeActiveCredentialStore,
   DEFAULT_TRAFFIC_BODY_BYTES,
   FileAccountRepository,
   FileCustomProviderStore,
   FileProfileRepository,
   FileProviderAccountRepository,
+  FileSettingsStore,
+  FileUsageCache,
   PROXY_TOKEN_REJECTED,
   ProxyControlClient,
   ProxyUnavailableError,
@@ -25,10 +29,11 @@ import {
   openTrafficStore,
   proxyBaseUrl,
   proxyPort,
+  vaultIdentityResolver,
 } from "@swisscode/adapters";
 import type { ProxyTrafficEntry } from "@swisscode/adapters";
 import { SPEND_ESTIMATE_NOTE, formatSpend, matchTrafficFilter, spendRollup, suggestInsights } from "@swisscode/core";
-import type { TrafficFilter, TrafficRollupGrain } from "@swisscode/core";
+import type { RotationStrategy, TrafficFilter, TrafficRollupGrain } from "@swisscode/core";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -41,6 +46,8 @@ export function proxyHelp(): string {
     "",
     "  run [--port <n>] [--traffic-log <path>|--no-traffic-log] [--traffic-store <path>]",
     "      [--log-bodies] [--traffic-keep <n>] [--traffic-body-bytes <n>] [--log-body-bytes <n>]",
+    "      [--rotation on|off] [--rotation-strategy reset-soonest|least-used]",
+    "      [--rotation-poll-ms <ms>]",
     "                          Run the subscription proxy (foreground). Each",
     "                          proxied request is appended as redacted JSONL",
     "                          (default ~/.swisscode/proxy-traffic.jsonl) and",
@@ -55,6 +62,13 @@ export function proxyHelp(): string {
     "                          (default 100000), 0 keeps everything.",
     "                          Each run mints a control token (0600) that",
     "                          `use`/`status` send back on control requests.",
+    "                          Background rotation polls each vault account's",
+    "                          usage (default every 5 min, min 60s) and rolls",
+    "                          the active account to the reset-soonest (or",
+    "                          least-used) one. Default off; the flags beat",
+    "                          SWISSCODE_ROTATION_ENABLED/STRATEGY/POLL_MS,",
+    "                          which beat the /settings toggle — and the toggle",
+    "                          applies live, no restart needed.",
     "  use <id> [--port <n>]   Switch the proxy's active account",
     "  status [--port <n>]     Show proxy status and accounts",
     "  log [--tail <n>] [--traffic-log <path>] [--profile <name>] [--route <id>]",
@@ -208,6 +222,43 @@ function control(port: number): ProxyControlClient {
   return new ProxyControlClient({ baseUrl: proxyBaseUrl(port) });
 }
 
+/** CLI `--rotation*` flag overrides: top precedence, above env, above the file. */
+export interface RotationFlagOverrides {
+  enabled?: boolean;
+  strategy?: RotationStrategy;
+  pollMs?: number;
+}
+
+/**
+ * Parse the rotation flags. Pure — no env, no file (the poller resolves those
+ * layers itself). Throws on a bad value; the caller reports it and aborts
+ * before any side effect (no token minted, no store opened).
+ */
+export function parseRotationFlags(rest: string[]): RotationFlagOverrides {
+  const overrides: RotationFlagOverrides = {};
+  const rawEnabled = flag(rest, "--rotation");
+  if (rawEnabled !== undefined) {
+    const v = rawEnabled.toLowerCase();
+    if (["on", "true", "1", "yes"].includes(v)) overrides.enabled = true;
+    else if (["off", "false", "0", "no"].includes(v)) overrides.enabled = false;
+    else throw new Error(`--rotation expects on|off, got "${rawEnabled}".`);
+  }
+  const rawStrategy = flag(rest, "--rotation-strategy");
+  if (rawStrategy !== undefined) {
+    if (rawStrategy === "reset-soonest" || rawStrategy === "least-used") overrides.strategy = rawStrategy;
+    else throw new Error(`--rotation-strategy expects reset-soonest|least-used, got "${rawStrategy}".`);
+  }
+  const rawPollMs = flag(rest, "--rotation-poll-ms");
+  if (rawPollMs !== undefined) {
+    const n = parseInt(rawPollMs, 10);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new Error(`--rotation-poll-ms expects a positive millisecond count, got "${rawPollMs}".`);
+    }
+    overrides.pollMs = n;
+  }
+  return overrides;
+}
+
 /** The token path is the CLI's own advice: it is the file the user can fix. */
 function controlErrorMessage(err: unknown): string {
   const message = (err as Error).message;
@@ -220,6 +271,16 @@ export async function proxyStatus(port: number): Promise<{ running: boolean; act
   const body = await control(port).status();
   console.log(`Proxy on :${port} — active: ${body.activeAccountId ?? "(none)"}`);
   for (const a of body.accounts ?? []) console.log(`  ${a.id}\t${a.label}`);
+  const rot = body.rotation;
+  if (rot) {
+    if (!rot.enabled) console.log("  rotation: off");
+    else if (rot.lastRunAt === null) console.log(`  rotation: on (${rot.strategy}), waiting for first tick`);
+    else {
+      console.log(
+        `  rotation: on (${rot.strategy}) — checked ${rot.checked} (${rot.usable} usable), ${rot.switched ?? "no switch"}: ${rot.reason ?? "—"}`,
+      );
+    }
+  }
   return { running: body.running ?? true, activeAccountId: body.activeAccountId ?? null };
 }
 
@@ -274,6 +335,14 @@ export interface OwnedProxy {
  * taken by something that is not a swisscode proxy.
  */
 export async function startOwnedProxy(port: number, rest: string[]): Promise<OwnedProxy | undefined> {
+  let rotation: RotationFlagOverrides;
+  try {
+    rotation = parseRotationFlags(rest);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exitCode = 1;
+    return undefined;
+  }
   const noLog = rest.includes("--no-traffic-log");
   const trafficLog = noLog ? undefined : (flag(rest, "--traffic-log") ?? defaultTrafficLogPath());
   const logBodies = rest.includes("--log-bodies");
@@ -288,6 +357,8 @@ export async function startOwnedProxy(port: number, rest: string[]): Promise<Own
   // One token per run: a token that outlived its server would keep
   // authorizing after the port moved to something else.
   const controlToken = await createProxyToken();
+  const vault = new FileAccountRepository(defaultSubscriptionsDir());
+  const usageCache = new FileUsageCache();
   const keyAccounts = await new FileProviderAccountRepository().list();
   // The queryable store opens beside the JSONL firehose unless recording is
   // off entirely. A store failure (e.g. an old Node without node:sqlite)
@@ -302,7 +373,7 @@ export async function startOwnedProxy(port: number, rest: string[]): Promise<Own
     }
   }
   const proxy = new SubscriptionProxy(
-    new FileAccountRepository(defaultSubscriptionsDir()),
+    vault,
     new AnthropicOAuthClient(),
     {
       profiles: new FileProfileRepository(),
@@ -318,6 +389,20 @@ export async function startOwnedProxy(port: number, rest: string[]): Promise<Own
       trafficBufferSize: keep,
       trafficBodyBytes: bodyBytes("--traffic-body-bytes", "SWISSCODE_TRAFFIC_BODY_BYTES", DEFAULT_TRAFFIC_BODY_BYTES),
       maxLoggedBodyBytes: bodyBytes("--log-body-bytes", "SWISSCODE_LOG_BODY_BYTES", 8192),
+      // Always wired: the poller re-reads settings every tick, so the
+      // /settings toggle applies live with no restart. Disabled is a settings
+      // read per cycle and zero network — the same client/cache the poller
+      // pre-checks, keyed by the same vault identity.
+      rotation: {
+        usageClient: new CachingUsageClient(new AnthropicUsageClient(), usageCache, {
+          accountIdentity: vaultIdentityResolver(vault),
+        }),
+        usageCache,
+        settings: new FileSettingsStore(),
+        ...(rotation.enabled !== undefined ? { enabled: rotation.enabled } : {}),
+        ...(rotation.strategy ? { strategy: rotation.strategy } : {}),
+        ...(rotation.pollMs !== undefined ? { pollMs: rotation.pollMs } : {}),
+      },
       onTraffic: trafficLog
         ? (entry) => {
             console.log(trafficLine(entry));
@@ -360,13 +445,9 @@ export async function cmdProxy(args: string[]): Promise<void> {
     const started = await startOwnedProxy(port, rest);
     if (!started) return;
     const { proxy, trafficStore, vaultCount: count, keyCount, trafficLog, logBodies } = started;
-    console.log(
-      `Subscription proxy on ${proxyBaseUrl(port)} (${count} vault account(s), ${keyCount} key account(s)). Ctrl-C to stop.`,
-    );
-    if (count === 0) {
-      console.log("No subscription accounts — subscription requests will fail until one is imported.");
-    }
-    if (trafficLog) console.log(`Traffic: ${trafficLog}${logBodies ? " (bodies on)" : ""}`);
+    // Handlers before the ready line: a SIGTERM that lands the moment our
+    // supervisor sees "key account(s)" must shut down cleanly (exit 0), not
+    // kill us with the default disposition (exit null).
     const shutdown = () => {
       try {
         trafficStore?.close();
@@ -377,6 +458,13 @@ export async function cmdProxy(args: string[]): Promise<void> {
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+    console.log(
+      `Subscription proxy on ${proxyBaseUrl(port)} (${count} vault account(s), ${keyCount} key account(s)). Ctrl-C to stop.`,
+    );
+    if (count === 0) {
+      console.log("No subscription accounts — subscription requests will fail until one is imported.");
+    }
+    if (trafficLog) console.log(`Traffic: ${trafficLog}${logBodies ? " (bodies on)" : ""}`);
     await new Promise(() => {}); // run until signal
     return;
   }

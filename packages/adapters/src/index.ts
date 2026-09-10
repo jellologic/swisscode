@@ -7,6 +7,7 @@ export type { MetaModelsOptions } from "./providers/metaModels.js";
 export { createAgentRegistry, createProviderRegistry, defaultProviders, defaultTrafficParsers } from "./registry.js";
 export { claudeTrafficParser } from "./providers/claudeTrafficParser.js";
 export { FileProfileRepository, defaultProfilesPath } from "./store/fileProfiles.js";
+export { FileSettingsStore, defaultSettingsPath } from "./store/fileSettings.js";
 export {
   FileProviderAccountRepository,
   defaultProviderAccountsDir,
@@ -55,7 +56,7 @@ export {
   ClaudeActiveCredentialStore,
   CLAUDE_KEYCHAIN_SERVICE,
 } from "./subscriptions/activeStore.js";
-export type { ActiveCredentialDetail, ActiveStoreOptions, ExecFn, KeychainReadState } from "./subscriptions/activeStore.js";
+export type { ActiveCredentialDetail, ActiveStoreOptions, ActiveWriteReport, ExecFn, KeychainReadState } from "./subscriptions/activeStore.js";
 export {
   AnthropicOAuthClient,
   AnthropicUsageClient,
@@ -70,6 +71,16 @@ export {
   readProxyToken,
 } from "./proxy/proxyToken.js";
 export { SubscriptionProxy } from "./proxy/server.js";
+export {
+  DEFAULT_ROTATION_POLL_MS,
+  MIN_ROTATION_POLL_MS,
+  RotationPoller,
+} from "./proxy/rotationPoller.js";
+export type {
+  RotationOverrides,
+  RotationPollerDeps,
+  RotationSnapshot,
+} from "./proxy/rotationPoller.js";
 export { DEFAULT_PROXY_PORT } from "./proxy/server.js";
 export type { ProxyOptions, ProxyStatus, ProxyTrafficAttempt, ProxyTrafficEntry } from "./proxy/server.js";
 export {

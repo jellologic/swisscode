@@ -208,3 +208,24 @@ export interface LaunchSpec {
    */
   ephemeralFiles?: EphemeralFile[];
 }
+
+/** How the proxy's background rotation poller picks the next active account. */
+export type RotationStrategy = "reset-soonest" | "least-used";
+
+/**
+ * Global (home-level) runtime settings: one record for the whole home, not
+ * per-profile. Persisted as `<base>/settings.json`, backed up as the bundle's
+ * "settings" key. Grows one optional field at a time — never silently, so old
+ * bundles (no "settings" key) still import onto these defaults.
+ */
+export interface GlobalSettings {
+  /** Background subscription health check + auto-rollover. Off by default. */
+  rotationEnabled: boolean;
+  rotationStrategy: RotationStrategy;
+}
+
+/** Cold-start defaults: rotation stays off until the user opts in. */
+export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
+  rotationEnabled: false,
+  rotationStrategy: "reset-soonest",
+};

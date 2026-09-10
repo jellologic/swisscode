@@ -8,6 +8,7 @@ import { createBundleRegistry } from "./configBundle.js";
 import { FileProfileRepository } from "./fileProfiles.js";
 import { FileProviderAccountRepository } from "./providerAccounts.js";
 import { FileCustomProviderStore } from "./customProviders.js";
+import { FileSettingsStore } from "./fileSettings.js";
 import { FileAccountRepository } from "../subscriptions/accountVault.js";
 
 async function registry() {
@@ -17,6 +18,7 @@ async function registry() {
     vault: new FileAccountRepository(join(home, "subscriptions")),
     providerAccounts: new FileProviderAccountRepository(join(home, "accounts")),
     customProviders: new FileCustomProviderStore(join(home, "custom-providers.json")),
+    settings: new FileSettingsStore(join(home, "settings.json")),
     secretKeysFor: async () => new Set(["apiKey"]),
   });
 }
@@ -83,5 +85,130 @@ describe("config bundle carries the new profile fields", () => {
     assert.equal(stripped.profiles[0]?.providerConfig?.["apiKey"], "");
     assert.deepEqual(stripped.profiles[0]?.modelRoutes, routed().modelRoutes);
     assert.deepEqual(stripped.profiles[0]?.session, routed().session);
+  });
+});
+
+describe("config bundle carries the global settings record", () => {
+  const settings = { rotationEnabled: true, rotationStrategy: "least-used" } as const;
+
+  it("export always writes settings; import restores them onto a fresh home", async () => {
+    const src = await registry();
+    assert.deepEqual((await src.exportBundle(true)).settings, {
+      rotationEnabled: false,
+      rotationStrategy: "reset-soonest",
+    });
+    const dst = await registry();
+    const results = await dst.importBundle(
+      {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        includeSecrets: true,
+        profiles: [],
+        subscriptionAccounts: [],
+        providerAccounts: [],
+        customProviders: [],
+        settings,
+      },
+      { overwrite: false },
+    );
+    const row = results.find((r) => r.store === "settings");
+    assert.deepEqual({ imported: row?.imported, skipped: row?.skipped, errors: row?.errors }, {
+      imported: 1,
+      skipped: 0,
+      errors: [],
+    });
+    assert.deepEqual((await dst.exportBundle(true)).settings, settings);
+  });
+
+  it("an old bundle without settings imports clean and keeps the local toggle", async () => {
+    const dst = await registry();
+    const results = await dst.importBundle(
+      {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        includeSecrets: true,
+        profiles: [],
+        subscriptionAccounts: [],
+        providerAccounts: [],
+        customProviders: [],
+      },
+      { overwrite: false },
+    );
+    const row = results.find((r) => r.store === "settings");
+    assert.deepEqual({ imported: row?.imported, skipped: row?.skipped, errors: row?.errors }, {
+      imported: 0,
+      skipped: 0,
+      errors: [],
+    });
+    // Defaults, and the inventory counts no settings file yet.
+    assert.deepEqual((await dst.exportBundle(true)).settings, {
+      rotationEnabled: false,
+      rotationStrategy: "reset-soonest",
+    });
+    assert.equal((await dst.inventory()).settings, 0);
+  });
+
+  it("no-overwrite import keeps the local toggle; overwrite takes the bundle's", async () => {
+    const dst = await registry();
+    const first = await dst.importBundle(
+      {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        includeSecrets: true,
+        profiles: [],
+        subscriptionAccounts: [],
+        providerAccounts: [],
+        customProviders: [],
+        settings,
+      },
+      { overwrite: false },
+    );
+    assert.equal(first.find((r) => r.store === "settings")?.imported, 1);
+    assert.equal((await dst.inventory()).settings, 1);
+
+    const kept = await dst.importBundle(
+      {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        includeSecrets: true,
+        profiles: [],
+        subscriptionAccounts: [],
+        providerAccounts: [],
+        customProviders: [],
+        settings: { rotationEnabled: false, rotationStrategy: "reset-soonest" },
+      },
+      { overwrite: false },
+    );
+    assert.equal(kept.find((r) => r.store === "settings")?.skipped, 1);
+    assert.deepEqual((await dst.exportBundle(true)).settings, settings);
+
+    await dst.importBundle(
+      {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        includeSecrets: true,
+        profiles: [],
+        subscriptionAccounts: [],
+        providerAccounts: [],
+        customProviders: [],
+        settings: { rotationEnabled: false, rotationStrategy: "reset-soonest" },
+      },
+      { overwrite: true },
+    );
+    assert.deepEqual((await dst.exportBundle(true)).settings, {
+      rotationEnabled: false,
+      rotationStrategy: "reset-soonest",
+    });
+  });
+
+  it("keys() covers settings in import order", async () => {
+    const reg = await registry();
+    assert.deepEqual(reg.keys(), [
+      "customProviders",
+      "profiles",
+      "providerAccounts",
+      "subscriptionAccounts",
+      "settings",
+    ]);
   });
 });

@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  isGlobalSettingsShape,
   isOAuthCredentialShape,
   isProfileShape,
   isProviderAccountShape,
@@ -217,5 +218,35 @@ describe("isRecord / isStringRecord", () => {
     assert.equal(isStringRecord({ a: { b: "1" } }), false);
     assert.equal(isStringRecord({ a: 1 }), false);
     assert.equal(isStringRecord(["a"]), false);
+  });
+});
+
+describe("isGlobalSettingsShape", () => {
+  it("accepts the defaults and every valid strategy", () => {
+    assert.equal(
+      isGlobalSettingsShape({ rotationEnabled: false, rotationStrategy: "reset-soonest" }),
+      true,
+    );
+    assert.equal(
+      isGlobalSettingsShape({ rotationEnabled: true, rotationStrategy: "least-used" }),
+      true,
+    );
+  });
+
+  it("rejects wrong types, unknown strategies, and non-objects", () => {
+    for (const value of [
+      null,
+      undefined,
+      [],
+      "settings",
+      {},
+      { rotationEnabled: true },
+      { rotationStrategy: "reset-soonest" },
+      { rotationEnabled: "yes", rotationStrategy: "reset-soonest" },
+      { rotationEnabled: false, rotationStrategy: "soonest" },
+      { rotationEnabled: false, rotationStrategy: 42 },
+    ]) {
+      assert.equal(isGlobalSettingsShape(value), false, JSON.stringify(value));
+    }
   });
 });

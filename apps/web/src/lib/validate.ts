@@ -11,7 +11,7 @@
 // Messages name the field and the expectation but never echo the value —
 // these payloads carry API keys.
 
-import { RECORD_ID_RE, isRecord, profileShapeProblem, type Profile } from "@swisscode/core";
+import { RECORD_ID_RE, isRecord, profileShapeProblem, type GlobalSettings, type Profile } from "@swisscode/core";
 
 /** Rejected input. Typed like ProfileError/OAuthError so callers can tell it apart. */
 export class InputError extends Error {
@@ -295,6 +295,19 @@ export function parseTrafficEntryRefs(data: unknown): { ids: string[] } {
 export function parseSessionRef(data: unknown): { sessionId: string } {
   const rec = asRecord(data, "data");
   return { sessionId: identifier(rec["sessionId"], "sessionId") };
+}
+
+/**
+ * Global rotation toggle + strategy. Both fields required: a partial save
+ * would silently keep a stale half, and the form always sends the whole pair.
+ */
+export function parseGlobalSettings(data: unknown): GlobalSettings {
+  const rec = asRecord(data, "data");
+  const strategy = rec["rotationStrategy"];
+  if (strategy !== "reset-soonest" && strategy !== "least-used") {
+    throw new InputError("rotationStrategy", 'must be "reset-soonest" or "least-used"');
+  }
+  return { rotationEnabled: flag(rec["rotationEnabled"], "rotationEnabled"), rotationStrategy: strategy };
 }
 
 /** Secrets ship only when the caller asks in this request — never by default. */

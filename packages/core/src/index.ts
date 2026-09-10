@@ -2,13 +2,16 @@ export type {
   ClaudeSessionOptions,
   EphemeralFile,
   FieldDef,
+  GlobalSettings,
   JsonValue,
   LaunchSpec,
   ModelRoute,
   PluginHelp,
   PluginLink,
   Profile,
+  RotationStrategy,
 } from "./domain.js";
+export { DEFAULT_GLOBAL_SETTINGS } from "./domain.js";
 export type {
   AccountValidation,
   AgentPort,
@@ -117,6 +120,7 @@ export {
 } from "./redact.js";
 export type { RedactEnvOptions } from "./redact.js";
 export {
+  isGlobalSettingsShape,
   isOAuthCredentialShape,
   isProfileShape,
   isProviderAccountShape,
@@ -129,6 +133,15 @@ export {
 export { SingleFlight } from "./singleFlight.js";
 export { MODEL_ID_RE, describeModelRoute, extractRequestModel, selectModelRoute, validateModelRoutes } from "./modelRoutes.js";
 export type { ModelRouteLabels, ModelRouteLookups } from "./modelRoutes.js";
+export {
+  ROTATION_EXHAUSTED_UTIL,
+  ROTATION_HYSTERESIS_PTS,
+  ROTATION_MIN_RESET_EDGE_MS,
+  ROTATION_UNKNOWN_UTIL,
+  rankAccountsForRotation,
+  shouldRotate,
+} from "./rotation.js";
+export type { RankedAccount, RotationEvent, RotationInput, RotationTier } from "./rotation.js";
 export {
   EFFORT_LEVELS,
   EPHEMERAL_DIR_TOKEN,

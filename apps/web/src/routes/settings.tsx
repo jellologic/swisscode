@@ -13,6 +13,7 @@ import {
   Notice,
   Page,
   RowActions,
+  Select,
   Stack,
   Table,
 } from "../design";
@@ -20,12 +21,17 @@ import { notify } from "../design";
 import {
   bundleInventoryFn,
   exportBundleFn,
+  getGlobalSettingsFn,
   importBundleFn,
+  saveGlobalSettingsFn,
 } from "../lib/functions";
-import { BUNDLE_STORE_KEYS } from "@swisscode/core";
+import { BUNDLE_STORE_KEYS, type GlobalSettings } from "@swisscode/core";
 
 export const Route = createFileRoute("/settings")({
-  loader: async () => ({ inventory: await bundleInventoryFn() }),
+  loader: async () => ({
+    inventory: await bundleInventoryFn(),
+    rotation: (await getGlobalSettingsFn()).settings,
+  }),
   component: SettingsPage,
 });
 
@@ -50,7 +56,7 @@ const resultColumns: Column<StoreImportResult>[] = [
 ];
 
 function SettingsPage() {
-  const { inventory } = Route.useLoaderData();
+  const { inventory, rotation } = Route.useLoaderData();
   const router = useRouter();
   // Opt-in: a backup with live credentials is only produced when this session
   // asks for one, never as the default of a link someone can be sent.
@@ -58,6 +64,11 @@ function SettingsPage() {
   const [overwrite, setOverwrite] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<StoreImportResult[] | null>(null);
+  // Rotation toggle + strategy: local edits, saved as one pair on demand.
+  const [rotationEnabled, setRotationEnabled] = useState(rotation.rotationEnabled);
+  const [rotationStrategy, setRotationStrategy] = useState<GlobalSettings["rotationStrategy"]>(
+    rotation.rotationStrategy,
+  );
 
   async function onExport() {
     setError(null);
@@ -71,6 +82,17 @@ function SettingsPage() {
       a.click();
       URL.revokeObjectURL(url);
       notify.success(`Backup downloaded${includeSecrets ? "" : " (secrets excluded)"}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function onSaveRotation() {
+    setError(null);
+    try {
+      await saveGlobalSettingsFn({ data: { rotationEnabled, rotationStrategy } });
+      notify.success("Rotation saved — the running proxy picks it up on its next tick");
+      await router.invalidate();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -140,6 +162,35 @@ function SettingsPage() {
             )}
             <RowActions>
               <Button variant="primary" onClick={onExport}>Download backup</Button>
+            </RowActions>
+          </Stack>
+        </Card>
+
+        <Card>
+          <h2>Proxy rotation</h2>
+          <Stack>
+            <Check checked={rotationEnabled} onChange={setRotationEnabled}>
+              Rotate subscriptions automatically{" "}
+              <Muted>(a background check rolls the proxy to the next usable account)</Muted>
+            </Check>
+            <Field
+              label="Strategy"
+              hint="Reset-soonest prefers the account whose limit resets first; least-used prefers the coolest account."
+            >
+              <Select
+                value={rotationStrategy}
+                onChange={(e) =>
+                  setRotationStrategy(e.target.value as GlobalSettings["rotationStrategy"])
+                }
+              >
+                <option value="reset-soonest">reset-soonest</option>
+                <option value="least-used">least-used</option>
+              </Select>
+            </Field>
+            <RowActions>
+              <Button variant="primary" onClick={() => void onSaveRotation()}>
+                Save rotation
+              </Button>
             </RowActions>
           </Stack>
         </Card>

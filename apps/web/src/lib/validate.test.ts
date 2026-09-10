@@ -6,6 +6,7 @@ import {
   parseAccountUsage,
   parseCustomProvider,
   parseExportBundle,
+  parseGlobalSettings,
   parseImportAccount,
   parseImportBundle,
   parseModelRef,
@@ -188,5 +189,32 @@ describe("model and custom-provider input", () => {
         }),
       "test.method",
     );
+  });
+});
+
+describe("parseGlobalSettings", () => {
+  it("takes the whole pair, either strategy", () => {
+    assert.deepEqual(
+      parseGlobalSettings({ rotationEnabled: true, rotationStrategy: "reset-soonest" }),
+      { rotationEnabled: true, rotationStrategy: "reset-soonest" },
+    );
+    assert.deepEqual(
+      parseGlobalSettings({ rotationEnabled: false, rotationStrategy: "least-used" }),
+      { rotationEnabled: false, rotationStrategy: "least-used" },
+    );
+  });
+
+  it("rejects a partial save, a bad enum, and a non-boolean toggle", () => {
+    // A partial save would silently keep a stale half — the form sends both.
+    rejects(() => parseGlobalSettings({ rotationEnabled: true }), "rotationStrategy");
+    rejects(
+      () => parseGlobalSettings({ rotationEnabled: true, rotationStrategy: "soonest" }),
+      "rotationStrategy",
+    );
+    rejects(
+      () => parseGlobalSettings({ rotationEnabled: "yes", rotationStrategy: "reset-soonest" }),
+      "rotationEnabled",
+    );
+    rejects(() => parseGlobalSettings(null), "data");
   });
 });

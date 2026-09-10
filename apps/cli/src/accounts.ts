@@ -8,16 +8,18 @@ import {
   AnthropicOAuthClient,
   AnthropicUsageClient,
   CachingUsageClient,
+  CLAUDE_KEYCHAIN_SERVICE,
   ClaudeActiveCredentialStore,
   FileAccountRepository,
   FileUsageCache,
   countOtherClaudeSessions,
+  credentialIdentity,
   defaultSubscriptionsDir,
   findAccountByCredential,
   freshVaultCredential,
 } from "@swisscode/adapters";
-import type { ProcessProbe } from "@swisscode/adapters";
-import { OAuthError, validateAccountId } from "@swisscode/core";
+import type { ActiveWriteReport, ProcessProbe } from "@swisscode/adapters";
+import { CredentialStoreError, OAuthError, validateAccountId } from "@swisscode/core";
 
 const execFileAsync = promisify(execFile);
 
@@ -206,14 +208,64 @@ export async function activateAccount(id: string, force: boolean): Promise<boole
       liveStore: activeStore,
     });
     const before = await activeStore.readActive();
-    await activeStore.writeActive(credential);
-    console.log(`Switched Claude Code to "${id}"${refreshed ? " (token refreshed)" : ""}.`);
+    const beforeIdentity = before.credential ? credentialIdentity(before.credential) : null;
+    const want = credentialIdentity(credential);
+    // Bounded re-write of the SAME credential object (tokens are single-use —
+    // never a second freshVaultCredential): one retry covers a single in-flight
+    // write-back from a running session. A persistent mismatch is reported.
+    let report: ActiveWriteReport;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        report = await activeStore.writeActiveReport(credential);
+        break;
+      } catch (err) {
+        if (attempt >= 1 || !(err instanceof CredentialStoreError) || err.kind !== "write-failed") {
+          throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+    // Post-write proof, read AFTER the report returned: a write-back that landed
+    // between the adapter's guard and now is caught here, not printed as success.
+    const after = await activeStore.readActiveDetail();
+    const afterIdentity = after.credential ? credentialIdentity(after.credential) : null;
+    if (!after.credential || afterIdentity !== want) {
+      const revertSuspected = beforeIdentity !== null && afterIdentity === beforeIdentity;
+      if (revertSuspected) {
+        const beforeAccount = before.credential
+          ? await findAccountByCredential(accounts, before.credential).catch(() => null)
+          : null;
+        console.error(
+          `The login changed back to "${beforeAccount?.label ?? beforeAccount?.id ?? "the previous account"}" ` +
+            `right after the switch — a running Claude Code session wrote back the previous account. ` +
+            `Re-run with --force, then let that session exit (or start new sessions after switching).`,
+        );
+      } else {
+        console.error(
+          `Switch could not be verified: the active login (${after.backend}) does not hold "${id}" ` +
+            `after writing. Retry the switch; if it persists, check which backend your terminal's ` +
+            `Claude Code reads (${activeStore.credentialsFilePath()}).`,
+        );
+      }
+      process.exitCode = 1;
+      return false;
+    }
+    const email = await usageApi.fetchEmail(after.credential.accessToken).catch(() => undefined);
+    console.log(
+      `Switched Claude Code to "${id}" (${email ?? "email unavailable"})${refreshed ? " (token refreshed)" : ""}.`,
+    );
+    if (report.keychain === "absent") {
+      console.log(
+        `No Keychain item "${CLAUDE_KEYCHAIN_SERVICE}" exists yet — the credentials file now holds ` +
+          `"${id}", which Claude Code reads as fallback. Run \`claude login\` once to restore the Keychain copy.`,
+      );
+    }
     if (before.backend === "keychain") {
       console.log("macOS caches Keychain reads: restart running `claude` sessions to pick this up immediately.");
     }
     return true;
   } catch (err) {
-    if (err instanceof OAuthError) {
+    if (err instanceof OAuthError || err instanceof CredentialStoreError) {
       console.error(`Cannot switch: ${err.message}`);
       process.exitCode = 1;
       return false;

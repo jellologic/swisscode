@@ -10,7 +10,9 @@ import { AnthropicOAuthClient } from "../subscriptions/anthropic.js";
 import { FileProfileRepository } from "../store/fileProfiles.js";
 import { FileProviderAccountRepository } from "../store/providerAccounts.js";
 import { createProviderRegistry } from "../registry.js";
-import type { Profile, ProviderPort, TrafficLog } from "@swisscode/core";
+import type { GlobalSettings, Profile, ProviderPort, TrafficLog, UsageClient } from "@swisscode/core";
+import type { FileUsageCache } from "../subscriptions/usageCache.js";
+import type { FileSettingsStore } from "../store/fileSettings.js";
 import type { ProxyTrafficEntry } from "./server.js";
 import { PROXY_TOKEN_HEADER } from "./proxyToken.js";
 import { SubscriptionProxy, cooldownMsFromRetryAfter, isLoopbackHost, parseProfilePath } from "./server.js";
@@ -1910,5 +1912,90 @@ describe("profile identity + model routing", () => {
       await proxy.close();
       keyStub.server.close();
     }
+  });
+
+  describe("rotation lifecycle", () => {
+    const now = Date.now();
+    const MIN = 60_000;
+
+    // a2 is decisively better under either strategy: cooler and sooner reset.
+    function usageFor(accountId: string) {
+      const hot = accountId === "a1";
+      return {
+        accountId,
+        fetchedAt: new Date(now).toISOString(),
+        fiveHour: {
+          utilization: hot ? 80 : 5,
+          resetsAt: new Date(now + (hot ? 120 : 60) * MIN).toISOString(),
+        },
+      };
+    }
+
+    function rotationProxy(world: World, logs: string[]): SubscriptionProxy {
+      const settings = {
+        get: async (): Promise<GlobalSettings> => ({
+          rotationEnabled: true,
+          rotationStrategy: "reset-soonest",
+        }),
+      };
+      return new SubscriptionProxy(world.vault, new AnthropicOAuthClient(), {
+        profiles: world.profiles,
+        providerAccounts: world.providerAccounts,
+        providers: createProviderRegistry([stubKeyProvider]),
+        rotation: {
+          usageClient: { fetchUsage: async (id: string) => usageFor(id) } as UsageClient,
+          usageCache: { get: async () => undefined } as unknown as FileUsageCache,
+          settings: settings as unknown as FileSettingsStore,
+          enabled: true,
+          pollMs: 3600_000,
+          log: (m: string) => logs.push(m),
+        },
+      });
+    }
+
+    function pollerRunning(proxy: SubscriptionProxy): boolean | undefined {
+      return (proxy as unknown as { rotationPoller?: { running: boolean } }).rotationPoller?.running;
+    }
+
+    it("leaves status without rotation when unconfigured", async () => {
+      const world = await routingWorld({
+        profiles: [subProfile({ name: "alpha", subscriptionAccountId: "a1" })],
+        vaultAccounts: [{ id: "a1", token: "tok-a1" }],
+      });
+      const proxy = proxied(world);
+      assert.equal(proxy.rotationState(), undefined);
+      assert.equal((await proxy.status()).rotation, undefined);
+      await proxy.close();
+    });
+
+    it("ticks on listen, reports the switch in status, stops on close", async () => {
+      const world = await routingWorld({
+        profiles: [subProfile({ name: "alpha", subscriptionAccountId: "a1" })],
+        vaultAccounts: [
+          { id: "a1", token: "tok-a1" },
+          { id: "a2", token: "tok-a2" },
+        ],
+      });
+      const logs: string[] = [];
+      const proxy = rotationProxy(world, logs);
+      await proxy.listen(0);
+      try {
+        assert.equal(pollerRunning(proxy), true);
+        await waitUntil(() => (proxy.rotationState()?.lastRunAt ?? null) !== null, "rotation tick");
+        const status = await proxy.status();
+        assert.equal(status.rotation?.enabled, true);
+        assert.equal(status.rotation?.strategy, "reset-soonest");
+        assert.equal(status.rotation?.checked, 2);
+        assert.equal(status.rotation?.usable, 2);
+        // listen() seeds active from the first vault id (a1); the tick then
+        // rolls over to the decisively better a2.
+        assert.equal(status.rotation?.switched, "a1→a2");
+        assert.equal(status.activeAccountId, "a2");
+        assert.match(logs.join("\n"), /active a1→a2/);
+      } finally {
+        await proxy.close();
+      }
+      assert.equal(pollerRunning(proxy), false);
+    });
   });
 });

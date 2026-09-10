@@ -10,6 +10,7 @@ import { createBundleRegistry } from "./configBundle.js";
 import { FileProfileRepository } from "./fileProfiles.js";
 import { FileAccountRepository } from "../subscriptions/accountVault.js";
 import { FileProviderAccountRepository } from "./providerAccounts.js";
+import { FileSettingsStore } from "./fileSettings.js";
 import { StoreFileError } from "./atomicJson.js";
 import { createProviderRegistry, defaultProviders } from "../registry.js";
 import type { CustomProviderDef } from "@swisscode/core";
@@ -126,6 +127,7 @@ describe("bundle registry", () => {
       vault: new FileAccountRepository(join(dir, "subscriptions")),
       providerAccounts: new FileProviderAccountRepository(join(dir, "accounts"), { onWarn: () => undefined }),
       customProviders,
+      settings: new FileSettingsStore(join(dir, "settings.json")),
       // Mirrors the live registry lookup: built-in fields, else the custom def.
       secretKeysFor: async (providerId: string) => {
         if (providerId === "openrouter") return new Set(["apiKey"]);
