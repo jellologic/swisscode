@@ -1,0 +1,35 @@
+name: publish
+
+# Releases ride the npm trusted publisher (OIDC — no tokens, no OTP): pushing
+# a v* tag tests, builds, and publishes apps/cli. The trusted-publisher record
+# pins this file name, so don't rename it.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: tag matches the CLI version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "v$(node -p "require('./apps/cli/package.json').version")" = "${{ github.ref_name }}"
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test
+        env:
+          SWISSCODE_HOME: ${{ runner.temp }}/swisscode-home
+      - run: npm run typecheck
+      - run: npm publish -w apps/cli

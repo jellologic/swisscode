@@ -358,6 +358,9 @@ npm run typecheck
 bun test packages/core/src packages/adapters/src apps/cli/src apps/web/src   # also green under Bun 1.4+
 ```
 
+Releases: push a `v*` tag and `publish.yml` tests, builds, and publishes the
+CLI to npm through the repo's trusted publisher (OIDC — no token or OTP).
+
 Storage and environment reference: `profiles.json`, `subscriptions/`, `accounts/`,
 `custom-providers.json`, `proxy-token`, `proxy-traffic.jsonl`, `usage-cache.json`,
 `model-catalog-cache.json` under `SWISSCODE_HOME`; `SWISSCODE_PROXY_PORT`,
