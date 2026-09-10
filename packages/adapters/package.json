@@ -1,6 +1,6 @@
 {
   "name": "@swisscode/adapters",
-  "version": "2.1.9",
+  "version": "2.1.10",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,6 +16,6 @@
     "test": "tsc -p tsconfig.json && node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
-    "@swisscode/core": "2.1.9"
+    "@swisscode/core": "2.1.10"
   }
 }
