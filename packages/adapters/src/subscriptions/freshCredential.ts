@@ -40,6 +40,15 @@ const inflight = new SingleFlight<FreshCredential>();
 export interface FreshVaultCredentialOptions {
   /** Claude Code's own store: shared-lineage detection and rotated adoption. */
   liveStore?: ActiveCredentialStore;
+  /**
+   * Adopt Claude Code's live lineage when the vault credential is rejected
+   * (invalid_grant). Defaults to true — the proxy and usage paths heal a
+   * rotated lineage this way. The file-swap switch passes false: there the
+   * adopted stranger would be written back over the live store and verified
+   * as a "switch" that never happened, so a dead vault credential must
+   * surface as re-login-needed instead.
+   */
+  adoptLive?: boolean;
   /** Where `<id>.lock` lives. Defaults to the vault directory. */
   lockDir?: string;
   /** Profile client used to verify identity before adopting a live login. */
@@ -103,7 +112,9 @@ async function resolveExpired(
     ...(opts.liveStore ? { live: opts.liveStore } : {}),
     ...(opts.profile ? { profile: opts.profile } : {}),
   });
-  if (hook) options.onInvalidGrant = hook;
+  // adoptLive:false (the file-swap switch) still wants the shared-lineage
+  // mirror below, but never the stranger-adoption above.
+  if (hook && opts.adoptLive !== false) options.onInvalidGrant = hook;
   const live = opts.liveStore;
   if (live && stored) {
     // Registered whenever a live store exists, not only when the read above

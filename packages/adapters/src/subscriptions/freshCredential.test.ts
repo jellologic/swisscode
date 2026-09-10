@@ -166,6 +166,28 @@ describe("freshVaultCredential", () => {
     assert.deepEqual(h.saved(), [live]);
   });
 
+  it("refuses stranger adoption on the switch path (adoptLive:false)", async () => {
+    // The switch-that-wasn't: dead vault credential, live login belonging to
+    // nobody in the vault. Adopting it would persist the stranger into this
+    // slot and verify a switch that never happened — surface invalid_grant
+    // with the vault untouched instead.
+    const h = harness({ accessToken: "old", refreshToken: "dead-rt", expiresAt: past }, async () => {
+      throw new OAuthError("invalid_grant", "rejected");
+    });
+    const live: OAuthCredential = { accessToken: "live-a", refreshToken: "live-rt", expiresAt: future };
+    const dir = await lockDir();
+    await assert.rejects(
+      () =>
+        freshVaultCredential(h.accounts, h.oauth, "switch-account", {
+          liveStore: liveStore(live),
+          adoptLive: false,
+          lockDir: dir,
+        }),
+      (err: unknown) => err instanceof OAuthError && err.kind === "invalid_grant",
+    );
+    assert.deepEqual(h.saved(), []);
+  });
+
   it("surfaces invalid_grant when there is nothing to adopt", async () => {
     const h = harness({ accessToken: "old", refreshToken: "dead-rt", expiresAt: past }, async () => {
       throw new OAuthError("invalid_grant", "rejected");

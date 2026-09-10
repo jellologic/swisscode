@@ -204,8 +204,14 @@ export async function activateAccount(id: string, force: boolean): Promise<boole
     return false;
   }
   try {
+    // adoptLive:false — a switch must never "heal" by adopting whatever login
+    // happens to be live: the adopted stranger would be written straight back
+    // and verified as a switch that never happened. A dead vault credential
+    // surfaces as re-login-needed below instead. The live store is still
+    // passed so a shared-lineage refresh mirrors back into Claude's store.
     const { credential, refreshed } = await freshVaultCredential(accounts, oauth, id, {
       liveStore: activeStore,
+      adoptLive: false,
     });
     const before = await activeStore.readActive();
     const beforeIdentity = before.credential ? credentialIdentity(before.credential) : null;
@@ -263,10 +269,34 @@ export async function activateAccount(id: string, force: boolean): Promise<boole
     if (before.backend === "keychain") {
       console.log("macOS caches Keychain reads: restart running `claude` sessions to pick this up immediately.");
     }
+    const others = await countOtherClaudeSessions(pgrepProbe);
+    if (others > 0) {
+      console.log(
+        `${others} other claude session(s) still running — they may stay on the previous account ` +
+          `until restarted. New sessions use "${id}".`,
+      );
+    }
     return true;
   } catch (err) {
     if (err instanceof OAuthError || err instanceof CredentialStoreError) {
       console.error(`Cannot switch: ${err.message}`);
+      if (err instanceof OAuthError && (err.kind === "invalid_grant" || err.kind === "no_refresh_token")) {
+        // The vault credential is dead and the switch refuses to adopt the
+        // live login as a replacement: name what IS live so the recovery
+        // step is obvious instead of a bare refresh error.
+        const live = await activeStore.readActive().catch(() => undefined);
+        const owner = live?.credential
+          ? await findAccountByCredential(accounts, live.credential).catch(() => null)
+          : null;
+        console.error(
+          owner && owner.id !== id
+            ? `Claude Code is currently on "${owner.label ?? owner.id}" — switch to it instead, or log in ` +
+              `as "${account.label ?? id}" (\`claude login\`), re-import it, and retry.`
+            : `The live login could not be confirmed as "${account.label ?? id}". If Claude Code is already ` +
+              `on this account, re-import it (\`swisscode accounts import ${id} --force\`) to heal the vault and retry; ` +
+              `otherwise \`claude login\` as the right account first.`,
+        );
+      }
       process.exitCode = 1;
       return false;
     }
