@@ -1,6 +1,9 @@
 export { claudeCodeAgent } from "./agents/claudeCode.js";
 export { claudeSubscriptionProvider } from "./providers/claudeSubscription.js";
 export { OPENROUTER_BASE_URL, openRouterProvider } from "./providers/openRouter.js";
+export { META_BASE_URL, META_DEFAULT_MODEL, metaProvider } from "./providers/meta.js";
+export { MetaModelCatalog } from "./providers/metaModels.js";
+export type { MetaModelsOptions } from "./providers/metaModels.js";
 export { createAgentRegistry, createProviderRegistry, defaultProviders, defaultTrafficParsers } from "./registry.js";
 export { claudeTrafficParser } from "./providers/claudeTrafficParser.js";
 export { FileProfileRepository, defaultProfilesPath } from "./store/fileProfiles.js";
@@ -12,7 +15,7 @@ export {
 export { OpenRouterUsageReader } from "./providers/openRouterUsage.js";
 export type { OpenRouterUsageOptions } from "./providers/openRouterUsage.js";
 export { customProviderPort } from "./providers/customProvider.js";
-export { CustomAccountValidator, OpenRouterAccountValidator } from "./providers/accountValidator.js";
+export { CustomAccountValidator, MetaAccountValidator, OpenRouterAccountValidator } from "./providers/accountValidator.js";
 export type { AccountValidatorOptions, CustomValidatorOptions } from "./providers/accountValidator.js";
 export {
   FileCustomProviderStore,

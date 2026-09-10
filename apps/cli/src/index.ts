@@ -46,6 +46,7 @@ import type { LaunchSpec, ModelRouteLabels, Profile, ProviderAccount } from "@sw
 import { activateAccount, cmdAccounts } from "./accounts.js";
 import { checkProxyUp, cmdProxy, ensureProxyAccount } from "./proxy.js";
 import { cmdInit } from "./init.js";
+import { cmdWeb } from "./web.js";
 
 const agents = createAgentRegistry();
 const repo = new FileProfileRepository(defaultProfilesPath());
@@ -68,6 +69,7 @@ function help(): string {
     "  swisscode show <profileName>",
     "  swisscode accounts <import|list|usage|use|remove> ...",
     "  swisscode proxy <run|use|status> ...",
+  "  swisscode web [--port <n>] [--proxy-port <n>] [--no-proxy]",
     "  swisscode init [<preset>] [--name <name>] [--dry-run]",
     "",
     "Profiles live in ~/.swisscode/profiles.json (or $SWISSCODE_HOME).",
@@ -447,6 +449,7 @@ async function main(): Promise<void> {
   }
   if (first === "accounts") return cmdAccounts(rest);
   if (first === "proxy") return cmdProxy(rest);
+  if (first === "web") return cmdWeb(rest);
   if (first === "init") return cmdInit(rest);
   // Launch path: swisscode <profile> [--dry-run] [--force] [-- extra...]
   // A leading flag is an option we do not know, never a profile name.

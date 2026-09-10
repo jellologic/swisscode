@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { ProfileError } from "@swisscode/core";
-import { CustomAccountValidator, OpenRouterAccountValidator } from "./accountValidator.js";
+import { CustomAccountValidator, MetaAccountValidator, OpenRouterAccountValidator } from "./accountValidator.js";
 import { FileCustomProviderStore } from "../store/customProviders.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -78,6 +78,70 @@ describe("OpenRouterAccountValidator", () => {
       ok: false,
       error: "Key check timed out after 5ms.",
     });
+  });
+});
+
+describe("MetaAccountValidator", () => {
+  const MODELS = { object: "list", data: [{ id: "muse-spark-1.3-contributor" }] };
+
+  it("confirms a good key against the models endpoint", async () => {
+    let url = "";
+    let auth: string | null = null;
+    const v = new MetaAccountValidator({
+      fetchFn: (async (got: string | URL | Request, init?: RequestInit) => {
+        url = String(got);
+        auth = new Headers(init?.headers).get("authorization");
+        return new Response(JSON.stringify(MODELS), { status: 200 });
+      }) as typeof fetch,
+    });
+    assert.deepEqual(await v.validateAccount({ apiKey: "LLM_x" }), {
+      ok: true,
+      detail: "key is valid — 1 models",
+    });
+    assert.equal(url, "https://api.meta.ai/v1/models");
+    assert.equal(auth, "Bearer LLM_x");
+  });
+
+  it("rejects blank keys without a network call", async () => {
+    let calls = 0;
+    const v = new MetaAccountValidator({
+      fetchFn: (async () => {
+        calls++;
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    });
+    assert.deepEqual(await v.validateAccount({ apiKey: "  " }), {
+      ok: false,
+      error: "API key is required.",
+    });
+    assert.equal(calls, 0);
+  });
+
+  it("maps 401 to rejected and 500 to HTTP error", async () => {
+    const bad = new MetaAccountValidator({ fetchFn: stubFetch({}, 401) });
+    assert.deepEqual(await bad.validateAccount({ apiKey: "x" }), {
+      ok: false,
+      error: "Key rejected (invalid or revoked).",
+    });
+    const broken = new MetaAccountValidator({ fetchFn: stubFetch({}, 500) });
+    assert.deepEqual(await broken.validateAccount({ apiKey: "x" }), {
+      ok: false,
+      error: "Key check failed: HTTP 500",
+    });
+  });
+
+  it("never follows a redirect carrying the key", async () => {
+    let init: RequestInit | undefined;
+    const v = new MetaAccountValidator({
+      fetchFn: (async (_url: string | URL | Request, got?: RequestInit) => {
+        init = got;
+        return new Response(null, { status: 302, headers: { location: "https://evil.example.com/" } });
+      }) as typeof fetch,
+    });
+    const result = await v.validateAccount({ apiKey: "LLM_secret" });
+    assert.equal(init?.redirect, "manual");
+    assert.equal(result.ok, false);
+    assert.match(result.ok === false ? (result.error ?? "") : "", /redirected \(HTTP 302\)/);
   });
 });
 

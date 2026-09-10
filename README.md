@@ -18,7 +18,7 @@ Save several **Claude Pro / Max logins**, see each one's **5-hour and 7-day usag
 and **switch accounts without `/login`**. Route Claude Code through a **localhost proxy**
 that **fails over to the next account on a 429 rate limit**, refreshes expired tokens for
 you, and records every request for a **turn-by-turn traffic inspector**. Or point Claude
-Code at **OpenRouter** or **any custom Anthropic-compatible endpoint** with stored API keys,
+Code at **OpenRouter**, **Meta**, or **any custom Anthropic-compatible endpoint** with stored API keys,
 named **profiles**, and a small **web UI**.
 
 ```sh
@@ -31,7 +31,7 @@ swisscode proxy run       # one endpoint, many accounts, automatic failover
 - [Quick start](#quick-start)
 - [Multiple Claude accounts](#multiple-claude-accounts-usage-limits-and-switching)
 - [The subscription proxy](#the-subscription-proxy-rate-limit-failover-and-traffic-inspection)
-- [OpenRouter and custom providers](#openrouter-and-custom-anthropic-compatible-providers)
+- [OpenRouter, Meta, and custom providers](#openrouter-meta-and-custom-anthropic-compatible-providers)
 - [Profiles](#profiles)
 - [Web UI](#web-ui)
 - [Backup and restore](#backup-and-restore)
@@ -82,7 +82,7 @@ npm run build
 Then either use the web UI or the CLI:
 
 ```sh
-# Web UI on http://localhost:3000 (binds to localhost only)
+# Web UI on http://localhost:8124 (binds to localhost only)
 cd apps/web && npm run dev
 
 # CLI
@@ -175,7 +175,7 @@ subscriptions don't meter per token.
 `~/.swisscode/proxy-traffic.jsonl`), `--log-bodies`, `--traffic-keep <n>` (ring buffer,
 default 200), `--traffic-body-bytes <n>` (default 64 KiB per side, `0` = unlimited).
 
-## OpenRouter and custom Anthropic-compatible providers
+## OpenRouter, Meta, and custom Anthropic-compatible providers
 
 Store API keys once as **provider accounts** and reference them from profiles:
 
@@ -188,6 +188,19 @@ swisscode accounts --provider openrouter model <model-id>        # serving endpo
 swisscode accounts --provider openrouter list | show <id>        # secrets masked
 swisscode accounts --provider openrouter update <id> --set key=value
 swisscode accounts --provider openrouter remove <id>
+```
+
+Muse Spark models work the same way through Meta's Anthropic-compatible endpoint
+(the profile also pins Claude Code's internal model tiers to the Spark model, so
+subagents and tier routing follow):
+
+```sh
+swisscode accounts --provider meta add <id> --set apiKey=LLM_... [--label <l>]
+swisscode accounts --provider meta test --set apiKey=...   # check before saving
+swisscode accounts --provider meta models                  # model catalog
+swisscode accounts --provider meta list | show <id>        # secrets masked
+swisscode accounts --provider meta update <id> --set key=value
+swisscode accounts --provider meta remove <id>
 ```
 
 **Custom providers** need no code. Define one in the UI at `/providers/new`: an id, a
@@ -245,7 +258,7 @@ the preview shows is what launches.
 
 ## Web UI
 
-`cd apps/web && npm run dev` serves on `http://localhost:3000`, bound to localhost.
+`cd apps/web && npm run dev` serves on `http://localhost:8124`, bound to localhost.
 
 | Page | What it does |
 | --- | --- |

@@ -31,6 +31,14 @@ interface ComboboxProps<T> {
   emptyText?: string;
   /** Rows rendered before truncating (default 100). */
   maxRows?: number;
+  /**
+   * Friendly text for a committed value, shown while closed (e.g. a backend
+   * label for an encoded destination). The committed key is untouched — this
+   * only changes what the closed input reads. Omit when keys already read
+   * well (model ids). While open the input clears so typing filters the full
+   * list; blurring without edits reverts, never commits "".
+   */
+  displayValue?: (value: string, items: T[]) => string | undefined;
 }
 
 type SortState = { key: string; dir: 1 | -1 } | null;
@@ -49,7 +57,9 @@ function compare(a: string | number, b: string | number): number {
 export function Combobox<T>(props: ComboboxProps<T>) {
   const { value, onChange, columns } = props;
   const maxRows = props.maxRows ?? 100;
-  const [query, setQuery] = useState(value);
+  // Closed text resolves on first render too, so SSR/hydration agree.
+  const display = props.displayValue?.(value, props.items) ?? value;
+  const [query, setQuery] = useState(display);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [sort, setSort] = useState<SortState>(null);
@@ -60,10 +70,16 @@ export function Combobox<T>(props: ComboboxProps<T>) {
   /** Set when commit() triggered the blur itself — onBlur must not recommit. */
   const skipBlur = useRef(false);
 
+  /** Set on real keystrokes — separates typed text from a focus-clear. */
+  const edited = useRef(false);
+
   // Mirror external value changes while closed (e.g. form reset).
   useEffect(() => {
-    if (!open) setQuery(value);
-  }, [value, open]);
+    if (!open) {
+      setQuery(display);
+      edited.current = false;
+    }
+  }, [display, open]);
 
   // Anchor the portaled dropdown to the input; flip upward when crowded.
   useEffect(() => {
@@ -126,7 +142,7 @@ export function Combobox<T>(props: ComboboxProps<T>) {
   function commit(key: string) {
     skipBlur.current = true;
     onChange(key);
-    setQuery(key);
+    setQuery(props.displayValue?.(key, props.items) ?? key);
     setOpen(false);
     inputRef.current?.blur();
   }
@@ -153,11 +169,15 @@ export function Combobox<T>(props: ComboboxProps<T>) {
     } else if (e.key === "Enter") {
       if (open) {
         e.preventDefault();
-        commit(rows[active] ? props.getKey(rows[active] as T) : query);
+        if (props.displayValue && !edited.current) {
+          // Focus-clear only, nothing typed — Enter keeps the current value.
+          setQuery(display);
+          setOpen(false);
+        } else commit(rows[active] ? props.getKey(rows[active] as T) : query);
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
-      setQuery(value);
+      setQuery(display);
       setOpen(false);
     }
   }
@@ -176,10 +196,19 @@ export function Combobox<T>(props: ComboboxProps<T>) {
         placeholder={props.placeholder ?? ""}
         value={query}
         onChange={(e) => {
+          edited.current = true;
           setQuery(e.target.value);
           setOpen(true);
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          // With friendly display text the closed input shows a label, not
+          // the key — clear on open so typing filters the full list.
+          if (props.displayValue) {
+            edited.current = false;
+            setQuery("");
+          }
+          setOpen(true);
+        }}
         onBlur={() => {
           if (skipBlur.current) {
             skipBlur.current = false;
@@ -187,9 +216,16 @@ export function Combobox<T>(props: ComboboxProps<T>) {
             return;
           }
           // Commit free text on the way out (custom ids stay valid);
-          // Escape already reverted query, so this is a no-op for it.
-          if (open && query !== value) commit(query);
-          else setOpen(false);
+          // Escape already reverted query, so this is a no-op for it. An
+          // untouched focus-clear reverts instead of committing ""; so does
+          // a cleared destination ("" is never a valid backend — picking
+          // nothing keeps the current one).
+          const clearedDestination = props.displayValue !== undefined && query === "";
+          if (open && edited.current && query !== value && !clearedDestination) commit(query);
+          else {
+            setQuery(display);
+            setOpen(false);
+          }
         }}
         onKeyDown={onKeyDown}
       />

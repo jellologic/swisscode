@@ -577,6 +577,178 @@ describe("swisscode proxy run", () => {
   });
 });
 
+describe("swisscode web", () => {
+  // A fake web root: the CLI spawns `node server.mjs` with cwd here, so the
+  // stub only needs to record its env and sleep. The real UI is never
+  // spawned in tests — no vite build, no node_modules, no real UI port. The
+  // stub reports via a file because its stdout is inherited, not piped back
+  // to the CLI parent the harness captures.
+  async function stubWebRoot(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-cli-webroot-"));
+    await writeFile(
+      join(dir, "server.mjs"),
+      'import { writeFileSync } from "node:fs";\nwriteFileSync("stub-env.json", JSON.stringify({ port: process.env["PORT"], proxy: process.env["SWISSCODE_PROXY_PORT"] }));\nsetInterval(() => {}, 1000);\n',
+      "utf8",
+    );
+    await mkdir(join(dir, "dist", "server"), { recursive: true });
+    await writeFile(join(dir, "dist", "server", "server.js"), "export {};\n", "utf8");
+    return dir;
+  }
+
+  /** The stub's readiness signal: its env file exists, so it booted with our env. */
+  function stubEnvPath(root: string): string {
+    return join(root, "stub-env.json");
+  }
+
+  /** SIGTERM the CLI once the stub UI has booted (env file present). */
+  function killOnStubBoot(child: ChildProcess, root: string): void {
+    const poll = setInterval(() => {
+      void stat(stubEnvPath(root)).then(
+        () => {
+          clearInterval(poll);
+          child.kill("SIGTERM");
+        },
+        () => {},
+      );
+    }, 20);
+    child.on("close", () => clearInterval(poll));
+  }
+
+  async function readStubEnv(root: string): Promise<{ port: string; proxy: string }> {
+    return JSON.parse(await readFile(stubEnvPath(root), "utf8")) as { port: string; proxy: string };
+  }
+
+  async function keyHome(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "swisscode-cli-web-"));
+    await writeJson(join(dir, "accounts", "openrouter", "main.json"), {
+      id: "main",
+      providerId: "openrouter",
+      label: "Main",
+      config: { apiKey: OPENROUTER_KEY },
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    return dir;
+  }
+
+  test("names the fix when the built UI is missing", async () => {
+    const empty = await mkdtemp(join(tmpdir(), "swisscode-cli-noroot-"));
+    try {
+      const result = await runCli(["web"], { SWISSCODE_WEB_ROOT: empty });
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /SWISSCODE_WEB_ROOT/);
+      assert.match(result.stderr, /npm run build -w @swisscode\/web/);
+    } finally {
+      await rm(empty, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a non-numeric UI port", async () => {
+    const root = await stubWebRoot();
+    try {
+      const result = await runCli(["web", "--port", "abc"], { SWISSCODE_WEB_ROOT: root });
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /Invalid --port/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("starts the proxy and UI, stops both on SIGTERM", async () => {
+    const dir = await keyHome();
+    const root = await stubWebRoot();
+    try {
+      const result = await runCli(
+        ["web", "--port", "3131", "--proxy-port", "18349", "--no-traffic-log"],
+        { HOME: dir, SWISSCODE_HOME: dir, SWISSCODE_WEB_ROOT: root },
+        (child) => killOnStubBoot(child, root),
+      );
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /Subscription proxy on http:\/\/127\.0\.0\.1:18349/);
+      assert.match(result.stdout, /Web UI on http:\/\/127\.0\.0\.1:3131/);
+      assert.deepEqual(await readStubEnv(root), { port: "3131", proxy: "18349" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("defaults the UI port to 8124, off Docker's 3000", async () => {
+    const root = await stubWebRoot();
+    try {
+      // Nothing listens here: the stub records env without binding, and the
+      // CLI never binds the UI port itself — so this is collision-free.
+      const result = await runCli(["web", "--no-proxy"], { SWISSCODE_WEB_ROOT: root }, (child) =>
+        killOnStubBoot(child, root),
+      );
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /Web UI on http:\/\/127\.0\.0\.1:8124/);
+      assert.equal((await readStubEnv(root)).port, "8124");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("--no-proxy runs the UI without touching the proxy", async () => {
+    const root = await stubWebRoot();
+    try {
+      const result = await runCli(
+        ["web", "--port", "3132", "--no-proxy"],
+        { SWISSCODE_WEB_ROOT: root },
+        (child) => killOnStubBoot(child, root),
+      );
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /Proxy disabled/);
+      assert.equal((await readStubEnv(root)).port, "3132");
+      assert.ok(!result.stdout.includes("Subscription proxy"), "no proxy is started");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reuses a live proxy instead of starting a second one", async () => {
+    const dir = await keyHome();
+    const root = await stubWebRoot();
+    // A real proxy in the background, on its own port and home.
+    const proxyChild = spawn(process.execPath, [CLI, "proxy", "run", "--port", "18350", "--no-traffic-log"], {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { PATH: "/usr/bin:/bin", HOME: dir, SWISSCODE_HOME: dir },
+    });
+    let proxyOut = "";
+    proxyChild.stdout?.setEncoding("utf8");
+    proxyChild.stdout?.on("data", (chunk: string) => {
+      proxyOut += chunk;
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const poll = setInterval(() => {
+          if (!proxyOut.includes("key account(s)")) return;
+          clearInterval(poll);
+          resolve();
+        }, 20);
+        setTimeout(() => {
+          clearInterval(poll);
+          reject(new Error("proxy did not start"));
+        }, 15_000);
+      });
+      const result = await runCli(
+        ["web", "--port", "3133", "--proxy-port", "18350"],
+        { HOME: dir, SWISSCODE_HOME: dir, SWISSCODE_WEB_ROOT: root },
+        (child) => killOnStubBoot(child, root),
+      );
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /Reusing running proxy on http:\/\/127\.0\.0\.1:18350/);
+      assert.ok(!result.stdout.includes("Subscription proxy on"), "the owned proxy never starts");
+      assert.deepEqual(await readStubEnv(root), { port: "3133", proxy: "18350" });
+    } finally {
+      if (proxyChild.pid) process.kill(-proxyChild.pid, "SIGKILL");
+      await rm(dir, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("swisscode proxy log/report", () => {
   let trafficSeq = 0;
   function trafficEntry(overrides: Partial<ProxyTrafficEntry> = {}): ProxyTrafficEntry {
@@ -644,13 +816,23 @@ describe("swisscode proxy log/report", () => {
     // Hours ago, not fixed dates: --days windows must hold whatever today is.
     const hour = 3_600_000;
     const now = Date.now();
+    // The day grain buckets UTC dates, so the four hourly seeds must share
+    // one: in the first hours after UTC midnight the trailing seeds fall on
+    // yesterday and the "one row" assertion flakes. Backing the whole set off
+    // intact keeps every --days window below holding.
+    const newest = now - hour;
+    const anchor =
+      new Date(newest).toISOString().slice(0, 10) ===
+      new Date(newest - 3 * hour).toISOString().slice(0, 10)
+        ? now
+        : now - 4 * hour;
     const store = await openTrafficStore(join(dir, "proxy-traffic.sqlite"));
     try {
       const seeds: Array<Partial<ProxyTrafficEntry>> = [
-        { ts: new Date(now - 4 * hour).toISOString(), profile: "work", route: "opus", ms: 100, request: { approxInputTokens: 10 } },
-        { ts: new Date(now - 3 * hour).toISOString(), profile: "work", route: "opus", ms: 200, status: 429, request: { approxInputTokens: 20 } },
-        { ts: new Date(now - 2 * hour).toISOString(), profile: "home", route: "codex", ms: 300, request: { approxInputTokens: 30 } },
-        { ts: new Date(now - 1 * hour).toISOString(), profile: "work", route: "opus", ms: 400, error: "client hung up", request: { approxInputTokens: 40 } },
+        { ts: new Date(anchor - 4 * hour).toISOString(), profile: "work", route: "opus", ms: 100, request: { approxInputTokens: 10 } },
+        { ts: new Date(anchor - 3 * hour).toISOString(), profile: "work", route: "opus", ms: 200, status: 429, request: { approxInputTokens: 20 } },
+        { ts: new Date(anchor - 2 * hour).toISOString(), profile: "home", route: "codex", ms: 300, request: { approxInputTokens: 30 } },
+        { ts: new Date(anchor - 1 * hour).toISOString(), profile: "work", route: "opus", ms: 400, error: "client hung up", request: { approxInputTokens: 40 } },
       ];
       for (const seed of seeds) await store.append(toStoredExchange(trafficEntry(seed)));
     } finally {

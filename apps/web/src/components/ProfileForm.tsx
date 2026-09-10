@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  BASE_ROUTE_KEY,
   EFFORT_LEVELS,
   MODEL_ID_RE,
   PERMISSION_MODES,
   SETTING_SOURCES,
-  describeModelRoute,
   type ClaudeSessionOptions,
   type FieldDef,
-  type ModelRoute,
   type ModelRouteLabels,
   type Profile,
 } from "@swisscode/core";
@@ -15,6 +14,7 @@ import {
   Button,
   Check,
   Code,
+  Combobox,
   Disclosure,
   Field,
   Form,
@@ -30,17 +30,20 @@ import {
   Textarea,
   notify,
 } from "../design";
-import { previewLaunchFn, providerModelsFn, saveProfileFn } from "../lib/functions";
+import type { ComboColumn } from "../design";
+import { previewLaunchFn, proxyReportFn, saveProfileFn } from "../lib/functions";
+import { ModelField, useProviderModels } from "./ModelPicker";
+import {
+  SUBSCRIPTION_KNOWN_MODELS,
+  destinationOptions,
+  effectiveMapping,
+  routeToRow,
+  rowToRoute,
+  type DestinationOption,
+  type RouteFormRow,
+} from "./routeSummary";
 
 type Preview = Awaited<ReturnType<typeof previewLaunchFn>>;
-
-/** One routes-editor row. `dest` encodes the destination select value. */
-export interface RouteFormRow {
-  match: string;
-  /** "subscription:" (base), "subscription:<id>", or "key:<providerId>:<accountId>". */
-  dest: string;
-  upstreamModel: string;
-}
 
 export interface SessionFormState {
   effort: string;
@@ -111,14 +114,6 @@ export const emptyProfileForm: ProfileFormState = {
   session: { ...emptySessionForm },
 };
 
-function routeToRow(route: ModelRoute): RouteFormRow {
-  const dest =
-    route.kind === "providerAccount"
-      ? `key:${route.providerId ?? ""}:${route.providerAccountId ?? ""}`
-      : `subscription:${route.subscriptionAccountId?.trim() ?? ""}`;
-  return { match: route.match, dest, upstreamModel: route.upstreamModel ?? "" };
-}
-
 function sessionToForm(session?: ClaudeSessionOptions): SessionFormState {
   if (!session) return { ...emptySessionForm };
   const join = (v?: string[]) => (v ?? []).join("\n");
@@ -184,30 +179,6 @@ function isSessionEmpty(s: SessionFormState): boolean {
     !s.fallbackModel.trim() &&
     !s.claudeSettings.trim()
   );
-}
-
-function rowToRoute(row: RouteFormRow): ModelRoute {
-  const match = row.match.trim();
-  const upstream = row.upstreamModel.trim();
-  const extra = upstream ? { upstreamModel: upstream } : {};
-  if (row.dest.startsWith("key:")) {
-    const rest = row.dest.slice("key:".length);
-    const sep = rest.indexOf(":");
-    return {
-      match,
-      kind: "providerAccount",
-      providerId: rest.slice(0, sep),
-      providerAccountId: rest.slice(sep + 1),
-      ...extra,
-    };
-  }
-  const accountId = row.dest.slice("subscription:".length);
-  return {
-    match,
-    kind: "subscription",
-    ...(accountId ? { subscriptionAccountId: accountId } : {}),
-    ...extra,
-  };
 }
 
 function sessionToOptions(s: SessionFormState): ClaudeSessionOptions | undefined {
@@ -283,7 +254,12 @@ const PERMISSION_DESCRIPTIONS: Record<string, string> = {
 
 interface ProfileFormProps {
   agents: { id: string; displayName: string }[];
-  providers: { id: string; displayName: string; fields: FieldDef[] }[];
+  providers: {
+    id: string;
+    displayName: string;
+    fields: FieldDef[];
+    accountCapabilities?: { modelCatalog?: boolean };
+  }[];
   subscriptionAccounts: { id: string; label: string }[];
   keyAccounts: { id: string; label: string; providerId: string }[];
   initial?: ProfileFormState;
@@ -295,20 +271,134 @@ interface ProfileFormProps {
   onSaved: (name: string) => void;
 }
 
+const destColumns: ComboColumn<DestinationOption>[] = [
+  {
+    key: "dest",
+    header: "Destination",
+    sortValue: (o) => o.label,
+    render: (o) => <span className="sw-combo-primary">{o.label}</span>,
+  },
+  {
+    key: "backend",
+    header: "Backend",
+    sortValue: (o) => o.kind,
+    render: (o) => <span className="sw-combo-sub">{o.kind}</span>,
+  },
+];
+
+interface ModelChoice {
+  id: string;
+  source: string;
+}
+
+const modelChoiceColumns: ComboColumn<ModelChoice>[] = [
+  {
+    key: "model",
+    header: "Model",
+    sortValue: (m) => m.id,
+    render: (m) => <span className="sw-combo-primary">{m.id}</span>,
+  },
+  {
+    key: "source",
+    header: "Source",
+    sortValue: (m) => m.source,
+    render: (m) => <span className="sw-combo-sub">{m.source}</span>,
+  },
+];
+
+/**
+ * Backend picker shared by the default and every override row: profile base,
+ * vault accounts, stored key accounts — plus per-key-provider manual entries
+ * for the default (routes must point at a real account). Same `dest` string
+ * encoding everywhere, so rows and the default round-trip identically.
+ */
+function DestinationPicker(props: {
+  value: string;
+  onChange: (value: string) => void;
+  subscriptionAccounts: { id: string; label: string }[];
+  keyAccounts: { id: string; label: string; providerId: string }[];
+  providerDisplayName: (providerId: string) => string | undefined;
+  /** Key providers that accept manual entry (default only, never rows). */
+  manualProviders?: { id: string; displayName: string }[];
+  placeholder?: string;
+}) {
+  const items: DestinationOption[] = [
+    ...(props.manualProviders ?? []).map((p) => ({
+      value: `provider:${p.id}`,
+      label: `${p.displayName} (manual entry)`,
+      kind: p.displayName,
+    })),
+    ...destinationOptions(
+      props.subscriptionAccounts,
+      props.keyAccounts,
+      props.providerDisplayName,
+    ),
+  ];
+  const known = new Set(items.map((o) => o.value));
+  return (
+    <Combobox
+      value={known.has(props.value) ? props.value : ""}
+      // A typed-then-blurred label maps back to its encoding; anything else
+      // passes through to validation (rowProblem flags unknown backends).
+      onChange={(text) => props.onChange(items.find((o) => o.label === text)?.value ?? text)}
+      items={items}
+      getKey={(o) => o.value}
+      // The closed input reads "E2E key (main)", never "key:openrouter:main".
+      displayValue={(v, list) => list.find((o) => o.value === v)?.label}
+      searchText={(o) => `${o.label} ${o.kind} ${o.value}`}
+      columns={destColumns}
+      placeholder={props.placeholder ?? "Pick a backend…"}
+      statusText={`${items.length} backends`}
+      emptyText="No matches — pick from the list."
+    />
+  );
+}
+
+/**
+ * What the provider APIs actually report, first: live catalog ids, then
+ * recently-seen traffic ids, then the form's own entries, then the curated
+ * fallback. First source wins per id; free text is always kept.
+ */
+function matchChoices(
+  apiSources: { ids: string[]; source: string }[],
+  recentIds: string[],
+  formIds: string[],
+): ModelChoice[] {
+  const seen = new Set<string>();
+  const out: ModelChoice[] = [];
+  const add = (id: string, source: string) => {
+    const trimmed = id.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    out.push({ id: trimmed, source });
+  };
+  for (const { ids, source } of apiSources) for (const id of ids) add(id, source);
+  for (const id of recentIds) add(id, "Recently seen");
+  for (const id of formIds) add(id, "This form");
+  for (const id of SUBSCRIPTION_KNOWN_MODELS) add(id, "Curated list");
+  return out;
+}
+
 /** Create/edit form for one profile. Saves via saveProfileFn, toasts, then onSaved. */
 export function ProfileForm(props: ProfileFormProps) {
   const [form, setForm] = useState<ProfileFormState>(props.initial ?? emptyProfileForm);
   const [error, setError] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<Record<string, string[]>>({});
-  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [recentModels, setRecentModels] = useState<string[]>([]);
+  const [routesActive, setRoutesActive] = useState((props.initial?.routes.length ?? 0) > 0);
   const [preview, setPreview] = useState<{ loading: boolean; error?: string; data?: Preview } | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
 
+  // First stored Meta account funds the key-gated catalog; without one the
+  // Meta section stays empty and free text still works.
+  const metaAccountId = props.keyAccounts.find((a) => a.providerId === "meta")?.id;
+  const openrouterCatalog = useProviderModels("openrouter", routesActive);
+  const metaCatalog = useProviderModels("meta", routesActive, metaAccountId);
+
   // Editing a profile that already has routes: suggestions needed immediately.
   useEffect(() => {
-    if ((props.initial?.routes.length ?? 0) > 0) loadSuggestions();
-    // Once on mount — loadSuggestions self-guards against refetching.
+    if ((props.initial?.routes.length ?? 0) > 0) void loadRecentModels();
+    // Once on mount — loadRecentModels self-guards against refetching.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -367,9 +457,11 @@ export function ProfileForm(props: ProfileFormProps) {
     }
     if (row.dest.startsWith("key:")) {
       if (!keyIds.has(row.dest.slice("key:".length))) return "Unknown stored account — pick one from the list.";
-    } else {
+    } else if (row.dest.startsWith("subscription:")) {
       const id = row.dest.slice("subscription:".length);
       if (id && !vaultIds.has(id)) return "Unknown vault account — pick one from the list.";
+    } else {
+      return "Unknown destination — pick a backend from the list.";
     }
     const upstream = row.upstreamModel.trim();
     if (upstream && !MODEL_ID_RE.test(upstream)) {
@@ -380,32 +472,145 @@ export function ProfileForm(props: ProfileFormProps) {
 
   const rowProblems = form.routes.map((row, i) => rowProblem(row, i));
 
-  /** Catalog model ids for upstream suggestions, loaded once when routes open. */
-  function loadSuggestions() {
-    if (suggestionsLoading || Object.keys(suggestions).length > 0) return;
-    const providerIds = [...new Set(props.keyAccounts.map((a) => a.providerId))];
-    if (providerIds.length === 0) return;
-    setSuggestionsLoading(true);
-    void Promise.all(
-      providerIds.map(async (providerId) => {
-        try {
-          const data = await providerModelsFn({ data: { providerId } });
-          return [providerId, (data.models ?? []).map((m) => m.id)] as const;
-        } catch {
-          return [providerId, []] as const;
-        }
-      }),
-    ).then((pairs) => {
-      setSuggestions(Object.fromEntries(pairs));
-      setSuggestionsLoading(false);
-    });
+  const providerDisplayName = (id: string) =>
+    props.providers.find((p) => p.id === id)?.displayName;
+  const manualProviders = props.providers.filter((p) => p.id !== "claude-subscription");
+  const defaultDest =
+    form.providerId === "claude-subscription"
+      ? `subscription:${form.subscriptionAccountId}`
+      : form.providerAccountId
+        ? `key:${form.providerId}:${form.providerAccountId}`
+        : `provider:${form.providerId}`;
+
+  /** Default picker commits: listed backends apply, free text is ignored. */
+  function applyDefaultDest(value: string) {
+    if (value.startsWith("key:")) {
+      const rest = value.slice("key:".length);
+      const sep = rest.indexOf(":");
+      setForm((f) => ({
+        ...f,
+        providerId: rest.slice(0, sep),
+        providerAccountId: rest.slice(sep + 1),
+        subscriptionAccountId: "",
+      }));
+    } else if (value.startsWith("provider:")) {
+      setForm((f) => ({
+        ...f,
+        providerId: value.slice("provider:".length),
+        providerAccountId: "",
+        subscriptionAccountId: "",
+      }));
+    } else if (value.startsWith("subscription:")) {
+      setForm((f) => ({
+        ...f,
+        providerId: "claude-subscription",
+        subscriptionAccountId: value.slice("subscription:".length),
+        providerAccountId: "",
+      }));
+    }
+  }
+
+  /** The default must name a real backend — stale refs can't sneak through. */
+  function defaultDestProblem(): string | null {
+    if (defaultDest.startsWith("provider:")) {
+      return manualProviders.some((p) => p.id === defaultDest.slice("provider:".length))
+        ? null
+        : "Unknown default backend — pick one from the list.";
+    }
+    if (defaultDest.startsWith("key:")) {
+      return keyIds.has(defaultDest.slice("key:".length))
+        ? null
+        : "Unknown default backend — pick one from the list.";
+    }
+    if (defaultDest.startsWith("subscription:")) {
+      const id = defaultDest.slice("subscription:".length);
+      return id === "" || vaultIds.has(id)
+        ? null
+        : "Unknown default backend — pick one from the list.";
+    }
+    return "Unknown default backend — pick one from the list.";
+  }
+
+  function defaultBackendSentence(): string {
+    const providerName = provider?.displayName ?? form.providerId;
+    const account =
+      form.providerId === "claude-subscription"
+        ? form.subscriptionAccountId
+          ? (props.subscriptionAccounts.find((a) => a.id === form.subscriptionAccountId)?.label ??
+            form.subscriptionAccountId)
+          : "current Claude Code login"
+        : form.providerAccountId
+          ? (storedForProvider.find((a) => a.id === form.providerAccountId)?.label ??
+            form.providerAccountId)
+          : "manual entry below";
+    return `Everything else → ${providerName} via ${account} (${form.model.trim() || "provider default"})`;
+  }
+
+  const formMatchIds = form.routes.map((r) => r.match);
+  const matchItems = matchChoices(
+    [
+      ...(openrouterCatalog.data
+        ? [{ ids: openrouterCatalog.data.models.map((m) => m.id), source: "OpenRouter API" }]
+        : []),
+      ...(metaCatalog.data
+        ? [{ ids: metaCatalog.data.models.map((m) => m.id), source: "Meta API" }]
+        : []),
+    ],
+    recentModels,
+    formMatchIds,
+  );
+  const catalogHint = [openrouterCatalog.error, metaCatalog.error]
+    .filter(Boolean)
+    .join(" · ");
+
+  /** Upstream options follow the ROW's destination, not the default. */
+  function upstreamItemsFor(dest: string): ModelChoice[] {
+    const uniq = (items: ModelChoice[]): ModelChoice[] => [
+      ...new Map(items.map((m) => [m.id, m])).values(),
+    ];
+    if (dest.startsWith("key:")) {
+      const pid = dest.slice("key:".length).split(":")[0];
+      if (pid === "openrouter" && openrouterCatalog.data) {
+        return uniq(openrouterCatalog.data.models.map((m) => ({ id: m.id, source: "OpenRouter API" })));
+      }
+      if (pid === "meta" && metaCatalog.data) {
+        return uniq(metaCatalog.data.models.map((m) => ({ id: m.id, source: "Meta API" })));
+      }
+      return uniq(recentModels.map((id) => ({ id, source: "Recently seen" })));
+    }
+    return matchItems;
+  }
+
+  /** Model ids the proxy has actually seen (route grain), for suggestions. */
+  async function loadRecentModels() {
+    try {
+      const report = await proxyReportFn({ data: {} });
+      setRecentModels(
+        (report.byRoute ?? []).map((r) => r.key).filter((k) => k && k !== BASE_ROUTE_KEY),
+      );
+    } catch {
+      setRecentModels([]);
+    }
+  }
+
+  /** First open of the routes section: catalog hooks fire, traffic loads. */
+  function activateRoutes() {
+    setRoutesActive(true);
+    void loadRecentModels();
   }
 
   function updateRoute(index: number, patch: Partial<RouteFormRow>) {
     setForm((f) => ({ ...f, routes: f.routes.map((r, i) => (i === index ? { ...r, ...patch } : r)) }));
+    // A fixed row should not keep wearing its old save-time verdict.
+    setError(null);
   }
 
   function buildProfile(): Profile | null {
+    const defaultProblem = defaultDestProblem();
+    if (defaultProblem) {
+      setError(defaultProblem);
+      return null;
+    }
     if (form.direct && form.routes.length > 0) {
       setError("Direct mode bypasses the proxy, so model routes would never fire — remove the routes or turn direct off.");
       return null;
@@ -451,98 +656,111 @@ export function ProfileForm(props: ProfileFormProps) {
     }
   }
 
+  const mapping = effectiveMapping(form.routes, labels, defaultBackendSentence());
+
   const routesBody = (
     <Stack>
       <Muted>
-        Send different models to different backends inside one session. Matching is exact and
-        first-row-wins.
+        Send different models to different backends inside one session. Matching is
+        exact (<Code>claude-opus-4</Code> does not match <Code>claude-opus-4-1</Code>) and
+        first-row-wins; anything unmatched uses the default backend above.
       </Muted>
+      {catalogHint && (
+        <Muted>API model lists unavailable ({catalogHint}) — recent + curated still work.</Muted>
+      )}
+      {form.routes.length > 0 && (
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <div style={{ flex: "2 1 160px" }}><Muted>Match (model id)</Muted></div>
+          <div style={{ flex: "3 1 220px" }}><Muted>Destination</Muted></div>
+          <div style={{ flex: "2 1 160px" }}><Muted>Upstream model</Muted></div>
+          <div style={{ flex: "0 0 40px" }} />
+        </div>
+      )}
       {form.routes.map((row, i) => {
         const problem = rowProblems[i];
-        const destProvider = row.dest.startsWith("key:")
-          ? row.dest.slice("key:".length).split(":")[0]!
-          : undefined;
-        const modelIds = (destProvider && suggestions[destProvider]) || [];
+        const upstreamItems = upstreamItemsFor(row.dest);
         return (
           <div key={i}>
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "flex-end" }}>
               <div style={{ flex: "2 1 160px" }}>
-                <Field label={i === 0 ? "Match (model id)" : ""}>
-                  <Input
-                    value={row.match}
-                    onChange={(e) => updateRoute(i, { match: e.target.value })}
-                    placeholder="claude-opus-5"
-                  />
-                </Field>
+                <Combobox
+                  value={row.match}
+                  onChange={(value) => updateRoute(i, { match: value })}
+                  items={matchItems}
+                  getKey={(m) => m.id}
+                  searchText={(m) => `${m.id} ${m.source}`}
+                  columns={modelChoiceColumns}
+                  placeholder="claude-opus-5"
+                  statusText={`${matchItems.length} models`}
+                  emptyText="No matches — custom value kept."
+                />
               </div>
               <div style={{ flex: "3 1 220px" }}>
-                <Field label={i === 0 ? "Destination" : ""}>
-                  <Select value={row.dest} onChange={(e) => updateRoute(i, { dest: e.target.value })}>
-                    <optgroup label="Subscription (via proxy)">
-                      <option value="subscription:">Profile base account</option>
-                      {props.subscriptionAccounts.map((a) => (
-                        <option key={a.id} value={`subscription:${a.id}`}>{a.label} ({a.id})</option>
-                      ))}
-                    </optgroup>
-                    {props.keyAccounts.length > 0 && (
-                      <optgroup label="Keys">
-                        {props.keyAccounts.map((a) => (
-                          <option key={`${a.providerId}:${a.id}`} value={`key:${a.providerId}:${a.id}`}>
-                            {a.label} · {props.providers.find((p) => p.id === a.providerId)?.displayName ?? a.providerId}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </Select>
-                </Field>
+                <DestinationPicker
+                  value={row.dest}
+                  onChange={(value) => updateRoute(i, { dest: value })}
+                  subscriptionAccounts={props.subscriptionAccounts}
+                  keyAccounts={props.keyAccounts}
+                  providerDisplayName={providerDisplayName}
+                />
               </div>
               <div style={{ flex: "2 1 160px" }}>
-                <Field label={i === 0 ? "Upstream model" : ""}>
-                  <Input
-                    value={row.upstreamModel}
-                    onChange={(e) => updateRoute(i, { upstreamModel: e.target.value })}
-                    placeholder="same as requested"
-                    list={`upstream-models-${i}`}
-                  />
-                  <datalist id={`upstream-models-${i}`}>
-                    {modelIds.map((id) => (
-                      <option key={id} value={id} />
-                    ))}
-                  </datalist>
-                </Field>
+                <Combobox
+                  value={row.upstreamModel}
+                  onChange={(value) => updateRoute(i, { upstreamModel: value })}
+                  items={upstreamItems}
+                  getKey={(m) => m.id}
+                  searchText={(m) => `${m.id} ${m.source}`}
+                  columns={modelChoiceColumns}
+                  placeholder="same as requested"
+                  statusText={upstreamItems.length > 0 ? `${upstreamItems.length} models` : "free text"}
+                  emptyText="No matches — custom value kept."
+                />
               </div>
               <Button type="button" onClick={() => setForm((f) => ({ ...f, routes: f.routes.filter((_, j) => j !== i) }))}>
                 ×
               </Button>
             </div>
-            {problem ? (
-              <Notice tone="danger">{problem}</Notice>
-            ) : (
-              <Muted>{describeModelRoute(rowToRoute(row), labels)}</Muted>
-            )}
+            {problem && <Notice tone="danger">{problem}</Notice>}
           </div>
         );
       })}
       <RowActions>
         <Button
           type="button"
+          disabled={form.direct}
           onClick={() => {
-            if (form.routes.length === 0) loadSuggestions();
             setForm((f) => ({
               ...f,
               routes: [...f.routes, { match: "", dest: "subscription:", upstreamModel: "" }],
             }));
           }}
         >
-          + Add route
+          + Add override
         </Button>
-        {suggestionsLoading && <Muted>Loading model suggestions…</Muted>}
+        {(openrouterCatalog.loading || metaCatalog.loading) && routesActive && (
+          <Muted>Loading API models…</Muted>
+        )}
       </RowActions>
-      {form.routes.length > 0 && !form.direct && (
-        <Notice tone="info">
-          This profile always launches via the proxy (<Code>swisscode proxy run</Code> must be
-          up). Edits apply to the next request — even in a running session.
-        </Notice>
+      {form.direct ? (
+        <Notice tone="warn">Direct launch — bypasses the proxy (no failover, overrides or traffic).</Notice>
+      ) : (
+        <Stack>
+          <Muted>Effective mapping</Muted>
+          {mapping.map((m) => (
+            <div key={m.sentence}>
+              {m.kind === "duplicate" ? (
+                <Notice tone="danger">{m.sentence} — never fires, the first row wins.</Notice>
+              ) : (
+                <Muted>{m.sentence}</Muted>
+              )}
+            </div>
+          ))}
+          <Notice tone="info">
+            This profile always launches via the proxy (<Code>swisscode proxy run</Code> must be
+            up). Edits apply to the next request — even in a running session.
+          </Notice>
+        </Stack>
       )}
     </Stack>
   );
@@ -731,51 +949,24 @@ export function ProfileForm(props: ProfileFormProps) {
           ))}
         </Select>
       </Field>
-      <Field label="AI provider">
-        <Select
-          value={form.providerId}
-          onChange={(e) =>
-            setForm((f) => ({
-              ...f,
-              providerId: e.target.value,
-              providerAccountId: "",
-              subscriptionAccountId: "",
-            }))
-          }
-        >
-          {props.providers.map((p) => (
-            <option key={p.id} value={p.id}>{p.displayName}</option>
-          ))}
-        </Select>
+      <Field
+        label="Default backend"
+        hint="Catches every model with no override below — vault, stored keys, or manual entry in one list."
+      >
+        <DestinationPicker
+          value={defaultDest}
+          onChange={applyDefaultDest}
+          subscriptionAccounts={props.subscriptionAccounts}
+          keyAccounts={props.keyAccounts}
+          providerDisplayName={providerDisplayName}
+          manualProviders={manualProviders}
+        />
       </Field>
-      {form.providerId === "claude-subscription" && (
-        <Field label="Subscription account" hint="Blank uses the current login.">
-          <Select
-            value={form.subscriptionAccountId}
-            onChange={(e) => setForm((f) => ({ ...f, subscriptionAccountId: e.target.value }))}
-          >
-            <option value="">Current Claude Code login</option>
-            {props.subscriptionAccounts.map((a) => (
-              <option key={a.id} value={a.id}>{a.label} ({a.id})</option>
-            ))}
-          </Select>
-        </Field>
-      )}
-      {form.providerId !== "claude-subscription" && storedForProvider.length > 0 && (
-        <Field label={`Stored ${provider?.displayName} account`}>
-          <Select
-            value={form.providerAccountId}
-            onChange={(e) => setForm((f) => ({ ...f, providerAccountId: e.target.value }))}
-          >
-            <option value="">Enter manually below</option>
-            {storedForProvider.map((a) => (
-              <option key={a.id} value={a.id}>{a.label} ({a.id})</option>
-            ))}
-          </Select>
-        </Field>
-      )}
+      {/* Inline keys for manual entry. The provider's `model` field is skipped:
+          profile.model wins at launch on every provider, so the dedicated
+          Default model picker below is the one place to set it. */}
       {(!form.providerAccountId || form.providerId === "claude-subscription") &&
-        provider?.fields.map((f) => (
+        provider?.fields.filter((f) => f.key !== "model").map((f) => (
           <Field key={f.key} label={`${f.label}${f.required ? " *" : ""}`} hint={f.help}>
             <Input
               type={f.secret ? "password" : "text"}
@@ -785,12 +976,25 @@ export function ProfileForm(props: ProfileFormProps) {
             />
           </Field>
         ))}
-      <Field
-        label={form.routes.length > 0 ? "Default route model" : "Model override"}
-        hint={form.routes.length > 0 ? "Used for any model with no route below." : "Optional."}
-      >
-        <Input value={form.model} onChange={set("model")} placeholder="provider default" />
-      </Field>
+      {provider?.accountCapabilities?.modelCatalog === true ? (
+        <ModelField
+          providerId={form.providerId}
+          label="Default model"
+          hint="Used for any model with no override below."
+          value={form.model}
+          placeholder="provider default"
+          showEndpoints={form.providerId === "openrouter"}
+          accountId={form.providerAccountId || undefined}
+          onChange={(value) => setForm((f) => ({ ...f, model: value }))}
+        />
+      ) : (
+        <Field
+          label="Default model"
+          hint="Used for any model with no override below."
+        >
+          <Input value={form.model} onChange={set("model")} placeholder="provider default" />
+        </Field>
+      )}
       <Field
         label="Working directory"
         hint="Absolute path the agent spawns in (blank = inherit swisscode's directory). Relative paths are refused at save time."
@@ -801,20 +1005,16 @@ export function ProfileForm(props: ProfileFormProps) {
         Launches through the proxy by default — transparent account switching, 429 failover and
         traffic inspection. Requires <Code>swisscode proxy run</Code>.
       </Notice>
-      <Disclosure summary={`Connection: ${form.direct ? "direct (proxy bypassed)" : "via proxy (default)"}`}>
-        <Stack>
-          <Check
-            checked={form.direct}
-            onChange={(v) => setForm((f) => ({ ...f, direct: v }))}
-          >
-            Bypass the proxy <Muted>(advanced — loses failover, model routes and traffic inspection)</Muted>
-          </Check>
-        </Stack>
-      </Disclosure>
+      <Check
+        checked={form.direct}
+        onChange={(v) => setForm((f) => ({ ...f, direct: v }))}
+      >
+        Bypass the proxy <Muted>(advanced — loses failover, model overrides and traffic inspection)</Muted>
+      </Check>
       {form.routes.length > 0 ? (
-        <Section title="Model routes">{routesBody}</Section>
+        <Section title="Model overrides">{routesBody}</Section>
       ) : (
-        <Disclosure summary="Model routes (none)" onOpen={loadSuggestions}>{routesBody}</Disclosure>
+        <Disclosure summary="Model overrides (none)" onOpen={activateRoutes}>{routesBody}</Disclosure>
       )}
       {!isSessionEmpty(form.session) || props.initial?.session && !isSessionEmpty(props.initial.session) ? (
         <Section title="Claude Code session">{sessionBody}</Section>
@@ -836,7 +1036,7 @@ export function ProfileForm(props: ProfileFormProps) {
           <h2 style={{ margin: 0 }}>Launch preview</h2>
           {preview?.loading && <Muted>Resolving…</Muted>}
           {preview?.error && <Notice tone="danger">{preview.error}</Notice>}
-          {preview?.data && <PreviewBody preview={preview.data} />}
+          {preview?.data && <PreviewBody preview={preview.data} fallback={defaultBackendSentence()} />}
           <RowActions>
             <Button type="button" onClick={() => dialogRef.current?.close()}>Close</Button>
           </RowActions>
@@ -846,7 +1046,7 @@ export function ProfileForm(props: ProfileFormProps) {
   );
 }
 
-function PreviewBody({ preview }: { preview: Preview }) {
+function PreviewBody({ preview, fallback }: { preview: Preview; fallback?: string }) {
   const envRows = Object.entries(preview.launch.env).map(([key, value]) => ({ key, value }));
   return (
     <Stack>
@@ -878,9 +1078,10 @@ function PreviewBody({ preview }: { preview: Preview }) {
           <Pre>{f.content}</Pre>
         </div>
       ))}
-      {preview.routes.length > 0 && (
+      {(preview.routes.length > 0 || fallback) && (
         <div>
-          <Muted>Routes</Muted>
+          <Muted>Effective mapping</Muted>
+          {fallback && <div><Muted>{fallback}</Muted></div>}
           {preview.routes.map((sentence) => (
             <div key={sentence}><Muted>{sentence}</Muted></div>
           ))}

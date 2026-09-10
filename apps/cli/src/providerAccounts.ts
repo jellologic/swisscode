@@ -1,5 +1,5 @@
 // Generic provider accounts: `swisscode accounts --provider <id> ...`
-// Key-based providers (OpenRouter today). Secrets are never printed —
+// Key-based providers (OpenRouter, Meta). Secrets are never printed —
 // show masks them, usage reads them server-side only.
 
 import {
@@ -7,6 +7,7 @@ import {
   FileCustomProviderStore,
   FileModelCatalogCache,
   FileProviderAccountRepository,
+  MetaModelCatalog,
   OpenRouterModelCatalog,
   OpenRouterUsageReader,
   createProviderRegistry,
@@ -27,6 +28,7 @@ async function providerRegistry() {
 }
 const modelCatalogs = [
   new CachingModelCatalog(new OpenRouterModelCatalog(), new FileModelCatalogCache()),
+  new CachingModelCatalog(new MetaModelCatalog(), new FileModelCatalogCache()),
 ];
 
 export function providerAccountsHelp(): string {
@@ -238,11 +240,13 @@ export async function cmdProviderAccount(providerId: string, args: string[]): Pr
   }
 
   if (sub === "test") {
-    const { CustomAccountValidator, FileCustomProviderStore, OpenRouterAccountValidator } =
+    const { CustomAccountValidator, FileCustomProviderStore, MetaAccountValidator, OpenRouterAccountValidator } =
       await import("@swisscode/adapters");
     let validator;
     if (providerId === "openrouter") {
       validator = new OpenRouterAccountValidator();
+    } else if (providerId === "meta") {
+      validator = new MetaAccountValidator();
     } else {
       const def = await new FileCustomProviderStore().get(providerId);
       if (!def?.test) {

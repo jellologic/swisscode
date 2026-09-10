@@ -53,7 +53,11 @@ function prettifySlug(slug?: string): string {
 }
 
 /** Live model list for a provider with a catalog; cached server-side. */
-function useProviderModels(providerId: string | undefined, enabled: boolean) {
+export function useProviderModels(
+  providerId: string | undefined,
+  enabled: boolean,
+  accountId?: string,
+) {
   const [state, setState] = useState<{ data?: ModelsData; loading: boolean; error?: string }>({
     loading: false,
   });
@@ -61,7 +65,7 @@ function useProviderModels(providerId: string | undefined, enabled: boolean) {
     if (!enabled || !providerId) return;
     let cancelled = false;
     setState({ loading: true });
-    providerModelsFn({ data: { providerId } }).then(
+    providerModelsFn({ data: { providerId, ...(accountId ? { accountId } : {}) } }).then(
       (data) => {
         if (!cancelled) setState({ data, loading: false });
       },
@@ -74,11 +78,11 @@ function useProviderModels(providerId: string | undefined, enabled: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [providerId, enabled]);
+  }, [providerId, enabled, accountId]);
   return state;
 }
 
-const modelColumns: ComboColumn<ProviderModel>[] = [
+export const modelColumns: ComboColumn<ProviderModel>[] = [
   {
     key: "model",
     header: "Model",
@@ -219,9 +223,11 @@ export function ModelField(props: {
   value: string;
   placeholder?: string;
   showEndpoints: boolean;
+  /** Stored key account, for key-gated catalogs — resolved server-side. */
+  accountId?: string;
   onChange: (value: string) => void;
 }) {
-  const { data, loading, error } = useProviderModels(props.providerId, true);
+  const { data, loading, error } = useProviderModels(props.providerId, true, props.accountId);
   const status = loading
     ? "Loading models…"
     : error

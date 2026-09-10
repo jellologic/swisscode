@@ -109,8 +109,44 @@ export class OpenRouterAccountValidator implements ProviderAccountValidator {
   }
 }
 
-export interface CustomValidatorOptions {
-  fetchFn?: typeof fetch;
+/** Meta: GET /v1/models needs the key and answers the model list. */
+export class MetaAccountValidator implements ProviderAccountValidator {
+  readonly providerId = "meta";
+
+  constructor(private readonly options: AccountValidatorOptions = {}) {}
+
+  async validateAccount(config: Record<string, string>): Promise<AccountValidation> {
+    const apiKey = (config["apiKey"] ?? "").trim();
+    if (!apiKey) return { ok: false, error: "API key is required." };
+    const base = (this.options.baseUrl ?? "https://api.meta.ai").replace(/\/$/, "");
+    const fetchFn = this.options.fetchFn ?? fetch;
+    const timeoutMs = this.options.timeoutMs ?? VALIDATION_TIMEOUT_MS;
+    const probe = probeInit(timeoutMs, { Authorization: `Bearer ${apiKey}` });
+    let res: Response;
+    try {
+      res = await fetchFn(`${base}/v1/models`, probe.init);
+    } catch (err) {
+      return { ok: false, error: failure("Key check", err, timeoutMs) };
+    } finally {
+      probe.done();
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, error: "Key rejected (invalid or revoked)." };
+    }
+    if (isRedirect(res.status)) {
+      return {
+        ok: false,
+        error: `Key check failed: endpoint redirected (HTTP ${res.status}); redirects are not followed with a key attached.`,
+      };
+    }
+    if (!res.ok) return { ok: false, error: `Key check failed: HTTP ${res.status}` };
+    const data = (await res.json().catch(() => ({}))) as { data?: unknown };
+    const count = Array.isArray(data.data) ? data.data.length : 0;
+    return { ok: true, detail: count > 0 ? `key is valid — ${count} models` : "key is valid" };
+  }
+}
+
+export interface CustomValidatorOptions {  fetchFn?: typeof fetch;
   /** Abort budget for the probe. Default {@link VALIDATION_TIMEOUT_MS}. */
   timeoutMs?: number;
 }

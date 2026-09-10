@@ -18,6 +18,8 @@ import {
   PROMPT_PRESETS,
   freshVaultCredential,
   FileUsageCache,
+  MetaAccountValidator,
+  MetaModelCatalog,
   OpenRouterAccountValidator,
   OpenRouterModelCatalog,
   OpenRouterUsageReader,
@@ -124,7 +126,10 @@ const modelCatalog = new CachingModelCatalog(
   new OpenRouterModelCatalog(),
   new FileModelCatalogCache(),
 );
-const modelCatalogs = [modelCatalog];
+const modelCatalogs = [
+  modelCatalog,
+  new CachingModelCatalog(new MetaModelCatalog(), new FileModelCatalogCache()),
+];
 
 export function getAgents() {
   return agents.list().map((a) => ({
@@ -174,6 +179,7 @@ export async function getProviders(): Promise<ProviderListItem[]> {
 async function accountValidators(): Promise<Map<string, ProviderAccountValidator>> {
   const map = new Map<string, ProviderAccountValidator>([
     ["openrouter", new OpenRouterAccountValidator()],
+    ["meta", new MetaAccountValidator()],
   ]);
   for (const def of await customProviderStore.list()) {
     if (def.test) map.set(def.id, new CustomAccountValidator(def));
@@ -805,11 +811,20 @@ export interface ProviderModelsResult {
   stale: boolean;
 }
 
-/** Model list for pickers; throws when the provider publishes none. */
-export async function getProviderModels(providerId: string): Promise<ProviderModelsResult> {
+/**
+ * Model list for pickers; throws when the provider publishes none. Key-gated
+ * catalogs (Meta) resolve the stored account server-side — the key never
+ * reaches the client, the response stays id-only.
+ */
+export async function getProviderModels(
+  providerId: string,
+  accountId?: string,
+): Promise<ProviderModelsResult> {
   const catalog = modelCatalogs.find((c) => c.providerId === providerId);
   if (!catalog) throw new Error(`No model catalog for provider "${providerId}".`);
-  return catalog.snapshot();
+  if (!accountId) return catalog.snapshot();
+  const account = await providerAccounts.get(providerId, accountId);
+  return catalog.snapshot(account?.config);
 }
 
 export interface ProviderModelEndpointsResult {

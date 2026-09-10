@@ -11,6 +11,7 @@ import type {
 import { ProfileError } from "@swisscode/core";
 import { claudeCodeAgent } from "./agents/claudeCode.js";
 import { claudeSubscriptionProvider } from "./providers/claudeSubscription.js";
+import { metaProvider } from "./providers/meta.js";
 import { openRouterProvider } from "./providers/openRouter.js";
 
 /**
@@ -35,7 +36,7 @@ export function defaultAgents(): AgentPort[] {
 }
 
 export function defaultProviders(): ProviderPort[] {
-  return [claudeSubscriptionProvider, openRouterProvider];
+  return [claudeSubscriptionProvider, openRouterProvider, metaProvider];
 }
 
 export function createAgentRegistry(extra: AgentPort[] = []): AgentRegistry {

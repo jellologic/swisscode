@@ -55,6 +55,7 @@ import {
   parseProfile,
   parseProfileRef,
   parseProviderAccountRef,
+  parseProviderModels,
   parseProviderRef,
   parseRenameAccount,
   parseReportFilter,
@@ -213,8 +214,8 @@ export const providerUsageFn = createServerFn({ method: "GET" })
   .handler(async ({ data }) => ({ results: await getProviderUsage(data.providerId) }));
 
 export const providerModelsFn = createServerFn({ method: "GET" })
-  .validator(parseProviderRef)
-  .handler(async ({ data }) => getProviderModels(data.providerId));
+  .validator(parseProviderModels)
+  .handler(async ({ data }) => getProviderModels(data.providerId, data.accountId));
 
 export const providerModelEndpointsFn = createServerFn({ method: "GET" })
   .validator(parseModelRef)

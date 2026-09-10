@@ -15,11 +15,16 @@
     "src/lib/proxyClient.server.ts",
     "src/lib/store.server.ts",
     "src/lib/store.server.test.ts",
+    "src/lib/store.server.models.test.ts",
     "src/lib/threadView.ts",
     "src/lib/threadView.test.ts",
     "src/lib/validate.ts",
     "src/lib/validate.test.ts",
     "src/design/data.tsx",
-    "src/design/data.test.tsx"
+    "src/design/data.test.tsx",
+    "src/design/combobox.tsx",
+    "src/design/combobox.test.tsx",
+    "src/components/routeSummary.ts",
+    "src/components/routeSummary.test.ts"
   ]
 }

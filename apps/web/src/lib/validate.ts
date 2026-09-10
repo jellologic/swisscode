@@ -174,6 +174,20 @@ export function parseProviderRef(data: unknown): { providerId: string } {
   return { providerId: identifier(rec["providerId"], "providerId") };
 }
 
+/**
+ * Model-list request: optional stored account so key-gated catalogs (Meta)
+ * resolve their credentials server-side. The key itself never crosses the
+ * boundary — only the account id, and the response stays id-only.
+ */
+export function parseProviderModels(data: unknown): { providerId: string; accountId?: string } {
+  const rec = asRecord(data, "data");
+  const accountId = optionalIdentifier(rec["accountId"], "accountId");
+  return {
+    providerId: identifier(rec["providerId"], "providerId"),
+    ...(accountId === undefined ? {} : { accountId }),
+  };
+}
+
 export function parseOptionalProviderRef(data: unknown): { providerId?: string } {
   const rec = asRecord(data, "data");
   const providerId = optionalIdentifier(rec["providerId"], "providerId");

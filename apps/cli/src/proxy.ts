@@ -256,79 +256,112 @@ export async function ensureProxyAccount(id: string, port: number): Promise<bool
   return proxyUse(id, port);
 }
 
+/** A proxy this process started: caller owns the socket and the store. */
+export interface OwnedProxy {
+  proxy: SubscriptionProxy;
+  trafficStore: SqliteTrafficLog | undefined;
+  vaultCount: number;
+  keyCount: number;
+  trafficLog: string | undefined;
+  logBodies: boolean;
+}
+
+/**
+ * Build, guard, and listen the subscription proxy in-process. Shared by
+ * `proxy run` and `swisscode web` so both construct the same proxy from the
+ * same flags. Returns undefined when the home holds no accounts at all (the
+ * abort is already reported); throws an actionable error when the port is
+ * taken by something that is not a swisscode proxy.
+ */
+export async function startOwnedProxy(port: number, rest: string[]): Promise<OwnedProxy | undefined> {
+  const noLog = rest.includes("--no-traffic-log");
+  const trafficLog = noLog ? undefined : (flag(rest, "--traffic-log") ?? defaultTrafficLogPath());
+  const logBodies = rest.includes("--log-bodies");
+  const keepRaw = flag(rest, "--traffic-keep") ?? process.env["SWISSCODE_TRAFFIC_KEEP"];
+  const keep = keepRaw === undefined ? 200 : Math.max(0, parseInt(keepRaw, 10) || 0);
+  const bodyBytes = (name: string, env: string, fallback: number): number => {
+    const raw = flag(rest, name) ?? process.env[env];
+    if (raw === undefined) return fallback;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
+  };
+  // One token per run: a token that outlived its server would keep
+  // authorizing after the port moved to something else.
+  const controlToken = await createProxyToken();
+  const keyAccounts = await new FileProviderAccountRepository().list();
+  // The queryable store opens beside the JSONL firehose unless recording is
+  // off entirely. A store failure (e.g. an old Node without node:sqlite)
+  // degrades to JSONL-only — reporting never breaks proxying.
+  const storePath = noLog ? undefined : (flag(rest, "--traffic-store") ?? defaultTrafficStorePath());
+  let trafficStore: SqliteTrafficLog | undefined;
+  if (storePath) {
+    try {
+      trafficStore = await openTrafficStore(storePath);
+    } catch (err) {
+      console.error(`traffic store unavailable (${(err as Error).message}) — continuing JSONL-only.`);
+    }
+  }
+  const proxy = new SubscriptionProxy(
+    new FileAccountRepository(defaultSubscriptionsDir()),
+    new AnthropicOAuthClient(),
+    {
+      profiles: new FileProfileRepository(),
+      providerAccounts: new FileProviderAccountRepository(),
+      providers: createProviderRegistry(
+        await loadCustomProviderPorts(new FileCustomProviderStore()),
+      ),
+      logBodies,
+      controlToken,
+      trafficStore,
+      // Adopt Claude Code's live lineage when the vault copy rotated away.
+      liveStore: new ClaudeActiveCredentialStore(),
+      trafficBufferSize: keep,
+      trafficBodyBytes: bodyBytes("--traffic-body-bytes", "SWISSCODE_TRAFFIC_BODY_BYTES", DEFAULT_TRAFFIC_BODY_BYTES),
+      maxLoggedBodyBytes: bodyBytes("--log-body-bytes", "SWISSCODE_LOG_BODY_BYTES", 8192),
+      onTraffic: trafficLog
+        ? (entry) => {
+            console.log(trafficLine(entry));
+            void appendFile(trafficLog, `${JSON.stringify(entry)}\n`).catch((err: Error) =>
+              console.error(`traffic log write failed: ${err.message}`),
+            );
+          }
+        : undefined,
+    },
+  );
+  const count = (await proxy.status()).accounts.length;
+  // Key-only users get a working proxy too: subscription requests then fail
+  // per-request with a clear error instead of refusing to start. Only a
+  // home with neither kind of credential is a misconfiguration worth
+  // aborting over.
+  if (count === 0 && keyAccounts.length === 0) {
+    console.error(
+      "No accounts stored. Run `swisscode accounts import <id>` (subscription) or store a provider key first.",
+    );
+    process.exitCode = 1;
+    return undefined;
+  }
+  try {
+    await proxy.listen(port);
+  } catch (err) {
+    // The probe-first caller already ruled out a live swisscode proxy, so an
+    // occupied port belongs to something foreign — say which flag moves us.
+    if ((err as NodeJS.ErrnoException)?.code === "EADDRINUSE") {
+      throw new Error(`Proxy port ${port} is in use by something that is not a swisscode proxy. Stop it or retry with --proxy-port <n>.`);
+    }
+    throw err;
+  }
+  return { proxy, trafficStore, vaultCount: count, keyCount: keyAccounts.length, trafficLog, logBodies };
+}
+
 export async function cmdProxy(args: string[]): Promise<void> {
   const [sub, ...rest] = args;
   const port = proxyPort(flag(rest, "--port"));
   if (sub === "run") {
-    const noLog = rest.includes("--no-traffic-log");
-    const trafficLog = noLog ? undefined : (flag(rest, "--traffic-log") ?? defaultTrafficLogPath());
-    const logBodies = rest.includes("--log-bodies");
-    const keepRaw = flag(rest, "--traffic-keep") ?? process.env["SWISSCODE_TRAFFIC_KEEP"];
-    const keep = keepRaw === undefined ? 200 : Math.max(0, parseInt(keepRaw, 10) || 0);
-    const bodyBytes = (name: string, env: string, fallback: number): number => {
-      const raw = flag(rest, name) ?? process.env[env];
-      if (raw === undefined) return fallback;
-      const n = parseInt(raw, 10);
-      return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
-    };
-    // One token per run: a token that outlived its server would keep
-    // authorizing after the port moved to something else.
-    const controlToken = await createProxyToken();
-    const keyAccounts = await new FileProviderAccountRepository().list();
-    // The queryable store opens beside the JSONL firehose unless recording is
-    // off entirely. A store failure (e.g. an old Node without node:sqlite)
-    // degrades to JSONL-only — reporting never breaks proxying.
-    const storePath = noLog ? undefined : (flag(rest, "--traffic-store") ?? defaultTrafficStorePath());
-    let trafficStore: SqliteTrafficLog | undefined;
-    if (storePath) {
-      try {
-        trafficStore = await openTrafficStore(storePath);
-      } catch (err) {
-        console.error(`traffic store unavailable (${(err as Error).message}) — continuing JSONL-only.`);
-      }
-    }
-    const proxy = new SubscriptionProxy(
-      new FileAccountRepository(defaultSubscriptionsDir()),
-      new AnthropicOAuthClient(),
-      {
-        profiles: new FileProfileRepository(),
-        providerAccounts: new FileProviderAccountRepository(),
-        providers: createProviderRegistry(
-          await loadCustomProviderPorts(new FileCustomProviderStore()),
-        ),
-        logBodies,
-        controlToken,
-        trafficStore,
-        // Adopt Claude Code's live lineage when the vault copy rotated away.
-        liveStore: new ClaudeActiveCredentialStore(),
-        trafficBufferSize: keep,
-        trafficBodyBytes: bodyBytes("--traffic-body-bytes", "SWISSCODE_TRAFFIC_BODY_BYTES", DEFAULT_TRAFFIC_BODY_BYTES),
-        maxLoggedBodyBytes: bodyBytes("--log-body-bytes", "SWISSCODE_LOG_BODY_BYTES", 8192),
-        onTraffic: trafficLog
-          ? (entry) => {
-              console.log(trafficLine(entry));
-              void appendFile(trafficLog, `${JSON.stringify(entry)}\n`).catch((err: Error) =>
-                console.error(`traffic log write failed: ${err.message}`),
-              );
-            }
-          : undefined,
-      },
-    );
-    const count = (await proxy.status()).accounts.length;
-    // Key-only users get a working proxy too: subscription requests then fail
-    // per-request with a clear error instead of refusing to start. Only a
-    // home with neither kind of credential is a misconfiguration worth
-    // aborting over.
-    if (count === 0 && keyAccounts.length === 0) {
-      console.error(
-        "No accounts stored. Run `swisscode accounts import <id>` (subscription) or store a provider key first.",
-      );
-      process.exitCode = 1;
-      return;
-    }
-    await proxy.listen(port);
+    const started = await startOwnedProxy(port, rest);
+    if (!started) return;
+    const { proxy, trafficStore, vaultCount: count, keyCount, trafficLog, logBodies } = started;
     console.log(
-      `Subscription proxy on ${proxyBaseUrl(port)} (${count} vault account(s), ${keyAccounts.length} key account(s)). Ctrl-C to stop.`,
+      `Subscription proxy on ${proxyBaseUrl(port)} (${count} vault account(s), ${keyCount} key account(s)). Ctrl-C to stop.`,
     );
     if (count === 0) {
       console.log("No subscription accounts — subscription requests will fail until one is imported.");

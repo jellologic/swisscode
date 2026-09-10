@@ -10,6 +10,14 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "swisscode" },
     ],
+    // Inline SVG so /favicon.ico is never requested: the production server
+    // only serves real files under dist/client plus framework routes.
+    links: [
+      {
+        rel: "icon",
+        href: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23111827'/%3E%3Ctext x='8' y='12' font-size='11' text-anchor='middle' fill='white' font-family='sans-serif'%3Es%3C/text%3E%3C/svg%3E",
+      },
+    ],
   }),
   component: RootComponent,
   errorComponent: AppError,

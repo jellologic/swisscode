@@ -1418,7 +1418,17 @@ export class SubscriptionProxy {
         }
       })();
     });
-    await new Promise<void>((resolve) => this.server?.listen(port, "127.0.0.1", resolve));
+    // The listen callback only fires on success: without an 'error' listener a
+    // taken port crashes the process as an unhandled event instead of
+    // rejecting, so callers (proxy run, web) can never print their guidance.
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => reject(err);
+      this.server?.once("error", onError);
+      this.server?.listen(port, "127.0.0.1", () => {
+        this.server?.off("error", onError);
+        resolve();
+      });
+    });
     const address = this.server.address();
     return typeof address === "object" && address ? address.port : port;
   }

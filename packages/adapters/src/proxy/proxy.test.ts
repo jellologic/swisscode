@@ -143,6 +143,30 @@ describe("SubscriptionProxy", () => {
     }
   });
 
+  it("rejects (rather than crashing) when the port is taken", async () => {
+    const squatter = createServer((_req, res) => {
+      res.writeHead(200);
+      res.end();
+    });
+    await new Promise<void>((r) => squatter.listen(0, "127.0.0.1", r));
+    const taken = (squatter.address() as { port: number }).port;
+    try {
+      const dir = await mkdtemp(join(tmpdir(), "proxy-taken-"));
+      const proxy = new SubscriptionProxy(
+        new FileAccountRepository(join(dir, "subs")),
+        new AnthropicOAuthClient(),
+        {},
+      );
+      // Before the listen error listener, this surfaced as an unhandled
+      // 'error' event that killed the process — `proxy run`/`web` could never
+      // print their "port in use" guidance.
+      await assert.rejects(() => proxy.listen(taken), /EADDRINUSE/);
+      await proxy.close().catch(() => undefined);
+    } finally {
+      squatter.close();
+    }
+  });
+
   it("strips upstream content-encoding/length (fetch pre-decodes bodies)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "proxy-enc-"));
     const repo = new FileAccountRepository(join(dir, "subs"));
